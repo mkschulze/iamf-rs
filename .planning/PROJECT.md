@@ -118,9 +118,16 @@ descriptors, IA samples with trimming metadata). The ISO-BMFF path is what a You
   Determinism that is not tested is a claim, not a property.
 - **Licence allow-list**: Every transitive dependency must satisfy Parallax's `deny.toml`. Preferred:
   MIT, BSD, Apache-2.0, ISC, Zlib, Unlicense, CC0. Allowed with a recorded reason: MPL-2.0 for an
-  *unmodified upstream* crate. Rejected outright: GPL, LGPL, AGPL, SSPL, EUPL, CDDL, OSL. State each
-  dependency's licence on the line that adds it, and run `cargo deny` here. — If Parallax cannot
-  consume this crate, the crate has no purpose. A violation must surface here, not at integration.
+  *unmodified upstream* crate; **NCSA**, added to Parallax's allow-list by user decision 2026-09-07
+  (permissive, BSD/MIT-style, no copyleft) to admit `libfuzzer-sys`. Rejected outright: GPL, LGPL,
+  AGPL, SSPL, EUPL, CDDL, OSL. State each dependency's licence on the line that adds it, and run
+  `cargo deny` here. — If Parallax cannot consume this crate, the crate has no purpose. A violation
+  must surface here, not at integration.
+- **`cargo-deny` config shape**: The `deny`, `copyleft`, `allow-osi-fsf-free`, `default` and `version`
+  keys were removed from cargo-deny and now error. Rejection is expressed *by omission* from `allow`,
+  not by a deny list — record that in a comment so the intent survives review. `Unicode-3.0` must be
+  in the allow-list or a clean build fails (`unicode-ident`, via `syn`, via `thiserror-impl`). —
+  Verified against cargo-deny 0.20.2 during research.
 - **Source licence hygiene**: `libspatialaudio` (LGPL-2.1+) and `gpac` (LGPL-2.1) may not be read or
   ported. `iamf-tools`, `libiamf`, `eclipsa-audio-plugin`, `libear` and `obr` may. — Contamination is
   irreversible; relicensing later needs every contributor's agreement.
@@ -148,6 +155,7 @@ descriptors, IA samples with trimming metadata). The ISO-BMFF path is what a You
 | Build a library, not a port of Eclipsa | The plugin suite's architecture works around not being the host; ~1/3 is JUCE UI; encoder/decoder/muxer live in other repos entirely | ✓ Good |
 | Write our own ISO-BMFF muxer if ISO-BMFF is built | `gpac` is LGPL-2.1 and rejected by Parallax's `deny.toml` | — Pending |
 | M1 target is LPCM, single-layer, standalone `.iamf` | Smallest thing that proves the whole chain with no codec dependency | — Pending |
+| Accept **NCSA** in Parallax's licence allow-list | `libfuzzer-sys` is `(MIT OR Apache-2.0) AND NCSA`, which the original allow-list rejected. NCSA is permissive, BSD/MIT-style, OSI-approved, no copyleft — it fits the preferred list's spirit rather than stretching it. User decision, 2026-09-07. The `fuzz/` directory is still built as an independent workspace with its own lockfile, so the dependency never reaches Parallax's graph in any case — this makes that isolation a design choice rather than a licence workaround | — Pending |
 | Licence: **unsettled** — currently MIT only | MIT grants no patent licence; Apache-2.0 does. `iamf-tools` ships the AOM Patent License 1.0 (royalty-free grant to Necessary Claims, subject to §1.2 conditions including defensive termination). For an implementation of a standard with an explicit patent pool, the Rust `MIT OR Apache-2.0` convention is worth following. Nobody has read AOM's §1.2 conditions yet. Cheapest to decide now, at one commit | ⚠️ Revisit |
 
 ## Open Questions
