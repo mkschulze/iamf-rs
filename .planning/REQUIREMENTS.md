@@ -177,17 +177,113 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Populated during roadmap creation.
+Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (pending roadmap) | — | Pending |
+| BITS-01 | Phase 1 | Pending |
+| BITS-02 | Phase 1 | Pending |
+| BITS-03 | Phase 1 | Pending |
+| BITS-04 | Phase 1 | Pending |
+| BITS-05 | Phase 1 | Pending |
+| BITS-06 | Phase 1 | Pending |
+| BITS-07 | Phase 1 | Pending |
+| OBU-01 | Phase 1 | Pending |
+| OBU-02 | Phase 1 | Pending |
+| OBU-03 | Phase 1 | Pending |
+| OBU-04 | Phase 1 | Pending |
+| OBU-05 | Phase 1 | Pending |
+| OBU-06 | Phase 1 | Pending |
+| OBU-07 | Phase 1 | Pending |
+| OBU-08 | Phase 1 | Pending |
+| DESC-01 | Phase 1 | Pending |
+| DESC-02 | Phase 1 | Pending |
+| DESC-03 | Phase 1 | Pending |
+| DESC-04 | Phase 1 | Pending |
+| DESC-05 | Phase 1 | Pending |
+| DESC-06 | Phase 1 | Pending |
+| DESC-07 | Phase 1 | Pending |
+| DESC-08 | Phase 1 | Pending |
+| DESC-09 | Phase 1 | Pending |
+| TIME-01 | Phase 1 | Pending |
+| TIME-02 | Phase 1 | Pending |
+| TIME-03 | Phase 1 | Pending |
+| TIME-04 | Phase 1 | Pending |
+| TIME-05 | Phase 1 | Pending |
+| SEQ-01 | Phase 1 | Pending |
+| SEQ-02 | Phase 1 | Pending |
+| SEQ-03 | Phase 1 | Pending |
+| PROF-01 | Phase 1 | Pending |
+| PROF-02 | Phase 1 | Pending |
+| PROF-03 | Phase 1 | Pending |
+| CONF-01 | Phase 1 | Pending |
+| CONF-02 | Phase 1 | Pending |
+| CONF-03 | Phase 1 | Pending |
+| CONF-04 | Phase 1 | Pending |
+| CONF-05 | Phase 1 | Pending |
+| CONF-06 | Phase 1 | Pending |
+| CONF-07 | Phase 1 | Pending |
+| CONF-08 | Phase 1 | Pending |
+| CONF-09 | Phase 1 | Pending |
+| CONF-10 | Phase 1 | Pending |
+| CONF-11 | Phase 1 | Pending |
+| GUARD-01 | Phase 1 | Pending |
+| GUARD-02 | Phase 1 | Pending |
+| GUARD-03 | Phase 1 | Pending |
+| GUARD-04 | Phase 1 | Pending |
+| GUARD-05 | Phase 1 | Pending |
+| GUARD-06 | Phase 1 | Pending |
+| GUARD-07 | Phase 1 | Pending |
+| GUARD-08 | Phase 1 | Pending |
+| GUARD-09 | Phase 1 | Pending |
+| GUARD-10 | Phase 1 | Pending |
+| GUARD-11 | Phase 1 | Pending |
+| GUARD-12 | Phase 1 | Pending |
+| GUARD-13 | Phase 1 | Pending |
+| PARSE-01 | Phase 2 | Pending |
+| PARSE-02 | Phase 2 | Pending |
+| PARSE-03 | Phase 2 | Pending |
+| PARSE-04 | Phase 2 | Pending |
+| PARSE-05 | Phase 2 | Pending |
+| PARSE-06 | Phase 2 | Pending |
+| PARSE-07 | Phase 2 | Pending |
+| FUZZ-01 | Phase 2 | Pending |
+| FUZZ-02 | Phase 2 | Pending |
+| FUZZ-03 | Phase 2 | Pending |
+| FUZZ-04 | Phase 2 | Pending |
+| FUZZ-05 | Phase 2 | Pending |
+| CODEC-01 | Phase 3 | Pending |
+| CODEC-02 | Phase 3 | Pending |
+| CODEC-03 | Phase 3 | Pending |
+| CODEC-04 | Phase 3 | Pending |
+| CODEC-05 | Phase 3 | Pending |
+| CODEC-06 | Phase 3 | Pending |
+| CODEC-07 | Phase 3 | Pending |
+| API-01 | Phase 4 | Pending |
+| API-02 | Phase 4 | Pending |
+| API-03 | Phase 4 | Pending |
+| API-04 | Phase 4 | Pending |
+| API-05 | Phase 4 | Pending |
+| DEC-01 | Phase 1 | Pending |
+| DEC-02 | Phase 1 | Pending |
+| DEC-03 | Phase 4 | Pending |
+| DEC-04 | Phase 1 | Pending |
+| DEC-05 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 88 total
-- Mapped to phases: 0 ⚠️
-- Unmapped: 88 ⚠️
+- Mapped to phases: 88 ✓
+- Unmapped: 0 ✓
+
+**Per phase:**
+
+| Phase | Name | Requirements |
+|-------|------|--------------|
+| Phase 1 | Conformant LPCM Bitstream | 63 |
+| Phase 2 | Parser, Round-Trip and Fuzzing | 12 |
+| Phase 3 | FLAC and Opus Framing | 7 |
+| Phase 4 | Parallax-Facing API | 6 |
 
 ---
 *Requirements defined: 2026-09-08*
-*Last updated: 2026-09-08 after initial definition*
+*Last updated: 2026-09-08 after roadmap creation — traceability populated, 88/88 mapped*
