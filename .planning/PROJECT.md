@@ -226,7 +226,9 @@ discover it late.
   contamination milestone, because `gpac` is the obvious and forbidden reference there.
 - **Pin the references**: pin an `iamf-tools` **v1.x tag and SHA** and a `libiamf` SHA, named in the
   code. — HEAD is a draft-v2.0.0 tree; mirroring it produces files `libiamf` rejects.
-- **Pin the spec version**: a `SPEC_VERSION` constant named in the code. — See Open Questions #2.
+- **Pin the spec version**: `SPEC_VERSION = "1.1.0"`, named in the code. — **Decided 2026-09-08.**
+  `libiamf` is a v1.1.0 decoder and the Core Value is that it accepts the file; Base-Enhanced does not
+  exist in v1.0 at all. The profile enum's legal range and the expanded-layout set follow from this.
 - **Error handling**: `thiserror` for errors, never `anyhow` in a library.
 - **Parser hardening**: no `unwrap()`/`expect()` outside tests, **plus** `clippy::indexing_slicing` and
   `clippy::arithmetic_side_effects`. — The `unwrap` ban is necessary and nowhere near sufficient; the
@@ -256,32 +258,31 @@ discover it late.
 | Write our own ISO-BMFF muxer if ISO-BMFF is built | `gpac` is LGPL-2.1 and rejected by Parallax's `deny.toml` | — Pending |
 | M1 target is LPCM, single-layer, standalone `.iamf` | Smallest thing that proves the whole chain with no codec dependency | — Pending |
 | Accept **NCSA** in Parallax's licence allow-list | `libfuzzer-sys` is `(MIT OR Apache-2.0) AND NCSA`. NCSA is permissive, BSD/MIT-style, OSI-approved, no copyleft. User decision, 2026-09-07. `fuzz/` stays an independent workspace regardless — that is now a design choice, not a licence workaround | — Pending |
-| Licence: **unsettled** — currently MIT only | MIT grants no patent licence; Apache-2.0 does. `iamf-tools` ships the AOM Patent License 1.0, subject to §1.2 conditions including defensive termination. For an implementation of a standard with an explicit patent pool, the Rust `MIT OR Apache-2.0` convention is worth following. Nobody has read §1.2 yet. Cheapest to decide now, at one commit | ⚠️ Revisit |
+| Licence: **`MIT OR Apache-2.0`** (dual) | User decision 2026-09-08. MIT grants no patent licence; Apache-2.0 §3 does, which is why the Rust convention exists and why it matters for an implementation of a standard with an explicit patent pool. Both are already on Parallax's allow-list, so the consumer is unaffected either way. The marginal cost is near zero: Apache-2.0 §4(d) wants a `NOTICE` file and GUARD-07 was already adding one for BSD attribution. Dual rather than Apache-alone because it is the ecosystem default and strictly more permissive for consumers. `LICENSE-MIT` + `LICENSE-APACHE` landed 2026-09-08 | ✓ Good |
+| Pin **IAMF v1.1.0** | User decision 2026-09-08. `libiamf` — whose acceptance *is* the Core Value — implements v1.1.0. Base-Enhanced, already in the handoff's own profile table, does not exist in v1.0. Building only what is scoped stays v1.1.0-clean automatically | ✓ Good |
+| Parameter data taken as **pre-decimated blocks**, not curves | User decision 2026-09-08. Keeps the crate mechanical: no time model, no interpolation, no float arithmetic on the encode path, and `libm` stays unneeded. It is the only path with conformance-vector coverage, and it matches the reference's own layering — `parameter_block_partitioner.cc` sits in the CLI layer, above the public API. **Cost accepted:** the decimation policy lives in Parallax and must be shared with the ADM BWF exporter, or the two exports will disagree | — Pending |
 
 ## Open Questions
 
-1. **The parameter tick rate — curves or pre-decimated blocks?** **Still the one open question that
-   blocks API design.** New evidence: `parameter_rate` lives in `param_definition` inside the
-   *descriptors*, which are written before any audio — so the tick rate is a `build()`-time input
-   either way, never per-block. `iamf-tools` has two open TODOs under one bug ID admitting it has never
-   implemented `parameter_rate != sample_rate`, and every golden vector uses rate == sample rate.
-   Research recommends **taking pre-decimated blocks** (flagged as a recommendation, not a finding).
-   Parallax should answer this once for both IAMF and ADM BWF.
-2. **Spec version: v1.0 or v1.1.0?** Certification cites v1.0; `libiamf`'s README says it decodes
-   v1.1.0 and `iamf-tools` comments cite v1.1.0. Base-Enhanced does not exist in v1.0 at all, so the
-   handoff's own profile table is incompatible with a v1.0 pin. **Decide in M1** — it sets
-   `SPEC_VERSION` and the reference tag together.
-3. **Licence: MIT alone, or `MIT OR Apache-2.0`?** Requires reading AOM Patent License 1.0 §1.2.
-4. **Is a native decoder wanted at all**, or is verification better done by shelling out to `libiamf`
-   during tests? M1 needs `libiamf` present either way; a native decoder is a product decision.
-5. **Does the decoder ever run near the audio callback?** If an `.iamf` file is decoded for in-DAW
+1. **Is a native decoder wanted at all**, or is verification better done by shelling out to `libiamf`
+   during tests? Phase 1 needs `libiamf` present either way; a native decoder is a product decision.
+2. **Does the decoder ever run near the audio callback?** If an `.iamf` file is decoded for in-DAW
    playback on a streaming thread, Parallax's allocation and locking rules apply to that path and the
    API must be shaped for it from the start. Decide before writing the decoder, not after.
-6. **What does an export of 64 moving Sources become?** A rendered bed with the motion baked in. That
+3. **What does an export of 64 moving Sources become?** A rendered bed with the motion baked in. That
    is a Parallax UI decision, but this crate's API should not pretend otherwise by accepting
    per-source positions it cannot express.
-7. **Does `iamf-tools` contain its own ISO-BMFF muxer?** Needs confirming before committing to M5,
-   since `gpac` is unavailable.
+4. **Does `iamf-tools` contain its own ISO-BMFF muxer?** Needs confirming before committing to
+   ISO-BMFF, since `gpac` is unavailable.
+5. **AOM Patent License 1.0 §1.2 still unread.** No longer blocking — it was the input to the licence
+   decision, which is now settled. Remains worth reading as due diligence on the inbound grant from
+   AOM, which is separate from this crate's outbound licence.
+
+### Settled
+
+- ~~Spec version v1.0 vs v1.1.0~~ → **v1.1.0** (2026-09-08)
+- ~~Licence: MIT alone or `MIT OR Apache-2.0`~~ → **`MIT OR Apache-2.0`** (2026-09-08)
+- ~~Parameter tick rate: curves or pre-decimated blocks~~ → **pre-decimated blocks** (2026-09-08)
 
 ## Evolution
 
@@ -301,4 +302,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-08 after project research corrected five handoff claims*
+*Last updated: 2026-09-08 after settling spec version, licence and parameter tick rate*

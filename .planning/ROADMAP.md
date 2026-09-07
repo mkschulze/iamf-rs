@@ -40,7 +40,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The same fixture hashes identically on macOS arm64, macOS x86_64, Windows MSVC and Linux x64 against a committed golden hash, and encoding twice inside one process produces identical bytes. *(GUARD-09, GUARD-10)*
   5. `cargo deny check licenses` fails when an LGPL crate is deliberately added; `cargo clippy` fails on a `HashMap`, on an `unwrap()`/`expect()` outside tests, on a raw index and on unchecked arithmetic; the no-DSP guard fails on an introduced transcendental — while `cargo test` stays green offline on all four targets with no reference binary present. *(GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-11, CONF-10)*
 **Research**: Yes — read `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` for payload-level rejection rules before the LPCM path is written; fetch `iamf-tools` tags `v2.0.0`/`v2.1.0` to check whether either is a v1.1.0-exact tree; read AOM Patent License 1.0 §1.2
-**Decisions settled here**: DEC-01 (spec version v1.0 vs v1.1.0), DEC-04 (`iamf-tools` tag), DEC-05 (payload rejection rules) — all before the type model is written. DEC-02 (crate licence) is cheapest here, at one commit
+**Decisions settled here**: DEC-04 (`iamf-tools` tag) and DEC-05 (payload rejection rules), both before the type model is written. DEC-01 and DEC-02 were **answered by the user on 2026-09-08** and are now implementation, not investigation: pin `SPEC_VERSION = "1.1.0"`, and carry `MIT OR Apache-2.0` into `Cargo.toml` plus the `NOTICE` file (the licence files themselves already landed)
 **Plans**: 8 plans
 
 Plans:
@@ -97,7 +97,7 @@ Plans:
 **Goal**: Parallax can export a conformant `.iamf` through the public surface alone, with one validation point and no way to hold the encoder wrong
 **Mode:** mvp
 **Depends on**: Phase 3 (all three codecs exist before the surface that selects between them is frozen)
-**Entry condition**: DEC-03 (parameter tick rate — pre-decimated blocks or curves) must be answered before this phase starts. It is a Parallax product decision, not implementation work; answering it after the phase begins is a breaking change to the only consumer's surface. Research recommends pre-decimated blocks, and `parameter_rate` lives in `param_definition` inside the descriptors, so the tick rate is a `build()`-time input either way
+**Entry condition**: ✓ **Satisfied 2026-09-08.** DEC-03 answered: the crate takes **pre-decimated blocks**. No time model, no interpolation, no float arithmetic on the encode path; `parameter_rate` remains a `build()`-time input. The decimation policy now lives in Parallax and must be shared with the ADM BWF exporter, or the two exports will disagree
 **Requirements**: API-01, API-02, API-03, API-04, API-05, DEC-03
 **Success Criteria** (what must be TRUE):
   1. `EncoderBuilder::build()` is the single place an invalid configuration is rejected — every validation error surfaces there as a typed `#[non_exhaustive]` error, and a successfully built `Encoder` cannot subsequently be misconfigured. *(API-01)*

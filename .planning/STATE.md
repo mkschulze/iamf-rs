@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 Phase: 1 of 4 (Conformant LPCM Bitstream)
 Plan: 0 of 8 in current phase
 Status: Ready to plan
-Last activity: 2026-09-08 — Roadmap created; 88/88 v1 requirements mapped across 4 phases
+Last activity: 2026-09-08 — DEC-01/02/03 settled by the user; Phase 4 entry condition satisfied
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -65,10 +65,22 @@ None yet.
 
 ### Blockers/Concerns
 
-- **DEC-03 (parameter tick rate — pre-decimated blocks or curves)** blocks Phase 4 entry. A Parallax product decision, not implementation work. Research recommends pre-decimated blocks. Must be answered before Phase 4 starts, or the only consumer's surface takes a breaking change.
-- **DEC-01 (spec version v1.0 vs v1.1.0)**, **DEC-04** (`iamf-tools` v2.0.0/v2.1.0 tags unfetched) and **DEC-05** (`libiamf` payload rejection rules only partly traced) must all be settled inside Phase 1, before the type model is written.
-- **DEC-02 (MIT alone vs `MIT OR Apache-2.0`)** — AOM Patent License 1.0 §1.2 unread. One commit now; needs every contributor's consent later.
-- ISO-BMFF (v2) is the licence contamination milestone and was not researched at all. `gpac` is LGPL-2.1 and forbidden.
+- **DEC-04** (`iamf-tools` v2.0.0/v2.1.0 tags unfetched — one may be a v1.1.0-exact tree) and **DEC-05**
+  (`libiamf` payload rejection rules only partly traced) must be settled inside Phase 1, before the
+  type model is written.
+- **Decimation policy now sits in Parallax.** DEC-03 chose pre-decimated blocks, so Parallax owns
+  position-curve decimation and must share it with the ADM BWF exporter — otherwise the two exports
+  disagree on the same project. Not a blocker for this crate; a tracked consequence for its consumer.
+- **AOM Patent License 1.0 §1.2 still unread.** No longer blocking now that the licence is settled;
+  remains due diligence on the inbound grant.
+- ISO-BMFF (v2) is the licence contamination milestone and was not researched at all. `gpac` is
+  LGPL-2.1 and forbidden.
+
+### Resolved
+
+- ~~DEC-01 spec version~~ → **IAMF v1.1.0** (2026-09-08)
+- ~~DEC-02 crate licence~~ → **`MIT OR Apache-2.0`**, licence files landed (2026-09-08)
+- ~~DEC-03 parameter tick rate~~ → **pre-decimated blocks**; Phase 4 entry condition satisfied (2026-09-08)
 
 ## Deferred Items
 
@@ -81,5 +93,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-08
-Stopped at: ROADMAP.md and STATE.md written; REQUIREMENTS.md traceability populated
+Stopped at: Three open decisions settled; dual licence files landed; ready to plan Phase 1
 Resume file: None

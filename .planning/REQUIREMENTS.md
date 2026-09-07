@@ -2,6 +2,8 @@
 
 **Defined:** 2026-09-08
 **Core Value:** A `.iamf` file this crate writes is read back by the reference decoder `libiamf` with the PCM sample-identical — *and* accepted by `iamf-tools`' stricter parser, because `libiamf` alone is a permissive oracle.
+**Spec version:** IAMF v1.1.0 (decided 2026-09-08)
+**Licence:** `MIT OR Apache-2.0` (decided 2026-09-08)
 
 ## v1 Requirements
 
@@ -123,14 +125,14 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [ ] **API-01**: `EncoderBuilder` with a single `build() -> Result<Encoder>` validation point
 - [ ] **API-02**: `build()` assigns IDs and selects the minimum profile
 - [ ] **API-03**: Loudness metadata supplied up front at `build()`, keeping the writer append-only so `W: Write` suffices
-- [ ] **API-04**: Parameter data accepted in the shape chosen by DEC-03, with the core API taking pre-decimated blocks
+- [ ] **API-04**: Parameter data accepted as pre-decimated blocks (DEC-03); the API validates tiling and serialises, and never interpolates
 - [ ] **API-05**: Feature gating covers drivers and codec libraries but **never the bitstream** — `--no-default-features` yields a dependency-free probe build usable as the fuzz target and `cargo deny` baseline
 
 ### Decisions to settle
 
-- [ ] **DEC-01**: Spec version decided between v1.0 and v1.1.0 and pinned — sets `SPEC_VERSION`, the profile enum's legal range, and whether the conformance claim is falsifiable
-- [ ] **DEC-02**: AOM Patent License 1.0 §1.2 read, and the crate licence settled between MIT alone and `MIT OR Apache-2.0`
-- [ ] **DEC-03**: Parameter tick rate decided — pre-decimated blocks or curves — before the public API is shaped
+- [ ] **DEC-01**: `SPEC_VERSION = "1.1.0"` pinned in code, with the profile enum's legal range and the expanded-layout set following from it *(decided 2026-09-08)*
+- [ ] **DEC-02**: Crate published under `MIT OR Apache-2.0` — `Cargo.toml` `license` field, `LICENSE-MIT` + `LICENSE-APACHE`, README licence section, and the `NOTICE` file Apache-2.0 §4(d) wants *(decided 2026-09-08; licence files landed, `Cargo.toml` follows in Phase 1)*
+- [ ] **DEC-03**: Parameter data taken as **pre-decimated blocks**; no time model, no interpolation, no float arithmetic on the encode path *(decided 2026-09-08)*
 - [ ] **DEC-04**: `iamf-tools` tags `v2.0.0` and `v2.1.0` fetched to check whether either is a v1.1.0-exact tree, before the type model is written
 - [ ] **DEC-05**: `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` read for payload-level rejection rules before the LPCM path is written
 
