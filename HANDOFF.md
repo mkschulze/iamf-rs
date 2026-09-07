@@ -195,8 +195,9 @@ path and the API must be shaped for it from the start. Decide before writing the
 **Library conventions:** `thiserror` for errors, never `anyhow` in a library. **No `unwrap()` or
 `expect()` outside tests** — a parser meets hostile input by definition. Rust 2024.
 
-**Fuzzing is not optional.** Parallax's testing strategy requires a fuzzer on every parser. The OBU
-parser is a parser. A fuzz target is part of the first milestone, not a follow-up.
+**Fuzzing is not optional.** Parallax's testing strategy requires a fuzzer on every parser, and the
+OBU parser is a parser. **The fuzz target ships in the same milestone as the parser itself — M2 — and
+may not slip past it.** It cannot come earlier: M1 is encoder-only and has nothing to fuzz.
 
 ---
 
@@ -208,7 +209,8 @@ channel-based Audio Element, **LPCM** (no codec dependency at all), one Mix Pres
 sample-identical**.
 
 **M2 — the parser and the round trip.** Parse our own output back into the model and assert equality;
-parse files produced by `iamf-tools` and assert we understand them. Fuzz target lands here.
+parse files produced by `iamf-tools` and assert we understand them. **The fuzz target lands here, with
+the parser** (§6) — this is the first milestone that has one.
 
 **M3 — the codecs.** FLAC and Opus framing, each proved by the same decode-and-compare loop as M1.
 
