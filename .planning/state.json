@@ -1,0 +1,33 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v1",
+  "phases": [
+    {
+      "number": "1",
+      "name": "Conformant LPCM Bitstream",
+      "status": "pending"
+    },
+    {
+      "number": "2",
+      "name": "Parser, Round-Trip and Fuzzing",
+      "status": "pending"
+    },
+    {
+      "number": "3",
+      "name": "FLAC and Opus Framing",
+      "status": "pending"
+    },
+    {
+      "number": "4",
+      "name": "Parallax-Facing API",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 1 of 4 · executing"
+  },
+  "updated_at": "2026-09-08T01:26:44.559Z"
+}
