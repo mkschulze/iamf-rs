@@ -23,10 +23,20 @@
 //! property that can prove we preserved something we did not understand.
 
 mod boundaries;
+mod codec_config;
 mod header;
+mod sequence_header;
 
 pub use boundaries::find_obu_boundaries;
+pub use codec_config::{
+    CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig, DecoderConfig,
+    LpcmDecoderConfig, MAX_SAMPLES_PER_FRAME, SampleFormatFlags, read_codec_config,
+    required_audio_roll_distance, write_codec_config,
+};
 pub use header::{ObuHeader, ObuType, Trimming, TypeSpecific, read_obu_header, write_obu};
+pub use sequence_header::{
+    IA_CODE, IaSequenceHeader, PROFILE_COUNT, read_ia_sequence_header, write_ia_sequence_header,
+};
 
 use crate::bits::{BitCursor, BitWriter};
 use crate::error::{Error, ErrorKind, Location, Result};

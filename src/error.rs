@@ -79,6 +79,8 @@ pub enum ErrorKind {
     ReservedValue { value: u8 },
     #[error("loudness value is outside the representable Q7.8 range")]
     LoudnessOutOfRange,
+    #[error("additional_profile is below primary_profile")]
+    AdditionalProfileBelowPrimary,
     #[error("no profile permits this configuration")]
     ProfileNotFound,
     #[error("channel count exceeds what the profile permits")]
