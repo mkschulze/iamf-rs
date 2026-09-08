@@ -26,8 +26,16 @@ thiserror = "2.0.20" # MIT OR Apache-2.0
 # Dev-only, and none of these reach the linked graph — `cargo tree -e
 # normal,no-proc-macro` is the instrument that proves it (plain `-e normal`
 # includes proc-macro edges and reports a false positive).
+#
+# `bitstream-io` is a DEV-dependency and nothing else (D-01). It is the
+# differential oracle `tests/bits_oracle.rs` cross-checks the hand-rolled
+# BitCursor/BitWriter against; importing it from `src/` would reintroduce the
+# error-mapping boundary BITS-07 exists to remove and destroy the native byte
+# offsets every `Error.at` value flows from. A verify gate greps `src/` for it.
 [dev-dependencies]
-hex-literal = "1.1.0" # MIT OR Apache-2.0 — hand-computed vectors (BITS-06, D-25)
+hex-literal = "1.1.0"   # MIT OR Apache-2.0 — hand-computed vectors (BITS-06, D-25)
+proptest = "1.11.0"     # MIT OR Apache-2.0 — differential oracle (D-01); MSRV 1.85, exactly GUARD-12's floor
+bitstream-io = "4.10.0" # MIT/Apache-2.0 (slash form; cargo-deny 0.20.2 resolves it as OR) — the oracle itself
 
 # No `[features]` table, deliberately (D-22). Phase 1 has nothing to gate: no
 # codec crates until Phase 3 (dev-only), `bitstream-io` is a dev-dependency
