@@ -87,6 +87,10 @@ pub enum ErrorKind {
     NotAnAudioFrame,
     #[error("audio_substream_id disagrees with the id the OBU type implies")]
     SubstreamIdMismatch,
+    #[error("channel count disagrees with the layout's")]
+    ChannelCountMismatch,
+    #[error("this loudspeaker layout has no packing plan in this crate")]
+    UnsupportedLayout,
     #[error("channel count exceeds what the profile permits")]
     ChannelCountExceedsProfile,
 }
