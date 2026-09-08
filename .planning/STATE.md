@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-09-08T02:04:05.155Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-09-08T02:47:41.092Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 01 execution started
-state_head: a34430aed19326045de9e51b909dceded4f8438f
+state_head: 79a354bcc24093a735943e82182afd5a5bb60e1a
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 8
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-09-08 — Phase 01 execution started
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P01 | 23min | 4 tasks | 18 files |
+| Phase 01 P02 | 35min | 3 tasks | 89 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Error surface locked as D-08/D-09: struct Error { kind, at } with Location = InputOffset|OutputOffset|Field|Unlocated; validate() returns Vec<Finding>. size_of::<Error>() is exactly 32, enforced by a const assertion proven to bite.
 - [Phase 01]: cargo tree -e normal is the wrong instrument for D-02's zero-linked-dependencies claim (it includes proc-macro edges). Use cargo tree -e normal,no-proc-macro; CI asserts it.
 - [Phase 01]: Toolchain pinned to exactly 1.85.0 (the MSRV floor), not the machine's 1.92.0 — so the advertised MSRV is the one we compile with. Every 01-03 dev-dependency must resolve under 1.85; proptest 1.11.0 sits exactly there.
+- [Phase 01]: Fixture supply needs no Bazel run: libiamf@v1.1.0 commits 221 .iamf files with matching configurations and rendered WAVs under BSD-3-Clause-Clear, so CONF-11's one-time-Bazel-build premise is retired (research correction 6).
+- [Phase 01]: A reference tool's exit code is never the conformance signal — proven by execution: iamfdec returns 0 on all five of a control and four corruptions, including two that decode to zero samples. Harnesses assert file existence, frame count and decoded-sample count.
+- [Phase 01]: Vendored fixture policy (D-14): a 65 536-byte per-file cap and a 39-file curated subset, both enforced by tests/fixtures_cap.rs, because Parallax's path dependency puts every byte in every developer's clone and removal needs a history rewrite.
+- [Phase 01]: Bazel is pinned by iamf-tools' own committed .bazelversion (7.4.1), not restated in the Dockerfile — one owner per pin. Bazelisk is pinned by release v1.29.0 AND the sha256 of the binary.
 
 ### Pending Todos
 
@@ -110,6 +115,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T02:03:51.527Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-09-08T02:47:28.754Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None

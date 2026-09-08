@@ -45,13 +45,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Research**: Yes — read `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` for payload-level rejection rules before the LPCM path is written; fetch `iamf-tools` tags `v2.0.0`/`v2.1.0` to check whether either is a v1.1.0-exact tree; read AOM Patent License 1.0 §1.2
 **Decisions settled here**: DEC-04 (`iamf-tools` tag) and DEC-05 (payload rejection rules), both before the type model is written. DEC-01 and DEC-02 were **answered by the user on 2026-09-08** and are now implementation, not investigation: pin `SPEC_VERSION = "1.1.0"`, and carry `MIT OR Apache-2.0` into `Cargo.toml` plus the `NOTICE` file (the licence files themselves already landed)
-**Plans**: 1/8 plans executed
+**Plans**: 2/8 plans executed
 
 Plans (8 plans, 8 waves — strictly sequential; each layer genuinely needs the one below, and D-24
 forces 01-01 → 01-02 before any bitstream code):
 
 - [x] 01-01-PLAN.md — Repo scaffolding and every guardrail, each **proven to bite**: `deny.toml` allow-list-only, `clippy.toml` `disallowed-types`/`disallowed-methods`, hardening lints, `rust-toolchain.toml`, `SPEC_VERSION`, `REFERENCES.md` pinned SHAs, `NOTICE`, `PATENTS`, `CONTRIBUTING.md` checkbox, the D-08 error surface, four-target CI matrix
-- [ ] 01-02-PLAN.md — External-tooling track on day one: `tools/build-reference.sh` builds `libiamf`+`iamfdec` at the pinned SHA and **self-validates against a file we did not write**, `.reference-manifest.json` asserted at runtime, a vendored reference fixture corpus with a D-14 manifest (no Bazel needed — research correction 6), the digest-pinned `iamf-tools` container, and two recorded experiments
+- [x] 01-02-PLAN.md — External-tooling track on day one: `tools/build-reference.sh` builds `libiamf`+`iamfdec` at the pinned SHA and **self-validates against a file we did not write**, `.reference-manifest.json` asserted at runtime, a vendored reference fixture corpus with a D-14 manifest (no Bazel needed — research correction 6), the digest-pinned `iamf-tools` container, and two recorded experiments
 - [ ] 01-03-PLAN.md — `bits` layer: hand-rolled `BitCursor`/`BitWriter` (D-01), hand-written uleb128 both directions with the 8-byte and `u32` caps, byte-alignment assertions, BITS-06 hand-computed vectors, the proptest differential oracle, and D-23's mechanical `// ref:` citation test
 - [ ] 01-04-PLAN.md — OBU header and common structure: MSB-first byte 0, the two-pass `obu_size` origin, the **two-variant** bit-6 enum (research correction 1 — OBU-03 is amended here), `obu_redundant_copy` legality, END-before-START trimming, extension header, central `trailing` drain, `find_obu_boundaries()` proven over the vendored corpus offline
 - [ ] 01-05-PLAN.md — Descriptor OBUs: the full 120-byte prologue of `test_000003.iamf` reproduced byte-exact — IA Sequence Header with `additional >= primary`, Codec Config with derived `audio_roll_distance` and big-endian `sample_format_flags`, Audio Element with D-04's `AudioElementType`, Mix Presentation with two layouts and the mandatory Mix Gain param definitions, the four-type layout model, `Vec`-in-bitstream-order collections
@@ -145,7 +145,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Conformant LPCM Bitstream | 1/8 | In Progress|  |
+| 1. Conformant LPCM Bitstream | 2/8 | In Progress|  |
 | 2. Parser, Round-Trip and Fuzzing | 0/4 | Not started | - |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |

@@ -72,9 +72,9 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [ ] **CONF-06**: `iamf-tools`' own parser accepts the file — the only check that catches reserved-bit misuse and leb128 strictness
 - [ ] **CONF-07**: Byte-diff against an `iamf-tools`-produced file for an identical configuration is either identical or has every difference enumerated in writing
 - [ ] **CONF-08**: Byte-comparison reproducing the shipped golden `libiamf/tests/test_000003.iamf`
-- [ ] **CONF-09**: Reference binaries invoked by `Command` in tests, discovered via `IAMF_REF_DECODER`, with `tools/build-reference.sh` at pinned commits — in one Linux CI job, never a `build.rs`
+- [x] **CONF-09**: Reference binaries invoked by `Command` in tests, discovered via `IAMF_REF_DECODER`, with `tools/build-reference.sh` at pinned commits — in one Linux CI job, never a `build.rs`
 - [ ] **CONF-10**: Golden fixtures are the always-on layer, so `cargo test` is green offline on all four targets
-- [ ] **CONF-11**: One-time Bazel build of `iamf-tools` generating and committing `tests/fixtures/*.iamf` — `iamf-tools` ships 338 `.textproto` files and exactly one `.iamf`
+- [x] **CONF-11**: One-time Bazel build of `iamf-tools` generating and committing `tests/fixtures/*.iamf` — `iamf-tools` ships 338 `.textproto` files and exactly one `.iamf`
 
 ### Guardrails
 
@@ -133,8 +133,8 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [x] **DEC-01**: `SPEC_VERSION = "1.1.0"` pinned in code, with the profile enum's legal range and the expanded-layout set following from it *(decided 2026-09-08)*
 - [x] **DEC-02**: Crate published under `MIT OR Apache-2.0` — `Cargo.toml` `license` field, `LICENSE-MIT` + `LICENSE-APACHE`, README licence section, and the `NOTICE` file Apache-2.0 §4(d) wants *(decided 2026-09-08; licence files landed, `Cargo.toml` follows in Phase 1)*
 - [ ] **DEC-03**: Parameter data taken as **pre-decimated blocks**; no time model, no interpolation, no float arithmetic on the encode path *(decided 2026-09-08)*
-- [ ] **DEC-04**: `iamf-tools` tags `v2.0.0` and `v2.1.0` fetched to check whether either is a v1.1.0-exact tree, before the type model is written
-- [ ] **DEC-05**: `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` read for payload-level rejection rules before the LPCM path is written
+- [x] **DEC-04**: `iamf-tools` tags `v2.0.0` and `v2.1.0` fetched to check whether either is a v1.1.0-exact tree, before the type model is written
+- [x] **DEC-05**: `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` read for payload-level rejection rules before the LPCM path is written
 
 ## v2 Requirements
 
@@ -226,9 +226,9 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | CONF-06 | Phase 1 | Pending |
 | CONF-07 | Phase 1 | Pending |
 | CONF-08 | Phase 1 | Pending |
-| CONF-09 | Phase 1 | Pending |
+| CONF-09 | Phase 1 | Complete |
 | CONF-10 | Phase 1 | Pending |
-| CONF-11 | Phase 1 | Pending |
+| CONF-11 | Phase 1 | Complete |
 | GUARD-01 | Phase 1 | Complete |
 | GUARD-02 | Phase 1 | Complete |
 | GUARD-03 | Phase 1 | Complete |
@@ -269,8 +269,8 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | DEC-01 | Phase 1 | Complete |
 | DEC-02 | Phase 1 | Complete |
 | DEC-03 | Phase 4 | Pending |
-| DEC-04 | Phase 1 | Pending |
-| DEC-05 | Phase 1 | Pending |
+| DEC-04 | Phase 1 | Complete |
+| DEC-05 | Phase 1 | Complete |
 
 **Coverage:**
 

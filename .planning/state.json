@@ -6,7 +6,7 @@
     {
       "number": "1",
       "name": "Conformant LPCM Bitstream",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "2",
@@ -29,5 +29,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 01 of 4 · executing"
   },
-  "updated_at": "2026-09-08T02:03:12.481Z"
+  "updated_at": "2026-09-08T02:47:28.082Z"
 }
