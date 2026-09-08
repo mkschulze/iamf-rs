@@ -26,6 +26,7 @@ mod audio_element;
 mod boundaries;
 mod codec_config;
 mod header;
+mod mix_presentation;
 mod param_definition;
 mod sequence_header;
 
@@ -44,6 +45,11 @@ pub use codec_config::{
     required_audio_roll_distance, write_codec_config,
 };
 pub use header::{ObuHeader, ObuType, Trimming, TypeSpecific, read_obu_header, write_obu};
+pub use mix_presentation::{
+    AnchorElement, AnchoredLoudness, HeadphonesRenderingMode, Layout, LayoutWithLoudness, Loudness,
+    LoudnessExtension, MixGainParamDefinition, MixPresentation, RenderingConfig, SubMix,
+    SubMixAudioElement, read_mix_presentation, write_mix_presentation,
+};
 pub use sequence_header::{
     IA_CODE, IaSequenceHeader, PROFILE_COUNT, read_ia_sequence_header, write_ia_sequence_header,
 };

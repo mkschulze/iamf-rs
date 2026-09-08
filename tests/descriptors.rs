@@ -18,12 +18,15 @@ use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
+use iamf::model::{DescriptorSet, by_id, write_descriptors};
 use iamf::obu::{
-    AudioElement, AudioElementType, ChannelAudioLayerConfig, CodecConfig, DecoderConfig,
-    IaSequenceHeader, LpcmDecoderConfig, Obu, ObuHeader, ObuType, SampleFormatFlags,
-    ScalableChannelLayoutConfig, read_audio_element, read_codec_config, read_ia_sequence_header,
-    read_obu_with, write_audio_element, write_codec_config, write_ia_sequence_header,
-    write_obu_with,
+    AnchorElement, AnchoredLoudness, AudioElement, AudioElementType, ChannelAudioLayerConfig,
+    CodecConfig, DecoderConfig, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness,
+    LoudnessExtension, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, Obu, ObuHeader,
+    ObuType, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix,
+    SubMixAudioElement, read_audio_element, read_codec_config, read_ia_sequence_header,
+    read_mix_presentation, read_obu_with, write_audio_element, write_codec_config,
+    write_ia_sequence_header, write_mix_presentation, write_obu_with,
 };
 
 /// The vendored reference file the whole suite is measured against.
@@ -554,4 +557,356 @@ fn a_substream_count_past_the_end_of_the_input_is_refused_without_allocating() {
     let err = read_obu_with(&mut r, read_audio_element)
         .expect_err("a count past the end of the input is refused");
     assert_eq!(err.kind(), &ErrorKind::UnexpectedEndOfInput);
+}
+
+// ---------------------------------------------------------------------------
+// Mix Presentation — offsets 0x28..0x78
+// ---------------------------------------------------------------------------
+
+/// A mode-1 Mix Gain definition with `parameter_id` 100 at 16 kHz, exactly as
+/// `test_000003` publishes both of its mandatory definitions.
+fn published_mix_gain() -> MixGainParamDefinition {
+    MixGainParamDefinition::mode_1(100, 16000)
+}
+
+/// The `test_000003` Mix Presentation, as its textproto publishes it.
+fn published_mix_presentation() -> Obu<MixPresentation> {
+    Obu::new(
+        ObuHeader::new(ObuType::MixPresentation),
+        MixPresentation {
+            mix_presentation_id: 42,
+            annotations_language: vec![b"en-us".to_vec()],
+            localized_presentation_annotations: vec![b"test_mix_pres".to_vec()],
+            sub_mixes: vec![SubMix {
+                elements: vec![SubMixAudioElement {
+                    audio_element_id: 300,
+                    localized_element_annotations: vec![
+                        b"test_sub_mix_0_audio_element_0".to_vec(),
+                    ],
+                    rendering_config: RenderingConfig::stereo(),
+                    element_mix_gain: published_mix_gain(),
+                }],
+                output_mix_gain: published_mix_gain(),
+                layouts: vec![LayoutWithLoudness {
+                    layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                    loudness: Loudness::new(-13733, -12879),
+                }],
+            }],
+            trailing: Vec::new(),
+        },
+    )
+}
+
+/// The whole `test_000003` descriptor prologue as a model.
+fn published_descriptor_set() -> DescriptorSet {
+    DescriptorSet {
+        sequence_header: published_sequence_header().payload,
+        codec_configs: vec![published_codec_config().payload],
+        audio_elements: vec![published_audio_element().payload],
+        mix_presentations: vec![published_mix_presentation().payload],
+    }
+}
+
+/// Serialise a whole descriptor set.
+fn descriptor_bytes(set: &DescriptorSet) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    let written = write_descriptors(&mut w, set);
+    assert!(written.is_ok(), "the descriptor set serialises: {written:?}");
+    w.finish().unwrap_or_default()
+}
+
+#[test]
+fn mix_presentation_reproduces_offsets_0x28_through_0x77() {
+    let expected = TEST_000003.get(0x28..0x78).expect("the file is longer");
+    assert_eq!(
+        obu_bytes(&published_mix_presentation(), write_mix_presentation),
+        expected,
+    );
+}
+
+#[test]
+fn the_mix_presentation_header_byte_is_0x10_with_bit_6_clear() {
+    // Bit 6 on a Mix Presentation is RESERVED, not an optional-fields flag.
+    // libiamf@v1.1.0 reads two trim fields whenever bit 6 is set, for ANY OBU
+    // type, so a set bit here shifts the whole payload by two bytes silently.
+    let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
+    assert_eq!(bytes.first(), Some(&0x10));
+    assert_eq!(bytes.get(1), Some(&0x4e), "obu_size 78");
+}
+
+#[test]
+fn strings_are_nul_terminated_on_the_wire() {
+    let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
+    // "en-us\0" at payload offset 2 -> file offset 0x2C, OBU offset 4.
+    assert_eq!(bytes.get(4..10), Some(hex!("65 6e 2d 75 73 00").as_slice()));
+    // "test_mix_pres\0" is fourteen bytes.
+    assert_eq!(
+        bytes.get(10..24).map(<[u8]>::len),
+        Some(14),
+        "13 characters plus the terminator"
+    );
+    assert_eq!(bytes.get(23), Some(&0x00));
+}
+
+#[test]
+fn param_definition_mode_1_writes_0x80_and_the_gain_follows_immediately() {
+    let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
+    // OBU offset 0x40 == file offset 0x68: the mode byte, then the gain. No
+    // duration / constant_subblock_duration / num_subblocks in between — that
+    // is the path that emits zero Parameter Block OBUs while the definitions
+    // remain mandatory structure.
+    assert_eq!(bytes.get(0x40), Some(&0x80));
+    assert_eq!(bytes.get(0x41..0x43), Some(hex!("00 00").as_slice()));
+    assert!(published_mix_gain().definition.param_definition_mode());
+    assert!(published_mix_gain().definition.duration_fields.is_none());
+}
+
+#[test]
+fn the_layout_byte_packs_sound_system_a_as_0x80() {
+    // layout_type(2)=2 in the top two bits, sound_system(4)=0, reserved(2)=0.
+    let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
+    assert_eq!(bytes.get(0x4a), Some(&0x80));
+    assert_eq!(bytes.get(0x4b), Some(&0x00), "info_type 0");
+}
+
+#[test]
+fn integrated_loudness_and_digital_peak_are_signed_16_big_endian() {
+    let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
+    assert_eq!(bytes.get(0x4c..0x4e), Some(hex!("ca 5b").as_slice()), "-13733");
+    assert_eq!(bytes.get(0x4e..0x50), Some(hex!("cd b1").as_slice()), "-12879");
+}
+
+#[test]
+fn info_type_is_derived_from_the_optional_loudness_members() {
+    let mut loudness = Loudness::new(-13733, -12879);
+    assert_eq!(loudness.info_type(), 0x00);
+
+    loudness.true_peak = Some(-1000);
+    assert_eq!(loudness.info_type(), 0x01);
+
+    loudness.anchored = Some(AnchoredLoudness {
+        anchor_elements: vec![AnchorElement {
+            anchor_element: 1,
+            anchored_loudness: -2000,
+        }],
+    });
+    assert_eq!(loudness.info_type(), 0x03);
+
+    loudness.extension = Some(LoudnessExtension {
+        info_type_bits: 0x04,
+        bytes: vec![0xaa],
+    });
+    assert_eq!(loudness.info_type(), 0x07);
+
+    // And every one of them round-trips, which is what proves info_type is not
+    // merely computed but computed correctly.
+    let mut obu = published_mix_presentation();
+    if let Some(layout) = obu
+        .payload
+        .sub_mixes
+        .first_mut()
+        .and_then(|s| s.layouts.first_mut())
+    {
+        layout.loudness = loudness;
+    }
+    let bytes = obu_bytes(&obu, write_mix_presentation);
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_mix_presentation).expect("the vector parses");
+    assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
+}
+
+#[test]
+fn a_sub_mix_with_two_layouts_serialises_two_loudness_blocks() {
+    // Research correction 9: a 5.1 fixture needs Sound System B as the
+    // comparison target AND Sound System A because iamf-tools demands it.
+    let mut obu = published_mix_presentation();
+    if let Some(sub_mix) = obu.payload.sub_mixes.first_mut() {
+        sub_mix.layouts = vec![
+            LayoutWithLoudness {
+                layout: Layout::SoundSystem(SoundSystem::B0_5_0),
+                loudness: Loudness::new(-14000, -13000),
+            },
+            LayoutWithLoudness {
+                layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                loudness: Loudness::new(-13733, -12879),
+            },
+        ];
+    }
+    let bytes = obu_bytes(&obu, write_mix_presentation);
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_mix_presentation).expect("the vector parses");
+
+    let sub_mix = parsed.payload.sub_mixes.first().expect("one sub-mix");
+    assert_eq!(sub_mix.num_layouts(), 2);
+    assert!(sub_mix.has_stereo_layout());
+    assert!(sub_mix.validate().is_empty(), "{:?}", sub_mix.validate());
+    assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
+}
+
+#[test]
+fn a_sub_mix_without_a_stereo_layout_is_a_finding_and_not_a_parse_failure() {
+    let mut obu = published_mix_presentation();
+    if let Some(layout) = obu
+        .payload
+        .sub_mixes
+        .first_mut()
+        .and_then(|s| s.layouts.first_mut())
+    {
+        layout.layout = Layout::SoundSystem(SoundSystem::B0_5_0);
+    }
+
+    // It SERIALISES — the writer is faithful (D-07).
+    let bytes = obu_bytes(&obu, write_mix_presentation);
+
+    // It READS — being stricter than the reference here would break Phase 2's
+    // foreign-file round-trip; iamf-tools' own read path has a TODO and checks
+    // nothing.
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_mix_presentation).expect("the parse SUCCEEDS");
+
+    // And validate() names it.
+    let findings = parsed.payload.validate();
+    assert!(
+        findings.iter().any(|f| f.message.contains("stereo layout")),
+        "validate() reports the missing stereo layout: {findings:?}"
+    );
+}
+
+#[test]
+fn mix_presentation_round_trips_through_read() {
+    let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_mix_presentation).expect("the vector parses");
+
+    assert_eq!(parsed.payload.mix_presentation_id, 42);
+    assert_eq!(parsed.payload.count_label(), 1);
+    assert_eq!(parsed.payload.annotations_language, vec![b"en-us".to_vec()]);
+    assert!(parsed.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Descriptor ordering and collections — DESC-08, DESC-09
+// ---------------------------------------------------------------------------
+
+#[test]
+fn codec_configs_and_audio_elements_sort_by_id_but_mix_presentations_do_not() {
+    let mut set = published_descriptor_set();
+    let mut second_config = published_codec_config().payload;
+    second_config.codec_config_id = 100;
+    set.codec_configs.insert(0, second_config);
+
+    let mut second_element = published_audio_element().payload;
+    second_element.audio_element_id = 100;
+    second_element.codec_config_id = 100;
+    set.audio_elements.push(second_element);
+
+    let mut second_presentation = published_mix_presentation().payload;
+    second_presentation.mix_presentation_id = 7;
+    set.mix_presentations.push(second_presentation);
+
+    let bytes = descriptor_bytes(&set);
+    let mut r = BitCursor::new(&bytes);
+    let _header = read_obu_with(&mut r, read_ia_sequence_header).expect("sequence header");
+
+    let mut config_ids = Vec::new();
+    for _ in 0..2 {
+        let obu = read_obu_with(&mut r, read_codec_config).expect("codec config");
+        config_ids.push(obu.payload.codec_config_id);
+    }
+    let mut element_ids = Vec::new();
+    for _ in 0..2 {
+        let obu = read_obu_with(&mut r, read_audio_element).expect("audio element");
+        element_ids.push(obu.payload.audio_element_id);
+    }
+    let mut presentation_ids = Vec::new();
+    for _ in 0..2 {
+        let obu = read_obu_with(&mut r, read_mix_presentation).expect("mix presentation");
+        presentation_ids.push(obu.payload.mix_presentation_id);
+    }
+
+    assert_eq!(config_ids, vec![100, 200], "ascending by codec_config_id");
+    assert_eq!(element_ids, vec![100, 300], "ascending by audio_element_id");
+    assert_eq!(
+        presentation_ids,
+        vec![42, 7],
+        "list order — the original ordering may be used downstream when \
+         selecting the mix presentation, so sorting would be WRONG"
+    );
+}
+
+#[test]
+fn by_id_returns_none_on_an_empty_collection_and_the_first_match_on_a_duplicate() {
+    let empty: Vec<CodecConfig> = Vec::new();
+    assert!(by_id(&empty, 200).is_none());
+
+    let mut set = published_descriptor_set();
+    assert!(set.codec_config_by_id(999).is_none());
+    assert!(set.audio_element_by_id(300).is_some());
+
+    let mut duplicate = published_codec_config().payload;
+    duplicate.num_samples_per_frame = 64; // same id, different content
+    set.codec_configs.push(duplicate);
+
+    let bound = set.codec_config_by_id(200).expect("the first match");
+    assert_eq!(
+        bound.num_samples_per_frame, 128,
+        "by_id binds to the FIRST in bitstream order, as a forward reader would"
+    );
+
+    let findings = set.validate();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.message.contains("indices 0 and 1")),
+        "the duplicate finding names both indices: {findings:?}"
+    );
+}
+
+#[test]
+fn a_sequence_with_zero_mix_presentations_serialises_without_panicking() {
+    let mut set = published_descriptor_set();
+    set.mix_presentations.clear();
+    let bytes = descriptor_bytes(&set);
+    assert_eq!(
+        bytes.len(),
+        0x28,
+        "the sequence header, one Codec Config and one Audio Element"
+    );
+    assert!(set.mix_presentation_by_id(42).is_none());
+}
+
+#[test]
+fn an_unresolvable_codec_config_reference_is_a_finding() {
+    let mut set = published_descriptor_set();
+    set.codec_configs.clear();
+    let findings = set.validate();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.message.contains("codec_config_id 200")),
+        "validate() names the unresolvable reference: {findings:?}"
+    );
+}
+
+#[test]
+fn the_120_byte_descriptor_prologue_of_test_000003_is_reproduced_byte_exact() {
+    // This plan's central claim. The model is built entirely from
+    // test_000003.textproto — the *published configuration* the reference
+    // encoder was given — and the bytes it produces are compared against the
+    // `.iamf` the reference encoder produced from it.
+    //
+    // The prologue is 120 bytes, 0x00..0x78, not the 118 PROJECT.md states.
+    let produced = descriptor_bytes(&published_descriptor_set());
+
+    assert_eq!(produced.len(), 120);
+    assert_eq!(
+        produced.as_slice(),
+        TEST_000003.get(0x00..0x78).expect("the file is longer"),
+    );
+    assert!(
+        published_descriptor_set().validate().is_empty(),
+        "{:?}",
+        published_descriptor_set().validate()
+    );
 }
