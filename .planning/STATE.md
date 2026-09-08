@@ -4,11 +4,11 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Phase 01 code review resolved — ready for phase verification
-last_updated: "2026-09-08T21:50:36+02:00"
+stopped_at: Phase 01 verification found contract-drift and four-target evidence gaps
+last_updated: "2026-09-08T22:42:09+02:00"
 last_activity: 2026-09-08
-last_activity_desc: Phase 01 code-review fixes passed independent re-review
-state_head: ab9e0e1
+last_activity_desc: Phase 01 verification completed — gaps found (2/5 truths verified)
+state_head: b296786
 progress:
   total_phases: 4
   completed_phases: 0
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
 Plan: 8 of 8
-Status: Ready for phase verification
-Last activity: 2026-09-08 — Phase 01 code-review fixes passed independent re-review
+Status: Verification gaps found
+Last activity: 2026-09-08 — Phase 01 verification completed (2/5 truths verified)
 
 Progress: [██████████] 100% of Phase 01 plans
 
@@ -143,6 +143,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T21:50:36+02:00
-Stopped at: Phase 01 code review resolved — ready for phase verification
+Last session: 2026-09-08T22:42:09+02:00
+Stopped at: Phase 01 verification found contract-drift and four-target evidence gaps
 Resume file: .planning/phases/01-conformant-lpcm-bitstream/.continue-here.md
