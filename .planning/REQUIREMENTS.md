@@ -11,13 +11,13 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Bit-level I/O
 
-- [ ] **BITS-01**: `BitReader<'a>` borrowing `&[u8]` and `BitWriter`, wrapping `bitstream-io`, exposing `is_byte_aligned()`, `bits_remaining()` and `sub_reader(len)`
-- [ ] **BITS-02**: Reader and writer method names mirror `iamf-tools`' `read_bit_buffer.h` / `write_bit_buffer.h` one-for-one, with separate signed and unsigned methods
-- [ ] **BITS-03**: Hand-written uleb128 writer emitting minimal form, enforcing the 8-byte and `u32::MAX` caps
-- [ ] **BITS-04**: Hand-written uleb128 reader accepting 1–8 bytes, returning a typed error on a 9th continuation byte and on a value exceeding `u32::MAX`
-- [ ] **BITS-05**: Byte alignment asserted at every OBU boundary — the reference pads nothing and errors instead
-- [ ] **BITS-06**: Hand-computed unit vectors covering the bit primitives, written before any OBU type exists
-- [ ] **BITS-07**: `bits` is the only module that touches `bitstream-io`; `std::io::Error` is mapped at that boundary and never escapes
+- [x] **BITS-01**: `BitReader<'a>` borrowing `&[u8]` and `BitWriter`, wrapping `bitstream-io`, exposing `is_byte_aligned()`, `bits_remaining()` and `sub_reader(len)`
+- [x] **BITS-02**: Reader and writer method names mirror `iamf-tools`' `read_bit_buffer.h` / `write_bit_buffer.h` one-for-one, with separate signed and unsigned methods
+- [x] **BITS-03**: Hand-written uleb128 writer emitting minimal form, enforcing the 8-byte and `u32::MAX` caps
+- [x] **BITS-04**: Hand-written uleb128 reader accepting 1–8 bytes, returning a typed error on a 9th continuation byte and on a value exceeding `u32::MAX`
+- [x] **BITS-05**: Byte alignment asserted at every OBU boundary — the reference pads nothing and errors instead
+- [x] **BITS-06**: Hand-computed unit vectors covering the bit primitives, written before any OBU type exists
+- [x] **BITS-07**: `bits` is the only module that touches `bitstream-io`; `std::io::Error` is mapped at that boundary and never escapes
 
 ### OBU header and common structure
 
@@ -183,13 +183,13 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BITS-01 | Phase 1 | Pending |
-| BITS-02 | Phase 1 | Pending |
-| BITS-03 | Phase 1 | Pending |
-| BITS-04 | Phase 1 | Pending |
-| BITS-05 | Phase 1 | Pending |
-| BITS-06 | Phase 1 | Pending |
-| BITS-07 | Phase 1 | Pending |
+| BITS-01 | Phase 1 | Complete |
+| BITS-02 | Phase 1 | Complete |
+| BITS-03 | Phase 1 | Complete |
+| BITS-04 | Phase 1 | Complete |
+| BITS-05 | Phase 1 | Complete |
+| BITS-06 | Phase 1 | Complete |
+| BITS-07 | Phase 1 | Complete |
 | OBU-01 | Phase 1 | Pending |
 | OBU-02 | Phase 1 | Pending |
 | OBU-03 | Phase 1 | Pending |

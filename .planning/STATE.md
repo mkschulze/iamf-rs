@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-09-08T02:47:41.092Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-09-08T03:40:28.868Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 01 execution started
-state_head: 79a354bcc24093a735943e82182afd5a5bb60e1a
+state_head: eb40f1cf8f75d54a9cde670f214b7d4c86760b6c
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-09-08 — Phase 01 execution started
 
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 01 P01 | 23min | 4 tasks | 18 files |
 | Phase 01 P02 | 35min | 3 tasks | 89 files |
+| Phase 01 P03 | 47min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,10 @@ Recent decisions affecting current work:
 - [Phase 01]: A reference tool's exit code is never the conformance signal — proven by execution: iamfdec returns 0 on all five of a control and four corruptions, including two that decode to zero samples. Harnesses assert file existence, frame count and decoded-sample count.
 - [Phase 01]: Vendored fixture policy (D-14): a 65 536-byte per-file cap and a 39-file curated subset, both enforced by tests/fixtures_cap.rs, because Parallax's path dependency puts every byte in every developer's clone and removal needs a history rewrite.
 - [Phase 01]: Bazel is pinned by iamf-tools' own committed .bazelversion (7.4.1), not restated in the Dockerfile — one owner per pin. Bazelisk is pinned by release v1.29.0 AND the sha256 of the binary.
+- [Phase 01]: Hand-rolled BitCursor/BitWriter over &[u8] with bitstream-io demoted to a dev-only proptest differential oracle (D-01), imported from exactly one test file and absent from the linked graph
+- [Phase 01]: Minimal uleb128 is implemented as fixed-size uleb128 at minimal_len, mirroring LebGenerator: one encoder loop, and minimality is structural rather than emergent
+- [Phase 01]: read_string returns the NUL terminator and write_string appends it; the asymmetry makes an unterminated string unrepresentable on the write side
+- [Phase 01]: D-03's recorded rationale corrected in src/bits/mod.rs: the fixed-size encoder is for parsing and test_000134, not for CONF-08's test_000003 (research correction 4)
 
 ### Pending Todos
 
@@ -115,6 +120,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T02:47:28.754Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-09-08T03:40:17.932Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None
