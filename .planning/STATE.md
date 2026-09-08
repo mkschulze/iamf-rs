@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Phase 01 gap plans 01-09 and 01-10 created and plan-checker verified
-last_updated: "2026-09-09T00:05:13+02:00"
+stopped_at: Completed 01-09-PLAN.md
+last_updated: "2026-09-09T00:17:05+02:00"
 last_activity: 2026-09-09
-last_activity_desc: Phase 01 verification gaps planned — 2 gap plans in 2 waves
-state_head: f02c5d3
+last_activity_desc: Phase 01 contract reconciled — cross-target CI evidence remains
+state_head: 4f2a0bf
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 8 of 10
-Status: Verification gaps planned
-Last activity: 2026-09-09 — Gap plans 01-09 and 01-10 created and verified
+Plan: 9 of 10
+Status: Contract gaps reconciled; cross-target CI evidence pending
+Last activity: 2026-09-09 — Plan 01-09 reconciled ROADMAP and REQUIREMENTS
 
-Progress: [████████░░] 80% of Phase 01 plans
+Progress: [█████████░] 90% of Phase 01 plans
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Progress: [████████░░] 80% of Phase 01 plans
 | Phase 01 P06 | 26min | 3 tasks | 10 files |
 | Phase 01 P07 | 62 | 3 tasks | 13 files |
 | Phase 01 P08 | ~2h | 3 tasks | 17 files |
+| Phase 01 P09 | 4min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -108,17 +109,15 @@ Recent decisions affecting current work:
 - [Phase 01]: Research assumption A1 REFUTED: libiamf@v1.1.0's reads24be (bitstream.c:206-210) uses readu16le where readu16be was meant, so 24-bit big-endian LPCM is misread with its top two bytes transposed
 - [Phase 01]: Sample-identity fixture is 24-bit LITTLE-endian; a third stereo 16-bit BIG-endian fixture keeps DESC-03's endianness sense asserted end to end (waiver W-1)
 - [Phase 01]: CONF-07 is byte-identical: our .iamf and iamf-tools' encoder_main output are both 7073 bytes with the same sha256; DIFF-LEDGER.md is empty and asserted
+- [Phase 01]: Sample identity remains on the 5.1 fixture; repeated-descriptor ordering is proved separately by the two-Audio-Element structure fixture.
+- [Phase 01]: iamf-tools v2.1.0 at 848c6ff4968ff8cc6f728259892ab4f90cb83256 is the pinned tool release for IAMF v1.1.0; SPEC_VERSION remains 1.1.0.
 
 ### Pending Todos
 
-- Execute 01-09 to reconcile the authoritative ROADMAP/REQUIREMENTS contract.
 - Execute 01-10 to obtain branch-appropriate current-candidate CI evidence and re-verify Phase 1.
 
 ### Blockers/Concerns
 
-- **DEC-04** (`iamf-tools` v2.0.0/v2.1.0 tags unfetched — one may be a v1.1.0-exact tree) and **DEC-05**
-  (`libiamf` payload rejection rules only partly traced) must be settled inside Phase 1, before the
-  type model is written.
 - **Decimation policy now sits in Parallax.** DEC-03 chose pre-decimated blocks, so Parallax owns
   position-curve decimation and must share it with the ADM BWF exporter — otherwise the two exports
   disagree on the same project. Not a blocker for this crate; a tracked consequence for its consumer.
@@ -126,7 +125,6 @@ Recent decisions affecting current work:
   remains due diligence on the inbound grant.
 - ISO-BMFF (v2) is the licence contamination milestone and was not researched at all. `gpac` is
   LGPL-2.1 and forbidden.
-- Phase 1 work is on branch gsd/phase-01-conformant-lpcm-bitstream, not main: git.branching_strategy is "none" but main is the repo's protected default branch and the executor may not commit to it. Either fast-forward main, or set git.allow_default_branch_commits: true in .planning/config.json before plan 01-02.
 
 ### Resolved
 
@@ -144,6 +142,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-09T00:05:13+02:00
-Stopped at: Phase 01 gap plans 01-09 and 01-10 created and plan-checker verified
-Resume file: .planning/phases/01-conformant-lpcm-bitstream/.continue-here.md
+Last session: 2026-09-08T22:17:05.542Z
+Stopped at: Completed 01-09-PLAN.md
+Resume file: None
