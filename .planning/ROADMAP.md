@@ -22,7 +22,7 @@ deliberately absent below.
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Conformant LPCM Bitstream** - A standalone `.iamf` the reference decodes sample-identically, with every guardrail and every byte-level fact pinned
+- [x] **Phase 1: Conformant LPCM Bitstream** - A standalone `.iamf` the reference decodes sample-identically, with every guardrail and every byte-level fact pinned
 - [ ] **Phase 2: Parser, Round-Trip and Fuzzing** - Read the bitstream back into the model, prove both round-trip directions, and ship a fuzzer with a committed corpus
 - [ ] **Phase 3: FLAC and Opus Framing** - Two more codecs through the unchanged conformance harness, with zero codec crates in the shipping graph
 - [ ] **Phase 4: Parallax-Facing API** - One validated `build()`, minimum-profile selection, and a dependency-free bitstream core
@@ -45,7 +45,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Research**: Yes — read `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` for payload-level rejection rules before the LPCM path is written; fetch `iamf-tools` tags `v2.0.0`/`v2.1.0` to check whether either is a v1.1.0-exact tree; read AOM Patent License 1.0 §1.2
 **Decisions settled here**: DEC-04 (`iamf-tools` tag) and DEC-05 (payload rejection rules), both before the type model is written. DEC-01 and DEC-02 were **answered by the user on 2026-09-08** and are now implementation, not investigation: pin `SPEC_VERSION = "1.1.0"`, and carry `MIT OR Apache-2.0` into `Cargo.toml` plus the `NOTICE` file (the licence files themselves already landed)
-**Plans**: 9/10 plans executed
+**Plans**: 10/10 plans executed
 
 Plans (10 plans, 10 waves — the eight implementation waves are complete, followed by two
 strictly ordered verification-gap closure waves):
@@ -59,7 +59,7 @@ strictly ordered verification-gap closure waves):
 - [x] 01-07-PLAN.md — Sequence writer, profile and metadata: the streaming `push_descriptors`/`push_temporal_unit`/`finish` primitive reproducing all 32567 bytes of `test_000003.iamf`, the whole-file wrapper, the profile enum, minimum-profile selection, and the `round_ties_even` Q7.8 helper carrying the single documented float escape
 - [x] 01-08-PLAN.md — `assert_conformant(config, pcm)` and the seven-clause exit gate: the **gating 24-bit probe first** (research assumption A1), the D-18/D-19 fixture, D-20's three golden artifacts, D-12's executable diff ledger, both reference oracles, and the always-on offline layer
 - [x] 01-09-PLAN.md — Reconcile ROADMAP criteria 2/3 and BITS-01, BITS-07 and CONF-11 with the evidence-backed decisions already implemented, preserving all requirement IDs and traceability
-- [ ] 01-10-PLAN.md — Prove byte identity for an exact CI-tested candidate across the four target paths, with explicit publication authorization, native→Rosetta→D-17 handling for macOS x86_64, durable evidence and fresh phase verification
+- [x] 01-10-PLAN.md — Prove byte identity for an exact CI-tested candidate across the four target paths, with explicit publication authorization, native→Rosetta→D-17 handling for macOS x86_64, durable evidence and fresh phase verification
 
 ### Phase 2: Parser, Round-Trip and Fuzzing
 
@@ -147,7 +147,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Conformant LPCM Bitstream | 8/8 | In Progress|  |
+| 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 0/4 | Not started | - |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |

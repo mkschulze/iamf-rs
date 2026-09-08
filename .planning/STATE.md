@@ -3,17 +3,18 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
-status: executing
-stopped_at: Completed 01-09-PLAN.md
-last_updated: "2026-09-09T00:17:05+02:00"
+status: complete
+stopped_at: Completed 01-10-PLAN.md
+last_updated: "2026-09-08T22:56:00.197Z"
 last_activity: 2026-09-09
-last_activity_desc: Phase 01 contract reconciled — cross-target CI evidence remains
-state_head: 4f2a0bf
+last_activity_desc: Phase 01 verified — exact-candidate four-target byte identity passed
+state_head: 4d81cd0
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
@@ -27,20 +28,14 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 
 ## Current Position
 
-Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 9 of 10
-Status: Contract gaps reconciled; cross-target CI evidence pending
-Last activity: 2026-09-09 — Plan 01-09 reconciled ROADMAP and REQUIREMENTS
+Phase: 01 (Conformant LPCM Bitstream) — COMPLETE
+Plan: 10 of 10
+Status: Verified 5/5; exact-candidate four-target CI evidence passed
+Last activity: 2026-09-09 — Plan 01-10 closed the cross-target byte-identity gate
 
-Progress: [█████████░] 90% of Phase 01 plans
+Progress: [██████████] 100% of Phase 01 plans
 
 ## Performance Metrics
-
-**Velocity:**
-
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: —
 
 **By Phase:**
 
@@ -67,6 +62,7 @@ Progress: [█████████░] 90% of Phase 01 plans
 | Phase 01 P07 | 62 | 3 tasks | 13 files |
 | Phase 01 P08 | ~2h | 3 tasks | 17 files |
 | Phase 01 P09 | 4min | 3 tasks | 2 files |
+| Phase 01 P10 | 34min | 4 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -111,10 +107,13 @@ Recent decisions affecting current work:
 - [Phase 01]: CONF-07 is byte-identical: our .iamf and iamf-tools' encoder_main output are both 7073 bytes with the same sha256; DIFF-LEDGER.md is empty and asserted
 - [Phase 01]: Sample identity remains on the 5.1 fixture; repeated-descriptor ordering is proved separately by the two-Audio-Element structure fixture.
 - [Phase 01]: iamf-tools v2.1.0 at 848c6ff4968ff8cc6f728259892ab4f90cb83256 is the pinned tool release for IAMF v1.1.0; SPEC_VERSION remains 1.1.0.
+- [Phase 01]: The Phase 1 cross-target terminal branch is normal-four-target; no D-17 runner waiver is active.
+- [Phase 01]: Windows preserves committed LF bytes before checkout, and x86_64 macOS tests execute under Rosetta 2.
+- [Phase 01]: Cross-target evidence is bound to candidate 5fea02a; closure descendants are restricted to the explicit documentation/state allowlist.
 
 ### Pending Todos
 
-- Execute 01-10 to obtain branch-appropriate current-candidate CI evidence and re-verify Phase 1.
+- Plan Phase 2: Parser, Round-Trip and Fuzzing.
 
 ### Blockers/Concerns
 
@@ -142,6 +141,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T22:17:05.542Z
-Stopped at: Completed 01-09-PLAN.md
+Last session: 2026-09-08T22:56:00.194Z
+Stopped at: Completed 01-10-PLAN.md
 Resume file: None
