@@ -1,0 +1,52 @@
+[package]
+name = "iamf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "IAMF (Immersive Audio Model and Formats) OBU serialiser, parser and descriptor model"
+repository = "https://github.com/mkschulze/iamf-rs"
+readme = "README.md"
+keywords = ["iamf", "audio", "bitstream", "spatial-audio", "aom"]
+categories = ["encoding", "multimedia::audio"]
+
+# Every dependency states its licence on the line that adds it (CLAUDE.md
+# Constraints). Phase 1's shipping graph is exactly one crate: `thiserror` is
+# unconditional per PROJECT.md ("never `anyhow` in a library"), and D-02 defines
+# "dependency-free" as zero *linked* dependencies — `thiserror-impl -> syn ->
+# proc-macro2 -> quote -> unicode-ident` is proc-macro-only and contributes no
+# code to the linked artifact. `cargo tree -e normal` is the check.
+#
+# `bitstream-io` is deliberately NOT here: D-01 demotes it to a dev-dependency
+# used only as a differential oracle (arrives in plan 01-03).
+[dependencies]
+thiserror = "2.0.20" # MIT OR Apache-2.0
+
+# No `[features]` table, deliberately (D-22). Phase 1 has nothing to gate: no
+# codec crates until Phase 3 (dev-only), `bitstream-io` is a dev-dependency
+# (D-01), `thiserror` is unconditional (D-02). PROJECT.md's "one crate,
+# feature-gated encode/decode" is a Phase 4 intention, not a Phase 1
+# instruction. A cfg matrix would also multiply the four-target byte-identity
+# gate that D-16 makes mandatory on every PR.
+
+[lints.rust]
+# Phase 1 has no FFI and never will need one; `forbid` (not `deny`) so no
+# module can re-enable it locally. Restated in `src/lib.rs` for readers who
+# never open the manifest.
+unsafe_code = "forbid"
+
+# GUARD-03 / GUARD-04. These are the lints people disable first, which is why
+# they live in the manifest (workspace-wide, every target) rather than as
+# crate-root attributes that a new binary target would silently miss.
+# The "outside tests" carve-out (GUARD-04) is expressed in `clippy.toml` via
+# `allow-unwrap-in-tests` / `allow-expect-in-tests` / `allow-panic-in-tests`,
+# not by `#[allow]` attributes in source.
+[lints.clippy]
+indexing_slicing = "deny"        # GUARD-03 — a parser meets hostile input by definition
+arithmetic_side_effects = "deny" # GUARD-03 — every size field is attacker-controlled
+unwrap_used = "deny"             # GUARD-04
+expect_used = "deny"             # GUARD-04
+panic = "deny"                   # GUARD-04 — never panic on malformed input
+disallowed_types = "deny"        # GUARD-02 (HashMap/HashSet) + GUARD-11 (f32/f64), configured in clippy.toml
+disallowed_methods = "deny"      # GUARD-11 (transcendentals), configured in clippy.toml

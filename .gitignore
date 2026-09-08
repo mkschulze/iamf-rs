@@ -22,3 +22,9 @@ target
 
 # Editor-local settings (personal, not project configuration)
 .vscode/
+
+# Guardrail proof workspace (tools/prove-guards.sh) lives under target/
+
+# Reference implementation checkouts and the D-13 runtime manifest
+/.reference/
+/.reference-manifest.json

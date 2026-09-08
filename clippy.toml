@@ -1,0 +1,64 @@
+# clippy configuration — GUARD-02 (no hashed containers) and GUARD-11 (no DSP).
+#
+# The lint *levels* live in `Cargo.toml`'s `[lints.clippy]` table; this file
+# supplies the lists those lints consult. Both halves are required — a level
+# without a list is a no-op, and a list without a level is never read.
+#
+# `tools/prove-guards.sh` introduces one deliberate violation per entry below
+# and asserts the matching lint name appears in clippy's output, so a guardrail
+# that silently stopped working turns CI red rather than passing quietly.
+#
+# Paths are fully qualified. `disallowed_types` resolves the *definition* path,
+# not the spelling at the use site, so `use std::collections::HashMap as Table;`
+# is caught exactly as a direct `HashMap` is — proof case (c).
+
+# GUARD-04's "outside tests" carve-out, expressed here rather than as `#[allow]`
+# attributes scattered through the test suite. `#[allow]` in source is what the
+# D-21 escape census counts; keeping the carve-out in configuration keeps that
+# census meaningful.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# ---------------------------------------------------------------------------
+# GUARD-02 — hashed containers, and GUARD-11 — floating point
+# ---------------------------------------------------------------------------
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "GUARD-02: `RandomState` is seeded per process, so iteration order differs run to run and target to target. Any HashMap whose order can reach the output silently breaks the four-target byte-identity guarantee. Use a `Vec` in bitstream order plus a `by_id()` accessor — NOT `BTreeMap`, which reorders bitstream-visible descriptor order (PROJECT.md Constraints, DESC-09)." },
+    { path = "std::collections::HashSet", reason = "GUARD-02: same per-process seeding as HashMap. Use a `Vec` in bitstream order plus a membership helper, or `BTreeSet` only where the set never determines output order." },
+    { path = "f32", reason = "GUARD-11 (D-21): the IAMF wire format has no floating-point fields, so a float in the encode path is a determinism risk with no format-level justification. Loudness is Q7.8 `i16`. The single sanctioned exception is PROF-03's `lufs_to_q7_8()` helper, which carries the one documented `#[allow]` in the crate — `rg 'allow.*disallowed_types' src/` is the census and must return exactly that one entry." },
+    { path = "f64", reason = "GUARD-11 (D-21): same as f32. PROF-03's `lufs_to_q7_8()` is the single sanctioned exception; it needs only `* 256.0` and `round_ties_even`, both IEEE-754-exact and therefore identical on every target without `libm`." },
+]
+
+# ---------------------------------------------------------------------------
+# GUARD-11 — platform transcendentals
+# ---------------------------------------------------------------------------
+# Banning `f32`/`f64` as types already stops most of this, but a transcendental
+# can still reach the output through a `f64` obtained from a caller-supplied
+# value inside the one sanctioned `#[allow]`. These entries mean that even
+# inside PROF-03's exception the transcendental set stays closed.
+#
+# `round_ties_even` is DELIBERATELY ABSENT from this list. It is IEEE-754-exact,
+# identical on every target with no `libm`, and PROF-03 depends on it — `as i16`
+# would truncate toward zero and bias every negative value upward by up to
+# 1 LSB. Do not add it.
+disallowed-methods = [
+    { path = "f64::sin", reason = "GUARD-11: platform transcendental — libm implementations differ between targets, so the same input can produce different output bytes. Use `libm` explicitly if one is ever genuinely needed (PROJECT.md Constraints)." },
+    { path = "f64::cos", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f64::tan", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f64::powf", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f64::powi", reason = "GUARD-11: lowered to repeated multiplication whose association order is not guaranteed across backends; breaks byte-identity." },
+    { path = "f64::exp", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f64::ln", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f64::log10", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f64::sqrt", reason = "GUARD-11: IEEE-754 requires correct rounding for sqrt, but it appears here because a sqrt in this crate means DSP has leaked in, which is out of scope (Parallax owns rendering)." },
+    { path = "f32::sin", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::cos", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::tan", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::powf", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::powi", reason = "GUARD-11: lowered to repeated multiplication whose association order is not guaranteed across backends; breaks byte-identity." },
+    { path = "f32::exp", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::ln", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::log10", reason = "GUARD-11: platform transcendental — differs between targets; breaks byte-identity." },
+    { path = "f32::sqrt", reason = "GUARD-11: a sqrt in this crate means DSP has leaked in, which is out of scope." },
+]

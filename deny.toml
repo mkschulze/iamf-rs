@@ -1,0 +1,75 @@
+# deny.toml — iamf-rs (GUARD-01)
+#
+# Licence policy inherited verbatim in shape from Parallax (HANDOFF.md §3.2).
+# If Parallax cannot consume this crate, the crate has no purpose.
+#
+# ---------------------------------------------------------------------------
+# READ THIS BEFORE EDITING
+# ---------------------------------------------------------------------------
+# cargo-deny's `[licenses]` section is ALLOW-LIST ONLY. Anything absent from
+# `allow` is denied. GPL, LGPL, AGPL, SSPL, EUPL, CDDL and OSL are therefore
+# rejected BY OMISSION. Do not add them, and do not reach for a `deny` key to
+# express the rejection: the `deny`, `copyleft`, `allow-osi-fsf-free`,
+# `default` and `version` keys were REMOVED from cargo-deny and now ERROR.
+# Verified against cargo-deny 0.20.2.
+#
+# `tools/prove-guards.sh` case (a) adds an LGPL-licensed crate and asserts
+# `cargo deny check licenses` rejects it, so this policy is proven to bite
+# rather than merely written down.
+#
+# MPL-2.0 is permitted ONLY for an unmodified upstream crate, with a recorded
+# reason, and ONLY as a per-crate `[[licenses.exceptions]]` entry — never in
+# the global `allow` list. Nothing needs one today.
+#
+# NCSA is deliberately absent. `libfuzzer-sys` is Phase 2 and lives in an
+# independent `fuzz/` workspace with its own lockfile and its own scoped
+# `deny.toml`, so its licence never reaches Parallax's graph.
+
+[graph]
+all-features = true
+
+# ---------------------------------------------------------------------------
+[licenses]
+# Unicode-3.0 is MANDATORY, not optional: `unicode-ident` <- `syn` <-
+# `thiserror-impl` is `(MIT OR Apache-2.0) AND Unicode-3.0`, and without this
+# entry `cargo deny check licenses` fails on a clean tree.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+]
+
+# Policy, not description: this file records what is permitted, including
+# licences no current dependency happens to use. Warning about unhit entries
+# would train reviewers to prune the policy down to today's graph.
+unused-allowed-license = "allow"
+
+confidence-threshold = 0.93
+
+# ---------------------------------------------------------------------------
+[advisories]
+yanked = "deny"
+ignore = []
+
+# ---------------------------------------------------------------------------
+[bans]
+# No explicit crate allow/deny lists: cargo-deny defaults both to empty, and
+# an empty list written out is the kind of thing a future edit fills in
+# without thinking. `wildcards` is the substantive setting here — a `"*"`
+# version requirement is determinism you did not pin.
+multiple-versions = "warn"
+wildcards = "deny"
+
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

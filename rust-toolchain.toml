@@ -1,0 +1,21 @@
+# GUARD-12 — toolchain pin.
+#
+# An exact patch version, never `stable`. `stable` is the moving target GUARD-06
+# exists to prevent, applied to the compiler: the four-target byte-identity
+# claim (GUARD-09, D-16) means nothing if two runners can compile with two
+# different rustc builds.
+#
+# 1.85.0 is the edition-2024 floor and matches `rust-version` in Cargo.toml, so
+# the MSRV we advertise is the MSRV we actually compile with rather than an
+# untested claim. Bumping this is a deliberate, reviewable commit that must
+# re-run the byte-identity matrix in the same change.
+[toolchain]
+channel = "1.85.0"
+components = ["clippy", "rustfmt"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+profile = "minimal"
