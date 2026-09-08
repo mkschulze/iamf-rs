@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Completed 01-06-PLAN.md
-last_updated: "2026-09-08T05:31:33.849Z"
+stopped_at: Completed 01-07-PLAN.md
+last_updated: "2026-09-08T06:14:46.741Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 01 execution started
-state_head: 5ced301a8496bc2122e0d565dd54f82fdadba86d
+state_head: 5c544cff9a763c4ca549705b3f03e307b313574a
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 Status: Ready to execute
 Last activity: 2026-09-08 — Phase 01 execution started
 
@@ -64,6 +64,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P04 | 42min | 4 tasks | 9 files |
 | Phase 01 P05 | 29min | 4 tasks | 11 files |
 | Phase 01 P06 | 26min | 3 tasks | 10 files |
+| Phase 01 P07 | 62 | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,10 @@ Recent decisions affecting current work:
 - [Phase 01]: AudioFrame carries neither trimming nor trailing — the OBU header owns the trim counts and the frame claims the whole payload remainder
 - [Phase 01]: read_parameter_block takes the ParamDefinition AND its ParamDefinitionType as explicit arguments; the shared wire prefix carries no type
 - [Phase 01]: Layouts research did not close return UnsupportedLayout rather than an invented packing order
+- [Phase 01]: finish(self) makes push-after-finish a compile error, so ErrorKind::SequenceFinished was deliberately not added — an unreachable error variant is worse than none
+- [Phase 01]: The float→fixed join is lufs_to_q7_8 plus Loudness::from_q7_8, not an LUFS parameter on write_sequence — the latter would put an f64 in src/sequence.rs and break D-21's grep gate
+- [Phase 01]: Channel-count helpers return Option, so a layout the spec version does not fix a count for is ErrorKind::UnsupportedLayout rather than a profile selected from nothing
+- [Phase 01]: Shared integration-test fixtures live in tests/support/*.rs and are #[path]-included; a subdirectory of tests/ is not compiled as its own test target
 
 ### Pending Todos
 
@@ -134,6 +139,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T05:31:33.816Z
-Stopped at: Completed 01-06-PLAN.md
+Last session: 2026-09-08T06:14:35.552Z
+Stopped at: Completed 01-07-PLAN.md
 Resume file: None

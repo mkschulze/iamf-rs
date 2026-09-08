@@ -60,15 +60,15 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Sequence and container
 
-- [ ] **SEQ-01**: Standalone IA Sequence writer producing `.iamf` — descriptors then data
-- [ ] **SEQ-02**: Streaming as the primitive: `push_descriptors` → `push_temporal_unit` → `finish`, so an hour of 7.1.4 24-bit never needs to be resident
-- [ ] **SEQ-03**: Whole-file convenience wrapper over the streaming primitive
+- [x] **SEQ-01**: Standalone IA Sequence writer producing `.iamf` — descriptors then data
+- [x] **SEQ-02**: Streaming as the primitive: `push_descriptors` → `push_temporal_unit` → `finish`, so an hour of 7.1.4 24-bit never needs to be resident
+- [x] **SEQ-03**: Whole-file convenience wrapper over the streaming primitive
 
 ### Profile and metadata
 
-- [ ] **PROF-01**: Profile enum whose legal range follows the pinned spec version
-- [ ] **PROF-02**: Minimum-profile selection — pick the smallest profile a given configuration fits
-- [ ] **PROF-03**: Loudness quantisation helper converting caller-supplied LUFS to Q7.8 using `round_ties_even`, range-checked — not `as i16`, which truncates toward zero and biases every negative value upward by up to 1 LSB
+- [x] **PROF-01**: Profile enum whose legal range follows the pinned spec version
+- [x] **PROF-02**: Minimum-profile selection — pick the smallest profile a given configuration fits
+- [x] **PROF-03**: Loudness quantisation helper converting caller-supplied LUFS to Q7.8 using `round_ties_even`, range-checked — not `as i16`, which truncates toward zero and biases every negative value upward by up to 1 LSB
 
 ### Conformance verification
 
@@ -79,7 +79,7 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [ ] **CONF-05**: `libiamf` at a pinned commit decodes the file, **the decoded sample count equals what was encoded**, and the PCM is sample-identical
 - [ ] **CONF-06**: `iamf-tools`' own parser accepts the file — the only check that catches reserved-bit misuse and leb128 strictness
 - [ ] **CONF-07**: Byte-diff against an `iamf-tools`-produced file for an identical configuration is either identical or has every difference enumerated in writing
-- [ ] **CONF-08**: Byte-comparison reproducing the shipped golden `libiamf/tests/test_000003.iamf`
+- [x] **CONF-08**: Byte-comparison reproducing the shipped golden `libiamf/tests/test_000003.iamf`
 - [x] **CONF-09**: Reference binaries invoked by `Command` in tests, discovered via `IAMF_REF_DECODER`, with `tools/build-reference.sh` at pinned commits — in one Linux CI job, never a `build.rs`
 - [x] **CONF-10**: Golden fixtures are the always-on layer, so `cargo test` is green offline on all four targets
 - [x] **CONF-11**: One-time Bazel build of `iamf-tools` generating and committing `tests/fixtures/*.iamf` — `iamf-tools` ships 338 `.textproto` files and exactly one `.iamf`
@@ -220,12 +220,12 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | TIME-03 | Phase 1 | Complete |
 | TIME-04 | Phase 1 | Complete |
 | TIME-05 | Phase 1 | Complete |
-| SEQ-01 | Phase 1 | Pending |
-| SEQ-02 | Phase 1 | Pending |
-| SEQ-03 | Phase 1 | Pending |
-| PROF-01 | Phase 1 | Pending |
-| PROF-02 | Phase 1 | Pending |
-| PROF-03 | Phase 1 | Pending |
+| SEQ-01 | Phase 1 | Complete |
+| SEQ-02 | Phase 1 | Complete |
+| SEQ-03 | Phase 1 | Complete |
+| PROF-01 | Phase 1 | Complete |
+| PROF-02 | Phase 1 | Complete |
+| PROF-03 | Phase 1 | Complete |
 | CONF-01 | Phase 1 | Pending |
 | CONF-02 | Phase 1 | Pending |
 | CONF-03 | Phase 1 | Pending |
@@ -233,7 +233,7 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | CONF-05 | Phase 1 | Pending |
 | CONF-06 | Phase 1 | Pending |
 | CONF-07 | Phase 1 | Pending |
-| CONF-08 | Phase 1 | Pending |
+| CONF-08 | Phase 1 | Complete |
 | CONF-09 | Phase 1 | Complete |
 | CONF-10 | Phase 1 | Complete |
 | CONF-11 | Phase 1 | Complete |

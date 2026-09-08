@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 5
+open_count: 7
 waived_count: 0
 fixed_count: 3
-total_count: 8
-last_updated: 2026-09-08T05:31:46.934Z
+total_count: 10
+last_updated: 2026-09-08T06:14:27.253Z
 ---
 
 # Broken Windows Ledger
@@ -23,6 +23,8 @@ last_updated: 2026-09-08T05:31:46.934Z
 | 6 | 01 | deviation | src/obu/param_definition.rs |  | param_definition_mode made a derived accessor instead of the plan's stored bool (flag/field disagreement would otherwise be constructible) | open |  | 2026-09-08T04:58:28.773Z |  |
 | 7 | 01 | deviation | src/obu/parameter_block.rs |  | Unknown mix-gain animation_type (>=2) is UnsupportedParameterData rather than preserved verbatim: the wire carries no length for it, matching iamf-tools' UnimplementedError | open |  | 2026-09-08T05:31:46.755Z |  |
 | 8 | 01 | deviation | src/packing.rs |  | Loudspeaker layouts beyond mono/stereo/binaural/5.1 return UnsupportedLayout; their packing order is not modelled in Phase 1 | open |  | 2026-09-08T05:31:46.934Z |  |
+| 9 | 01 | unrun-verify | src/sequence.rs |  | The Parameter Block path through push_temporal_unit has no byte-level test — test_000003 publishes zero parameter blocks and the D-18 fixture is mode-1 with none either | open |  | 2026-09-08T06:14:27.068Z |  |
+| 10 | 01 | unrun-verify | src/sequence.rs |  | The Temporal Delimiter path through push_temporal_unit is untested at byte level — test_000003 sets enable_temporal_delimiters: false | open |  | 2026-09-08T06:14:27.253Z |  |
 
 ````json
 [
@@ -120,6 +122,30 @@ last_updated: 2026-09-08T05:31:46.934Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-08T05:31:46.934Z",
+    "resolved_at": null
+  },
+  {
+    "id": 9,
+    "kind": "unrun-verify",
+    "phase": "01",
+    "file": "src/sequence.rs",
+    "line": null,
+    "description": "The Parameter Block path through push_temporal_unit has no byte-level test — test_000003 publishes zero parameter blocks and the D-18 fixture is mode-1 with none either",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T06:14:27.068Z",
+    "resolved_at": null
+  },
+  {
+    "id": 10,
+    "kind": "unrun-verify",
+    "phase": "01",
+    "file": "src/sequence.rs",
+    "line": null,
+    "description": "The Temporal Delimiter path through push_temporal_unit is untested at byte level — test_000003 sets enable_temporal_delimiters: false",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T06:14:27.253Z",
     "resolved_at": null
   }
 ]
