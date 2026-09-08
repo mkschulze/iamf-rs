@@ -46,7 +46,14 @@ impl<'a> BitCursor<'a> {
                 Location::InputOffset(start),
             ));
         }
-        Ok(0)
+        let mut acc: u64 = 0;
+        for _ in 0..bits {
+            // `wrapping_shl(1)` cannot lose a significant bit here: `acc` starts
+            // at zero and the loop runs at most 64 times, so the bit shifted out
+            // of the top is always one this loop put there below bit 64.
+            acc = acc.wrapping_shl(1) | u64::from(self.read_bit()?);
+        }
+        Ok(acc)
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadBoolean
@@ -80,5 +87,41 @@ impl<'a> BitCursor<'a> {
     #[must_use]
     pub fn byte_position(&self) -> u64 {
         u64::try_from(self.byte_pos).unwrap_or(u64::MAX)
+    }
+
+    /// Consume one bit, MSB-first within the current byte.
+    ///
+    /// Private, and the single place a bit is taken from the input: every
+    /// public read is expressed in terms of this one, so there is exactly one
+    /// piece of code that can get the bit order wrong.
+    fn read_bit(&mut self) -> Result<bool> {
+        let byte = *self.data.get(self.byte_pos).ok_or_else(|| {
+            Error::new(
+                ErrorKind::UnexpectedEndOfInput,
+                Location::InputOffset(self.byte_position()),
+            )
+        })?;
+        // `bit_off` is invariantly 0..=7, so neither the subtraction nor the
+        // shift can be out of range. Saying so with `saturating_`/`checked_` is
+        // how the lint set requires it to be said out loud.
+        let shift = 7_u32.saturating_sub(self.bit_off);
+        let bit = (byte.checked_shr(shift).unwrap_or(0) & 1) == 1;
+        self.advance_one_bit();
+        Ok(bit)
+    }
+
+    /// Move one bit forward, carrying into the next byte at the boundary.
+    ///
+    /// `saturating_add` on `byte_pos` can never actually saturate — the cursor
+    /// is bounded by `data.len()` — and if it somehow did, every subsequent
+    /// bounds check would fail closed rather than wrap around to byte 0.
+    fn advance_one_bit(&mut self) {
+        let next = self.bit_off.saturating_add(1);
+        if next >= 8 {
+            self.bit_off = 0;
+            self.byte_pos = self.byte_pos.saturating_add(1);
+        } else {
+            self.bit_off = next;
+        }
     }
 }

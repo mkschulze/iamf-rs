@@ -51,6 +51,9 @@ impl BitWriter {
                 ));
             }
         }
+        for i in (0..bits).rev() {
+            self.write_bit((value.checked_shr(i).unwrap_or(0) & 1) == 1);
+        }
         Ok(())
     }
 
@@ -82,6 +85,28 @@ impl BitWriter {
     /// The output byte offset a `Location::OutputOffset` carries.
     fn output_offset(&self) -> u64 {
         u64::try_from(self.out.len()).unwrap_or(u64::MAX)
+    }
+
+    /// Place one bit, MSB-first within the byte under construction.
+    ///
+    /// Private, and the single place a bit reaches the output — the mirror of
+    /// `BitCursor::read_bit`, so bit order is decided once per direction.
+    fn write_bit(&mut self, bit: bool) {
+        // `bit_off` is invariantly 0..=7, so the subtraction and the shift are
+        // both in range; `saturating_`/`checked_` is the lint set's way of
+        // saying so.
+        let shift = 7_u32.saturating_sub(self.bit_off);
+        if bit {
+            self.partial |= 1_u8.checked_shl(shift).unwrap_or(0);
+        }
+        let next = self.bit_off.saturating_add(1);
+        if next >= 8 {
+            self.out.push(self.partial);
+            self.partial = 0;
+            self.bit_off = 0;
+        } else {
+            self.bit_off = next;
+        }
     }
 
     /// Consume the writer and yield its bytes.

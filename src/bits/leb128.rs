@@ -10,7 +10,7 @@
 
 use crate::bits::reader::BitCursor;
 use crate::bits::writer::BitWriter;
-use crate::error::Result;
+use crate::error::{Error, ErrorKind, Location, Result};
 
 /// `kMaxLeb128Size` — the reference's cap on how many bytes a uleb128 may span.
 // ref: iamf-tools@v2.1.0 iamf/obu/types.h kMaxLeb128Size
@@ -35,13 +35,48 @@ pub(crate) const fn minimal_len(value: u32) -> usize {
 /// Emit `value` in minimal form: no trailing continuation byte, and never a
 /// longer encoding than [`minimal_len`] says.
 pub(crate) fn write_uleb128_minimal(w: &mut BitWriter, value: u32) -> Result<()> {
-    let _ = (w, value);
+    // The length is decided up front by `minimal_len`, so minimality is
+    // structural rather than emergent: this loop cannot append a trailing
+    // `0x80 0x00`, because it does not decide when to stop.
+    let len = minimal_len(value);
+    let mut shift: u32 = 0;
+    for group_index in 1..=len {
+        let group = u64::from(value.checked_shr(shift).unwrap_or(0) & 0x7f);
+        let byte = if group_index == len { group } else { group | 0x80 };
+        w.write_unsigned(byte, 8)?;
+        shift = shift.saturating_add(7);
+    }
     Ok(())
 }
 
 // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
 /// Decode a uleb128 of 1..=8 bytes into a `u32`.
 pub(crate) fn read_uleb128(r: &mut BitCursor<'_>) -> Result<u32> {
-    let _ = r;
-    Ok(0)
+    // Both caps report the offset of the field's FIRST byte, not the byte the
+    // violation was noticed at: the thing that is wrong is the whole field.
+    let start = r.byte_position();
+    let mut acc: u64 = 0;
+    let mut shift: u32 = 0;
+    for _ in 0..MAX_LEB128_SIZE {
+        let byte = r.read_unsigned(8)?;
+        // At most 8 groups of 7 bits reach bit 55, so the accumulator cannot
+        // overflow `u64` — which is exactly why it is a `u64` and the narrowing
+        // to `u32` happens once, at the end, where it can be rejected.
+        let group = (byte & 0x7f).checked_shl(shift).unwrap_or(0);
+        acc |= group;
+        if byte & 0x80 == 0 {
+            return u32::try_from(acc).map_err(|_| {
+                Error::new(
+                    ErrorKind::Leb128ValueTooLarge,
+                    Location::InputOffset(start),
+                )
+            });
+        }
+        shift = shift.saturating_add(7);
+    }
+    // Eight bytes consumed and the eighth still asked for a ninth.
+    Err(Error::new(
+        ErrorKind::Leb128TooLong,
+        Location::InputOffset(start),
+    ))
 }
