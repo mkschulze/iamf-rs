@@ -14,9 +14,8 @@
 # ---------------------------------------------------------------------------
 # Runner availability fallback (D-16's known operational risk)
 # ---------------------------------------------------------------------------
-# `macos-13` is GitHub's last x86_64 macOS image and is on the retirement path:
-# `macos-14` and `macos-15` are arm64. When it goes, do this, in order, and do
-# not silently shrink the matrix:
+# `macos-13`, GitHub's last x86_64 macOS image, is retired. The matrix therefore
+# uses the first fallback below rather than silently shrinking to three targets:
 #
 #   1. Build for x86_64-apple-darwin on an arm64 runner and execute the test
 #      binaries under Rosetta 2. This preserves the actual x86_64 code path,
@@ -52,15 +51,43 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13
+            test_runner: ""
+          - os: macos-latest
             target: x86_64-apple-darwin
+            test_runner: arch -x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            test_runner: ""
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            test_runner: ""
+
+    # Cargo applies this only when it executes x86_64-apple-darwin binaries.
+    # The other three targets ignore the target-specific variable. This makes
+    # the Rosetta route explicit rather than relying on macOS to translate an
+    # x86_64 test binary implicitly.
+    env:
+      CARGO_TARGET_X86_64_APPLE_DARWIN_RUNNER: ${{ matrix.test_runner }}
 
     steps:
+      # GitHub's Windows image defaults to CRLF checkout conversion. The golden
+      # dump is an exact text artifact, so preserve its committed LF bytes just
+      # as Linux and macOS do. This runs before checkout intentionally.
+      - name: Preserve committed line endings on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install and verify Rosetta 2 for x86_64 execution
+        if: matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+          fi
+          test "$(arch -x86_64 /usr/bin/uname -m)" = "x86_64"
 
       # No toolchain-installer action, deliberately. Every such action wants the
       # channel as an input, which restates the pin that `rust-toolchain.toml`
