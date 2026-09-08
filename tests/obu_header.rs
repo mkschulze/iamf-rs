@@ -259,8 +259,7 @@ fn the_largest_payload_under_the_ceiling_is_accepted() {
 /// is `3 + 6 = 9`, which is again OBU-02's rule.
 #[test]
 fn an_extension_header_writes_its_size_then_its_bytes_and_obu_size_counts_both() {
-    let header =
-        ObuHeader::new(ObuType::IaSequenceHeader).with_extension(hex!("aa bb").to_vec());
+    let header = ObuHeader::new(ObuType::IaSequenceHeader).with_extension(hex!("aa bb").to_vec());
     let payload = hex!("69 61 6d 66 00 00");
 
     assert_eq!(
@@ -338,12 +337,11 @@ fn the_trimming_flag_is_refused_on_every_non_audio_frame_type() {
         ObuType::IaSequenceHeader,
         ObuType::Reserved(24),
     ] {
-        let header = ObuHeader::new(obu_type).with_type_specific(TypeSpecific::Trimming(Some(
-            Trimming {
+        let header =
+            ObuHeader::new(obu_type).with_type_specific(TypeSpecific::Trimming(Some(Trimming {
                 at_end: 1,
                 at_start: 0,
-            },
-        )));
+            })));
 
         assert_eq!(
             emit_err(&header, &[]),
@@ -415,8 +413,10 @@ fn a_payload_parser_that_under_reads_leaves_the_remainder_in_trailing() {
     let bytes = hex!("f8 0c 00 01 02 03 04 05 06 07 08 09 0a 0b");
     let mut r = BitCursor::new(&bytes);
 
-    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_uint8_span(10).map(<[u8]>::to_vec))
-        .expect("well-formed OBU");
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| {
+        payload.read_uint8_span(10).map(<[u8]>::to_vec)
+    })
+    .expect("well-formed OBU");
 
     assert_eq!(obu.payload.len(), 10);
     assert_eq!(obu.trailing.as_slice(), hex!("0a 0b").as_slice());
@@ -429,8 +429,10 @@ fn a_payload_parser_that_consumes_everything_leaves_trailing_empty() {
     let bytes = hex!("f8 0c 00 01 02 03 04 05 06 07 08 09 0a 0b");
     let mut r = BitCursor::new(&bytes);
 
-    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_uint8_span(12).map(<[u8]>::to_vec))
-        .expect("well-formed OBU");
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| {
+        payload.read_uint8_span(12).map(<[u8]>::to_vec)
+    })
+    .expect("well-formed OBU");
 
     assert!(obu.trailing.is_empty());
 }
@@ -445,8 +447,10 @@ fn a_freshly_constructed_obu_has_empty_trailing_and_serialises_without_it() {
     assert!(obu.trailing.is_empty());
 
     let mut w = BitWriter::new();
-    iamf::obu::write_obu_with(&mut w, &obu, |scratch, payload| scratch.write_bytes(payload))
-        .expect("the header is legal");
+    iamf::obu::write_obu_with(&mut w, &obu, |scratch, payload| {
+        scratch.write_bytes(payload)
+    })
+    .expect("the header is legal");
 
     assert_eq!(
         w.finish().expect("byte-aligned").as_slice(),
@@ -461,12 +465,16 @@ fn a_freshly_constructed_obu_has_empty_trailing_and_serialises_without_it() {
 fn an_under_read_obu_re_serialises_to_the_bytes_it_was_read_from() {
     let original = hex!("f8 0c 00 01 02 03 04 05 06 07 08 09 0a 0b");
     let mut r = BitCursor::new(&original);
-    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_uint8_span(10).map(<[u8]>::to_vec))
-        .expect("well-formed OBU");
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| {
+        payload.read_uint8_span(10).map(<[u8]>::to_vec)
+    })
+    .expect("well-formed OBU");
 
     let mut w = BitWriter::new();
-    iamf::obu::write_obu_with(&mut w, &obu, |scratch, payload| scratch.write_bytes(payload))
-        .expect("the header is legal");
+    iamf::obu::write_obu_with(&mut w, &obu, |scratch, payload| {
+        scratch.write_bytes(payload)
+    })
+    .expect("the header is legal");
 
     assert_eq!(
         w.finish().expect("byte-aligned").as_slice(),

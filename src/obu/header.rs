@@ -267,11 +267,44 @@ impl ObuHeader {
 // no golden file can catch a swap. `tests/obu_header.rs`'s differing-value
 // vector is the only thing that can. Do not "tidy" this order.
 /// Write the fields that live between `obu_size` and the payload, in the
-/// reference's order: end-trim, then start-trim.
+/// reference's order: end-trim, start-trim, extension size, extension bytes.
 fn write_fields_after_obu_size(w: &mut BitWriter, header: &ObuHeader) -> Result<()> {
     if let TypeSpecific::Trimming(Some(trim)) = header.type_specific {
         w.write_uleb128_minimal(trim.at_end)?;
         w.write_uleb128_minimal(trim.at_start)?;
+    }
+    if let Some(bytes) = header.extension.as_ref() {
+        // Phase 1 preserves the extension verbatim and interprets nothing
+        // inside it (OBU-06).
+        let len = u32::try_from(bytes.len())
+            .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::OutputOffset(0)))?;
+        w.write_uleb128_minimal(len)?;
+        w.write_bytes(bytes)?;
+    }
+    Ok(())
+}
+
+/// The two rules `Validate()` enforces on byte 0, checked before a single bit
+/// is emitted.
+///
+/// Both are rejections rather than validations-after-the-fact because the file
+/// they would otherwise produce is one the reference mis-reads *silently*:
+/// `libiamf@v1.1.0`'s `IAMF_OBU_split` reads the two trim fields for any type
+/// whose bit 6 is set, so a trimming flag on a descriptor shifts that
+/// descriptor's payload by two bytes with no error and no crash on either side.
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::Validate
+fn validate_header(header: &ObuHeader) -> Result<()> {
+    if header.trimming_status_flag() && !header.obu_type.is_audio_frame() {
+        return Err(Error::new(
+            ErrorKind::TrimmingFlagNotAllowed,
+            Location::Field("obu_trimming_status_flag"),
+        ));
+    }
+    if header.obu_redundant_copy && !header.obu_type.is_redundant_copy_allowed() {
+        return Err(Error::new(
+            ErrorKind::RedundantCopyNotAllowed,
+            Location::Field("obu_redundant_copy"),
+        ));
     }
     Ok(())
 }
@@ -333,6 +366,7 @@ pub fn write_obu(w: &mut BitWriter, header: &ObuHeader, payload: &[u8]) -> Resul
         // mid-byte is unrepresentable rather than merely unusual.
         return Err(Error::new(ErrorKind::NotByteAligned, Location::Unlocated));
     }
+    validate_header(header)?;
 
     // Pass one: the fields between `obu_size` and the payload, into a scratch
     // buffer that exists only to be measured.
@@ -357,12 +391,35 @@ pub fn write_obu(w: &mut BitWriter, header: &ObuHeader, payload: &[u8]) -> Resul
 /// length is `obu_size` minus whatever the after-size fields consumed, which
 /// only the caller can attribute.
 pub fn read_obu_header(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32)> {
+    let (header, obu_size, _) = read_obu_header_parts(r)?;
+    Ok((header, obu_size))
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ReadAndValidate
+/// As [`read_obu_header`], but also reporting how many bytes the after-size
+/// fields consumed.
+///
+/// The payload length is `obu_size` minus that count, and it is **measured**
+/// rather than recomputed: `size_of_obu_size` cannot be derived from the value
+/// by way of `minimal_len`, because a foreign file may legally carry a
+/// non-minimal, fixed-size uleb128 (`LebGenerator::kFixedSize`; Phase 2's
+/// PARSE-04). Deriving it would put every subsequent byte offset in the file
+/// wrong for exactly the files that are hardest to debug.
+pub(crate) fn read_obu_header_parts(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32, u64)> {
     let obu_type = ObuType::from_value(u8::try_from(r.read_unsigned(5)?).unwrap_or(0));
     let obu_redundant_copy = r.read_bool()?;
     let trimming_status_flag = r.read_bool()?;
     let extension_flag = r.read_bool()?;
     let obu_size = r.read_uleb128()?;
+    let after_size_start = r.byte_position();
 
+    // The reader is deliberately NOT stricter than the reference. It does not
+    // apply `validate_header`'s two rules: `libiamf@v1.1.0` reads the trim
+    // fields for *any* type whose bit 6 is set, so this is what the pinned
+    // decoder sees, and rejecting a file the reference accepts is as much a
+    // conformance failure as accepting one it rejects. `write_obu` is where the
+    // rules bite, so we never emit such a file ourselves.
+    //
     // END first, then START — see the NOTE on `write_fields_after_obu_size`.
     let type_specific = if trimming_status_flag {
         let at_end = r.read_uleb128()?;
@@ -375,10 +432,20 @@ pub fn read_obu_header(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32)> {
     };
 
     let extension = if extension_flag {
-        Some(Vec::new())
+        Some(read_extension_header(r)?)
     } else {
         None
     };
+
+    let after_size_bytes = r
+        .byte_position()
+        .checked_sub(after_size_start)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::ObuSizeOverflow,
+                Location::InputOffset(after_size_start),
+            )
+        })?;
 
     Ok((
         ObuHeader {
@@ -388,7 +455,23 @@ pub fn read_obu_header(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32)> {
             extension,
         },
         obu_size,
+        after_size_bytes,
     ))
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ReadFieldsAfterObuSize
+/// Read `extension_header_size` and exactly that many bytes.
+///
+/// The length is attacker-controlled and drives an allocation, so it goes
+/// through `read_uint8_span`, which caps it against `bytes_remaining()` before
+/// anything is reserved — the one rule every count in this format obeys
+/// (`src/bits/reader.rs`, threat T-01-19).
+fn read_extension_header(r: &mut BitCursor<'_>) -> Result<Vec<u8>> {
+    let start = r.byte_position();
+    let len = r.read_uleb128()?;
+    let len = usize::try_from(len)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
+    Ok(r.read_uint8_span(len)?.to_vec())
 }
 
 #[cfg(test)]

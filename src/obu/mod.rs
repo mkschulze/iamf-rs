@@ -27,7 +27,7 @@ mod header;
 pub use header::{ObuHeader, ObuType, Trimming, TypeSpecific, read_obu_header, write_obu};
 
 use crate::bits::{BitCursor, BitWriter};
-use crate::error::Result;
+use crate::error::{Error, ErrorKind, Location, Result};
 
 /// One OBU: its header, its parsed payload, and the OBU-level remainder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,24 +55,58 @@ impl<T> Obu<T> {
 
 // ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ReadAndValidate
 /// Read one whole OBU: the header, then the type-specific payload through a
-/// bounded sub-reader, then the OBU-level remainder.
+/// bounded sub-reader (Pattern 3), then the OBU-level remainder.
+///
+/// This is **the** `trailing` drain site (OBU-07). The sub-reader is what makes
+/// an under-read visible at all: the child cannot read past `obu_size` into the
+/// next OBU, and whatever it left behind is exactly what `trailing` holds. The
+/// parent is advanced past the whole payload either way, so the caller is
+/// standing on the next OBU's first byte regardless of how much the payload
+/// parser understood.
 pub fn read_obu_with<T, F>(r: &mut BitCursor<'_>, parse: F) -> Result<Obu<T>>
 where
     F: FnOnce(&mut BitCursor<'_>) -> Result<T>,
 {
-    let _ = (r, parse);
-    Err(crate::error::Error::new(
-        crate::error::ErrorKind::UnexpectedEndOfInput,
-        crate::error::Location::Unlocated,
-    ))
+    let before = r.byte_position();
+    let (header, obu_size, after_size_bytes) = header::read_obu_header_parts(r)?;
+
+    // `obu_size` counts the after-size fields as well as the payload, so the
+    // payload length is what is left of it once those are subtracted. The
+    // after-size count is measured by the header reader rather than recomputed
+    // here, so the two can never disagree.
+    let payload_len = u64::from(obu_size)
+        .checked_sub(after_size_bytes)
+        .ok_or_else(|| Error::new(ErrorKind::TruncatedObu, Location::InputOffset(before)))?;
+    let payload_len = usize::try_from(payload_len)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(before)))?;
+
+    let mut payload_reader = r.sub_reader(payload_len)?;
+    let payload = parse(&mut payload_reader)?;
+
+    // The one drain. Anything the type-specific parser did not claim is the
+    // OBU-level remainder — see the module comment for its precedence against a
+    // payload-level remainder.
+    let remaining = payload_reader.bytes_remaining();
+    let trailing = payload_reader.read_uint8_span(remaining)?.to_vec();
+
+    Ok(Obu {
+        header,
+        payload,
+        trailing,
+    })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ValidateAndWrite
-/// Write one whole OBU, appending `trailing` after the type-specific payload.
+/// Write one whole OBU, appending `trailing` **last** — after the type-specific
+/// payload — so an OBU read with an under-reading parser re-serialises to the
+/// bytes it came from.
 pub fn write_obu_with<T, F>(w: &mut BitWriter, obu: &Obu<T>, write_payload: F) -> Result<()>
 where
     F: FnOnce(&mut BitWriter, &T) -> Result<()>,
 {
-    let _ = (w, obu, write_payload);
-    Ok(())
+    let mut payload = BitWriter::new();
+    write_payload(&mut payload, &obu.payload)?;
+    let mut bytes = payload.finish()?;
+    bytes.extend_from_slice(&obu.trailing);
+    write_obu(w, &obu.header, &bytes)
 }
