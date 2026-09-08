@@ -1,0 +1,138 @@
+# Reference oracles — the single Linux job (CONF-09).
+#
+# This workflow is deliberately SEPARATE from ci.yml. ci.yml is the four-target
+# byte-identity matrix and it must stay reference-free, because CONF-10 is the
+# property that `cargo test` is green offline on all four targets with no
+# reference binary present. Adding a C++ toolchain to that matrix would destroy
+# the property it exists to prove.
+#
+# Here, and only here:
+#   * libiamf is built natively at its pinned SHA by tools/build-reference.sh,
+#     which stamps .reference-manifest.json (D-13) and self-validates by decoding
+#     a shipped reference file to PCM sample-identical with its source;
+#   * IAMF_REF_DECODER is exported, which switches on the reference-gated tests;
+#   * the digest-pinned iamf-tools image is built and its two binaries are run
+#     for CONF-06 (decoder_main's parse path) and CONF-07 (byte-diff against a
+#     companion file).
+#
+# D-11's split by build cost is the whole design: libiamf takes about a minute
+# and runs on a developer's laptop; iamf-tools drags in Bazel, abseil, protobuf
+# and fdk-aac and runs here.
+
+name: reference
+
+on:
+  pull_request:
+  schedule:
+    # 04:17 UTC daily. An off-the-hour minute so this job is not queued behind
+    # every other cron in the world.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  reference:
+    name: libiamf + iamf-tools (linux)
+    runs-on: ubuntu-latest
+    # The Bazel layer is the long pole. Fail loudly on a hang rather than
+    # burning the default six hours.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No toolchain-installer action, for the same reason as ci.yml: every one
+      # of them takes the channel as an input, which restates the pin that
+      # rust-toolchain.toml already owns, and two copies of a pin drift.
+      - name: Show the toolchain rustup resolved
+        run: |
+          rustup show
+          rustc --version
+          cargo --version
+
+      # --- libiamf, natively, at its pinned SHA ---------------------------
+      #
+      # The script asserts its own smoke decode: 8000 frames and 0 differing
+      # samples of 16000 against a file this project did not write. A failure
+      # here means the oracle is wrong, and no conformance verdict downstream
+      # of it would mean anything.
+      - name: Build the pinned reference decoder
+        run: bash tools/build-reference.sh
+
+      - name: Export IAMF_REF_DECODER
+        run: |
+          echo "IAMF_REF_DECODER=$(python3 -c "
+          import json
+          print(json.load(open('.reference-manifest.json'))['iamfdec_path'])
+          ")" >> "$GITHUB_ENV"
+
+      - name: Show the reference manifest (D-13)
+        run: cat .reference-manifest.json
+
+      # The manifest assertion runs BEFORE any conformance clause. With
+      # IAMF_REF_DECODER set it is a hard check that the binary in this
+      # environment is the pinned one; drift is a named error, not a green gate
+      # against the wrong reference (GUARD-06).
+      - name: Assert the manifest matches REFERENCES.md
+        run: cargo test --locked --test reference_manifest
+
+      - name: Run the reference-gated test suite
+        run: cargo test --locked -- --include-ignored
+
+      # --- iamf-tools, in the digest-pinned container ----------------------
+      #
+      # D-13 requires the image be pinned by digest. The base image already is
+      # (see the Dockerfile); this step prints the digest of the image THIS run
+      # produced, which is the value that belongs in REFERENCES.md. Until an
+      # image has actually been built and its digest recorded there, the
+      # iamf-tools half of the pin is a base-image pin only, and REFERENCES.md
+      # says so.
+      - name: Build the digest-pinned iamf-tools image
+        run: |
+          docker build -f tools/iamf-tools.Dockerfile -t iamf-tools:v2.1.0 tools/
+          echo "Built image digest (record this in REFERENCES.md):"
+          docker image inspect iamf-tools:v2.1.0 --format '{{.Id}}'
+
+      - name: Record the built image identity
+        run: |
+          {
+            echo "### iamf-tools image"
+            echo
+            echo '```'
+            docker image inspect iamf-tools:v2.1.0 --format '{{.Id}}'
+            docker run --rm iamf-tools:v2.1.0 git -C /src rev-parse HEAD
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # CONF-06 goes through decoder_main because iamf-tools@v2.1.0 ships no
+      # probe_main — iamf/cli/BUILD declares exactly two cc_binary targets
+      # (research correction 8). CONFORMANCE-GATE.md records the observable this
+      # step asserts on; do not substitute "non-zero exit" for it without
+      # re-running the experiment, because a reference tool failing while
+      # returning 0 is a demonstrated behaviour in this project, not a worry.
+      - name: CONF-06 — iamf-tools' parser accepts a vendored reference file
+        run: |
+          set -euo pipefail
+          mkdir -p target/reference-out
+          docker run --rm -v "$PWD:/work" -w /src iamf-tools:v2.1.0 \
+            bazel-bin/iamf/cli/decoder_main \
+              --input_filename=/work/tests/fixtures/reference/test_000003.iamf \
+              --output_filename=/work/target/reference-out/test_000003.wav
+          test -s target/reference-out/test_000003.wav
+          echo "decoder_main produced $(stat -c%s target/reference-out/test_000003.wav) bytes"
+
+      - name: Upload the reference artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-output
+          path: |
+            .reference-manifest.json
+            .reference/configure.log
+            .reference/smoke.log
+            target/reference-out/
+          if-no-files-found: warn
+          retention-days: 7

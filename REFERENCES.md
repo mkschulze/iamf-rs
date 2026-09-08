@@ -17,6 +17,46 @@ Bumping either pin is a deliberate, reviewable commit that must re-run the whole
 conformance suite in the same change. A fact read at a pinned SHA does not
 expire; that is what pinning buys.
 
+## The `iamf-tools` container — pinned by digest, not by tag (D-13)
+
+`iamf-tools` needs Bazel, abseil, protobuf and fdk-aac, so it runs only inside
+`tools/iamf-tools.Dockerfile` (D-11). Every input to that image that could move
+is pinned:
+
+| What | Pin | Verified |
+|---|---|---|
+| Base image `ubuntu:24.04` | `sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517` (multi-arch index digest) | registry-1.docker.io returned HTTP 200 and echoed this digest back, 2026-09-08 |
+| `iamf-tools` tree | `848c6ff4968ff8cc6f728259892ab4f90cb83256` (tag v2.1.0) | as above |
+| Bazelisk | release `v1.29.0`, and the binary's own sha256: `5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992` (linux-amd64), `e20e8b0f4f240091b7a55bf17b9398bd4f40ee70ae0208dff95dd4c445fb4010` (linux-arm64) | fetched from the release's published `.sha256` assets, 2026-09-08 |
+| Bazel | **7.4.1**, from `iamf-tools`' own committed `.bazelversion` at the pinned SHA | read from the pinned tree, 2026-09-08 |
+| Built image | **not yet recorded — see below** | — |
+
+Bazel is deliberately *not* pinned in the Dockerfile. The tree carries its own
+`.bazelversion` and Bazelisk honours it; writing `7.4.1` in a second place would
+give the pin two owners, and two copies of a pin drift. Note that this also
+resolves the second half of research assumption A2 from code rather than by
+assumption: whichever Bazelisk version is used, the Bazel it fetches is 7.4.1.
+
+### The built image's digest is NOT yet recorded — and that is a real gap
+
+D-13 requires the image be pinned by digest, and **the base image digest alone
+does not pin the result**: `apt-get update && install` and Bazel's own dependency
+fetch both reach the network, so two builds of this Dockerfile on different days
+are not guaranteed to be the same image.
+
+The digest belongs in the table above and is not there because **the image has
+never been built**. The Docker daemon was not running on the machine where this
+was authored (`Cannot connect to the Docker daemon at
+unix:///Users/cell/.docker/run/docker.sock`), and `bazel`/`bazelisk` are absent
+by design. `.github/workflows/reference.yml` builds the image on `ubuntu-latest`
+and prints its digest for exactly this purpose; the first successful run of that
+workflow is where this row gets filled in. The gap is recorded in
+`.planning/WINDOWS.md` so it surfaces at ship time.
+
+Until that row is filled, the `iamf-tools` half of the pin is a **source-and-base
+pin, not a result pin**, and any CONF-06 or CONF-07 verdict produced before then
+should be read with that in mind.
+
 ## The version-number caveat — read this before hunting for a v1.1.x tag
 
 PROJECT.md says to pin "an `iamf-tools` **v1.x** tag and SHA". **There is no

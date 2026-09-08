@@ -76,8 +76,17 @@ Related, and not a waiver: `iamf-tools@v2.1.0` ships no `probe_main`. Its
 `iamf/cli/BUILD` declares exactly two `cc_binary` targets, `decoder_main` and
 `encoder_main`. CONF-06 ("`iamf-tools`' own parser accepts the file") is
 therefore enforced *through* `decoder_main`'s parse path, which goes via
-`ObuProcessor`/`DescriptorObuParser` and so exercises the strict parser. A
-non-zero exit or an error on stderr is the CONF-06 signal.
+`ObuProcessor`/`DescriptorObuParser` and so exercises the strict parser.
+
+**What the CONF-06 signal actually is has NOT been established.** An earlier
+revision of this section asserted "a non-zero exit or an error on stderr is the
+CONF-06 signal". That was an inference, and Experiment A below refutes the
+general form of it by execution: `libiamf`'s `iamfdec` returns **exit 0 on every
+one of five inputs**, including two that decode to zero samples. Whether
+`decoder_main` behaves differently is Experiment 1, and Experiment 1 has not run
+(the container could not be built on the authoring machine). Until it does,
+CONF-06 has a route but no asserted observable, and a harness written against
+the exit code would be a gate that passes on a failed parse.
 
 ## Recorded experiments
 
@@ -85,7 +94,191 @@ Experiments run against the gate that are worth keeping even though they are not
 waivers — a byte diff explained, a decode compared, a configuration ruled out.
 Plans 01-02 and 01-08 append here.
 
-*(none yet)*
+Each entry states whether it was **EXECUTED** or **NOT RUN**. An entry that was
+not run still belongs here, with its exact commands and the reason it could not
+execute, because the question it leaves open is the thing a later reader needs
+to know about. What must never appear is an entry that reads as though it ran.
+
+---
+
+### Experiment A — how `iamfdec` signals failure (EXECUTED, 2026-09-08)
+
+Not one of the two experiments plan 01-02 was asked for. It is the one that
+could be run on the authoring machine, and it is what makes the other two's
+framing correct: it establishes by execution, in this repository, that a
+reference tool can fail and still return 0, so no harness in this project may
+assert on an exit code without having tested that it means something.
+
+**Setup.** `tools/experiments/corrupt-fixture.py` produces the control plus four
+corruptions of `tests/fixtures/reference/test_000003.iamf` (descriptor OBUs at
+offsets 0, 8, 26, 40; first Audio Frame at 120):
+
+```sh
+python3 tools/experiments/corrupt-fixture.py \
+  tests/fixtures/reference/test_000003.iamf /tmp/corrupt
+for f in valid bitflip_reserved bitflip_sample_rate obusize truncated; do
+  "$IAMF_REF_DECODER" -i0 -o3 "/tmp/corrupt/$f.wav" \
+    -r 16000 -s0 -d 16 -disable_limiter "/tmp/corrupt/$f.iamf"
+done
+```
+
+**Observed** (`libiamf@v1.1.0` `iamfdec`, macOS x86_64, exact output):
+
+| Input | Corruption | exit | WAV bytes | WAV sha256 (12) | reported |
+|---|---|---:|---:|---|---|
+| `valid.iamf` | none (control) | **0** | 32 044 | `ff8c67981380` | `Get 63 frames` / `Get 8000 samples` |
+| `bitflip_reserved.iamf` | byte 30 bit 0 — a **reserved** bit of the Audio Element type octet | **0** | 32 044 | `ff8c67981380` | `Get 63 frames` / `Get 8000 samples` |
+| `bitflip_sample_rate.iamf` | byte 23 bit 0 — Codec Config `sample_rate` 16000 → 81536 | **0** | 6 324 | `07e189ed9ae4` | `Get 63 frames` / `Get 1570 samples` |
+| `obusize.iamf` | byte 1 — IA Sequence Header `obu_size` 6 → 127 | **0** | 44 | `79bfb4abe83f` | `Get 0 frames` / `Get 0 samples` |
+| `truncated.iamf` | cut 40 bytes into the first Audio Frame OBU | **0** | 44 | `79bfb4abe83f` | `Get 0 frames` / `Get 0 samples` |
+
+**Three conclusions, each load-bearing.**
+
+1. **The exit code is never the signal.** All five runs returned 0, including the
+   two that produced nothing but a 44-byte WAV header. The observables are: the
+   output file exists and exceeds 44 bytes; the frame count; the decoded-sample
+   count. `tools/build-reference.sh` asserts exactly those three and says so.
+
+2. **`libiamf` ignores reserved-bit misuse — reproduced, not cited.** Flipping a
+   reserved bit produced a **byte-identical** WAV: same size, same sha256, same
+   frame and sample counts. This is the concrete form of "passing the `libiamf`
+   gate is necessary and nowhere near sufficient". A reserved-bit bug in our
+   encoder would sail through CONF-05 without a murmur, which is why CONF-07's
+   byte diff against `iamf-tools` output is the clause that actually catches it.
+
+3. **"Clean decode, wrong result" is the failure class to design against.** The
+   `sample_rate` flip changed one bit in a descriptor and yielded a successful
+   decode of the wrong length — 1570 samples instead of 8000, no error, exit 0.
+   Together with `tones_256samp_5p1_pcm.iamf` (zero samples, exit 0; see
+   `tests/fixtures/MANIFEST.md`) this is why CONF-05's decoded-sample-count
+   assertion is **not** redundant with PCM equality: a wrong-length decode is
+   never compared sample-for-sample at all unless the count is checked first.
+
+---
+
+### Experiment 1 — how does `decoder_main` signal a parse failure? (NOT RUN)
+
+Research open question 1, and the thing CONF-06's value rests on.
+
+**Why it did not run.** The `iamf-tools` oracle only exists inside the
+digest-pinned container (D-11: Bazel + abseil + protobuf + fdk-aac is not a
+build to run natively). On the authoring machine the `docker` CLI is present at
+`/usr/local/bin/docker` but the **daemon is not running** —
+`Cannot connect to the Docker daemon at unix:///Users/cell/.docker/run/docker.sock` —
+and Docker Desktop could not be started from this session. `bazel`/`bazelisk`
+are absent by design. So the image could be *authored* and pinned, and it is
+(`tools/iamf-tools.Dockerfile`), but it could not be *built* or *run*.
+
+**This is unverified, not blocked.** `.github/workflows/reference.yml` builds the
+image on `ubuntu-latest`, so the first run of that workflow is where this
+executes. It is recorded in `.planning/WINDOWS.md` so it surfaces at ship time
+rather than being rediscovered.
+
+**The exact procedure, ready to run.** Nothing here needs deciding; it needs a
+daemon.
+
+```sh
+docker build -f tools/iamf-tools.Dockerfile -t iamf-tools:v2.1.0 tools/
+python3 tools/experiments/corrupt-fixture.py \
+  tests/fixtures/reference/test_000003.iamf /tmp/corrupt
+
+for f in valid bitflip_reserved bitflip_sample_rate obusize truncated; do
+  rm -f "/tmp/corrupt/$f.decoder_main.wav"
+  docker run --rm -v /tmp/corrupt:/work -w /src iamf-tools:v2.1.0 \
+    bazel-bin/iamf/cli/decoder_main \
+      --input_filename="/work/$f.iamf" \
+      --output_filename="/work/$f.decoder_main.wav"
+  echo "$f: exit=$?  out=$(ls -l "/tmp/corrupt/$f.decoder_main.wav" 2>&1)"
+done
+```
+
+**Record three observations per case, separately:** the exit code, the verbatim
+stderr, and whether an output file appeared and how large it is. **Do not assume
+the exit code is the signal** — Experiment A above is the counter-example, in
+this repository, on the sibling tool.
+
+**The conclusion this experiment owes the project:** the name of the observable
+`.github/workflows/reference.yml`'s CONF-06 step asserts on. That step currently
+asserts only `test -s <output>.wav`, which is the weakest defensible claim and
+is deliberately marked as such until this runs.
+
+**Recorded alongside, per research correction 8:** CONF-06 goes through
+`decoder_main` because `iamf-tools@v2.1.0` ships **no `probe_main`** and no other
+dedicated validator. `iamf/cli/BUILD` at that SHA declares exactly two
+`cc_binary` targets, `decoder_main` and `encoder_main`. STACK.md §8's claim that
+the project "Produces `encoder_main`, `decoder_main`, `probe_main` CLIs" is a
+development-tip fact, not a v2.1.0 one. `decoder_main` is the right route anyway
+— it runs `ObuProcessor` / `DescriptorObuParser`, which is the strict parser —
+but it is a route chosen because the alternative does not exist, and that should
+read as a deliberate decision rather than as a missing validator.
+
+---
+
+### Experiment 2 — does `encoder_main` accept an unreferenced Codec Config? (NOT RUN)
+
+Research assumption A3, and D-18's stated research item for this plan. D-18's
+Phase 1 fixture is **two Codec Configs and one 5.1 Audio Element**, so the
+second Codec Config is referenced by nothing. The parser side is verified legal
+from source; the encoder side is not, and that is what this settles.
+
+**Why it did not run.** Same cause as Experiment 1: the Docker daemon was not
+running on the authoring machine.
+
+**The exact procedure, ready to run.** The input is already prepared and
+committed — `tools/experiments/two-codec-configs.textproto` is
+`iamf-tools@v2.1.0 iamf/cli/testdata/test_000003.textproto` (the **current**
+proto dialect, not `libiamf@v1.1.0`'s deprecated-field copy) with one added
+`codec_config_metadata` block carrying `codec_config_id: 201` and **identical**
+`sample_rate`, `sample_size`, `sample_format_flags` and `num_samples_per_frame`.
+No `audio_element_metadata` references 201.
+
+```sh
+docker build -f tools/iamf-tools.Dockerfile -t iamf-tools:v2.1.0 tools/
+mkdir -p target/experiment2
+docker run --rm -v "$PWD:/work" -w /src iamf-tools:v2.1.0 \
+  bazel-bin/iamf/cli/encoder_main \
+    --user_metadata_filename=/work/tools/experiments/two-codec-configs.textproto \
+    --output_iamf_directory=/work/target/experiment2
+ls -l target/experiment2
+```
+
+Every field but the ID is held identical **because it has to be**, not for
+tidiness. Two Codec Configs differing in sample rate or bit depth are fatal
+(`obu_sequencer_base.cc`: *"Codec Config OBUs with different bit-depths and/or
+sample rates are not in base-enhanced/base/simple profile; they are not allowed
+in ISOBMFF."*), and a differing `num_samples_per_frame` is fatal too
+(`cli_util.cc`: *"The encoder does not support Codec Config OBUs with a
+different number of samples per frame yet."*). LPCM has no remaining free field.
+
+**What is already known from source, and what is not:**
+
+- **Parser side — legal.** `DescriptorObuParser` inserts each Codec Config into
+  a map keyed by `codec_config_id` and Audio Elements look their ID up; nothing
+  requires every entry be referenced. `WriteDescriptorObus` writes every entry
+  unconditionally.
+- **Precedent — none.** Across all 226 reference `.iamf` files, 77 have more
+  than one Codec Config or more than one Audio Element and **zero** have an
+  unreferenced Codec Config. The single file with two Codec Configs,
+  `test_000119`, injects its second one as an `ArbitraryObu` — raw hex in the
+  textproto with an imaginary `codec_id: "fake"` — referenced by an equally
+  arbitrary second Audio Element.
+- **Encoder side — unknown.** That is this experiment.
+
+**If `encoder_main` refuses, the fallback is already chosen and must be recorded
+here when adopted**, in this order:
+
+- **(a)** Inject the second Codec Config via `arbitrary_obu_metadata` with
+  `INSERTION_HOOK_AFTER_CODEC_CONFIGS` — the mechanism `test_000119` uses, so it
+  is proven to work. **Caveat that must be written into the ledger if this is
+  taken:** that hook forces the arbitrary OBU *after* all normal ones, so
+  ordering becomes positional rather than ID-sorted, and DESC-08's ascending-ID
+  property is then no longer what is being observed. The clause would still
+  pass; it would just be measuring something else, which is worse than failing.
+- **(b)** Satisfy CONF-04 with **two Audio Elements** on a second,
+  structure-only fixture — assert OBU count, ordering and the boundary walk
+  there, and keep sample-identity on the single-element 5.1 file. 77 reference
+  files have ≥ 2 Audio Elements so the route is well-precedented. Note that two
+  elements push the minimum profile from Simple to **Base**.
 
 ## Waivers
 
