@@ -46,3 +46,7 @@
 /// See `REFERENCES.md` for the pinned reference-implementation SHAs this
 /// version claim is measured against (GUARD-06).
 pub const SPEC_VERSION: &str = "1.1.0";
+
+pub mod error;
+
+pub use crate::error::{Error, ErrorKind, Finding, Location, Result};
