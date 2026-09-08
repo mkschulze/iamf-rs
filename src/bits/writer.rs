@@ -2,6 +2,7 @@
 //! same order (D-10).
 
 use crate::bits::leb128;
+use crate::bits::reader::MAX_STRING_BYTES;
 use crate::error::{Error, ErrorKind, Location, Result};
 
 /// A bit-addressed writer over an owned buffer.
@@ -72,8 +73,23 @@ impl BitWriter {
                 Location::OutputOffset(self.output_offset()),
             ));
         }
-        let _ = value;
-        Ok(())
+        // Range check first: silently truncating a value that does not fit its
+        // field is exactly the kind of divergence a byte-diff finds and nothing
+        // else does.
+        let pad = 64_u32.saturating_sub(bits);
+        let widened = value.wrapping_shl(pad).wrapping_shr(pad);
+        if widened != value {
+            return Err(Error::new(
+                ErrorKind::ValueExceedsWidth {
+                    bits: u8::try_from(bits).unwrap_or(u8::MAX),
+                },
+                Location::OutputOffset(self.output_offset()),
+            ));
+        }
+        // Mask to the field width, then hand the two's-complement pattern to
+        // the unsigned path — one place decides bit order.
+        let mask = u64::MAX.wrapping_shr(pad);
+        self.write_unsigned((value as u64) & mask, bits)
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteBoolean
@@ -92,14 +108,35 @@ impl BitWriter {
     /// be able to emit an unterminated string at all. Round-tripping a read
     /// value therefore means dropping its last byte.
     pub fn write_string(&mut self, payload: &[u8]) -> Result<()> {
-        let _ = payload;
-        Ok(())
+        if payload.len().saturating_add(1) > MAX_STRING_BYTES {
+            return Err(Error::new(
+                ErrorKind::StringTooLong,
+                Location::OutputOffset(self.output_offset()),
+            ));
+        }
+        if payload.contains(&0) {
+            // An interior NUL reads back as a shorter string than was written.
+            // Refusing it here is the only place that asymmetry can be stopped.
+            return Err(Error::new(
+                ErrorKind::StringHasInteriorNul,
+                Location::OutputOffset(self.output_offset()),
+            ));
+        }
+        self.write_bytes(payload)?;
+        self.write_unsigned(0, 8)
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteUint8Span
     /// Write raw bytes.
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        let _ = bytes;
+        if self.is_byte_aligned() {
+            // The common case, and the only one an OBU payload ever hits.
+            self.out.extend_from_slice(bytes);
+            return Ok(());
+        }
+        for byte in bytes {
+            self.write_unsigned(u64::from(*byte), 8)?;
+        }
         Ok(())
     }
 
@@ -123,7 +160,10 @@ impl BitWriter {
     }
 
     /// The output byte offset a `Location::OutputOffset` carries.
-    fn output_offset(&self) -> u64 {
+    ///
+    /// `pub(super)` so `leb128.rs` reports at the same position this file does;
+    /// a write error's offset must not depend on which module noticed it.
+    pub(super) fn output_offset(&self) -> u64 {
         u64::try_from(self.out.len()).unwrap_or(u64::MAX)
     }
 

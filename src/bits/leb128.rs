@@ -31,24 +31,6 @@ pub(crate) const fn minimal_len(value: u32) -> usize {
     }
 }
 
-// ref: iamf-tools@v2.1.0 iamf/common/leb_generator.h LebGenerator (kMinimum mode)
-/// Emit `value` in minimal form: no trailing continuation byte, and never a
-/// longer encoding than [`minimal_len`] says.
-pub(crate) fn write_uleb128_minimal(w: &mut BitWriter, value: u32) -> Result<()> {
-    // The length is decided up front by `minimal_len`, so minimality is
-    // structural rather than emergent: this loop cannot append a trailing
-    // `0x80 0x00`, because it does not decide when to stop.
-    let len = minimal_len(value);
-    let mut shift: u32 = 0;
-    for group_index in 1..=len {
-        let group = u64::from(value.checked_shr(shift).unwrap_or(0) & 0x7f);
-        let byte = if group_index == len { group } else { group | 0x80 };
-        w.write_unsigned(byte, 8)?;
-        shift = shift.saturating_add(7);
-    }
-    Ok(())
-}
-
 // ref: iamf-tools@v2.1.0 iamf/common/leb_generator.h LebGenerator (kFixedSize mode)
 /// Emit `value` in exactly `size` bytes (1..=8), padding with continuation
 /// bytes rather than shortening — the reference's `kFixedSize` mode.
@@ -58,8 +40,50 @@ pub(crate) fn write_uleb128_minimal(w: &mut BitWriter, value: u32) -> Result<()>
 /// `src/bits/mod.rs` for what this is actually for, which is **not** what D-03
 /// records.
 pub(crate) fn write_uleb128_fixed(w: &mut BitWriter, value: u32, size: u8) -> Result<()> {
-    let _ = (w, value, size);
+    let requested = usize::from(size);
+    if requested == 0 || requested > MAX_LEB128_SIZE {
+        return Err(Error::new(
+            ErrorKind::Leb128SizeInvalid { size },
+            Location::OutputOffset(w.output_offset()),
+        ));
+    }
+    if minimal_len(value) > requested {
+        // A shorter field than the value needs would encode a different number.
+        return Err(Error::new(
+            ErrorKind::Leb128ValueTooLarge,
+            Location::OutputOffset(w.output_offset()),
+        ));
+    }
+    let mut shift: u32 = 0;
+    for group_index in 1..=requested {
+        let group = u64::from(value.checked_shr(shift).unwrap_or(0) & 0x7f);
+        let byte = if group_index == requested {
+            group
+        } else {
+            group | 0x80
+        };
+        w.write_unsigned(byte, 8)?;
+        shift = shift.saturating_add(7);
+    }
     Ok(())
+}
+
+// ref: iamf-tools@v2.1.0 iamf/common/leb_generator.h LebGenerator (kMinimum mode)
+/// Emit `value` in minimal form: no trailing continuation byte, and never a
+/// longer encoding than [`minimal_len`] says.
+pub(crate) fn write_uleb128_minimal(w: &mut BitWriter, value: u32) -> Result<()> {
+    // Minimal form *is* fixed-size form at the minimal length — which is what
+    // the reference does too: `LebGenerator` computes a length and then emits
+    // that many groups, and `kMinimum` differs from `kFixedSize` only in where
+    // the length comes from. Expressing it that way means there is one encoder
+    // loop rather than two that can drift apart, and minimality is structural:
+    // the loop never decides when to stop, so it cannot append a trailing
+    // `0x80 0x00`.
+    //
+    // `minimal_len` returns 1..=5, so the conversion cannot fail; 5 is the
+    // unreachable fallback rather than a value that would change the output.
+    let len = u8::try_from(minimal_len(value)).unwrap_or(5);
+    write_uleb128_fixed(w, value, len)
 }
 
 // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
@@ -79,10 +103,7 @@ pub(crate) fn read_uleb128(r: &mut BitCursor<'_>) -> Result<u32> {
         acc |= group;
         if byte & 0x80 == 0 {
             return u32::try_from(acc).map_err(|_| {
-                Error::new(
-                    ErrorKind::Leb128ValueTooLarge,
-                    Location::InputOffset(start),
-                )
+                Error::new(ErrorKind::Leb128ValueTooLarge, Location::InputOffset(start))
             });
         }
         shift = shift.saturating_add(7);
@@ -144,12 +165,17 @@ mod tests {
     #[test]
     fn fixed_size_refuses_a_size_outside_the_reference_cap() {
         let mut w = BitWriter::new();
-        let size = u8::try_from(MAX_LEB128_SIZE).unwrap_or(u8::MAX).saturating_add(1);
+        let size = u8::try_from(MAX_LEB128_SIZE)
+            .unwrap_or(u8::MAX)
+            .saturating_add(1);
         let err = w_err(&mut w, 6, size);
         assert_eq!(err, ErrorKind::Leb128SizeInvalid { size });
 
         let mut w = BitWriter::new();
-        assert_eq!(w_err(&mut w, 6, 0), ErrorKind::Leb128SizeInvalid { size: 0 });
+        assert_eq!(
+            w_err(&mut w, 6, 0),
+            ErrorKind::Leb128SizeInvalid { size: 0 }
+        );
     }
 
     #[test]

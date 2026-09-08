@@ -93,8 +93,13 @@ impl<'a> BitCursor<'a> {
                 Location::InputOffset(start),
             ));
         }
-        let _raw = self.read_unsigned(bits)?;
-        Ok(0)
+        let raw = self.read_unsigned(bits)?;
+        // Sign-extend by shifting the field up to the top of an i64 and back
+        // down arithmetically. Both shift amounts are `64 - bits`, which is
+        // 0..=63 for a width in 1..=64, so neither can be out of range.
+        let pad = 64_u32.saturating_sub(bits);
+        let widened = raw.wrapping_shl(pad) as i64;
+        Ok(widened.wrapping_shr(pad))
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadBoolean
@@ -112,15 +117,63 @@ impl<'a> BitCursor<'a> {
     /// the reference is, and rejecting a file the reference accepts is as much
     /// a conformance failure as accepting one it rejects.
     pub fn read_string(&mut self) -> Result<Vec<u8>> {
-        let _start = self.byte_position();
-        Ok(Vec::new())
+        let start = self.byte_position();
+        // Grows one byte at a time. Nothing is reserved from a parsed length
+        // here because there is no length field — the terminator is the length,
+        // and the cap is the only thing standing between an unterminated field
+        // and the whole input.
+        let mut out = Vec::new();
+        loop {
+            if out.len() >= MAX_STRING_BYTES {
+                // Checked before the next read, so exhausting the input can
+                // never be reported as this error, nor this as that one.
+                return Err(Error::new(
+                    ErrorKind::StringNotTerminated,
+                    Location::InputOffset(start),
+                ));
+            }
+            let byte = u8::try_from(self.read_unsigned(8)? & 0xff).unwrap_or(0);
+            out.push(byte);
+            if byte == 0 {
+                return Ok(out);
+            }
+        }
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadUint8Span
     /// Borrow the next `len` bytes without copying them.
     pub fn read_uint8_span(&mut self, len: usize) -> Result<&'a [u8]> {
-        let _ = len;
-        Ok(&[])
+        let start = self.byte_position();
+        if !self.is_byte_aligned() {
+            // A borrowed slice has no sub-byte start, so this is a caller bug
+            // rather than bad input. Say which.
+            return Err(Error::new(
+                ErrorKind::NotByteAligned,
+                Location::InputOffset(start),
+            ));
+        }
+        // The bound is checked BEFORE anything is reserved or sliced: `len`
+        // came off the wire and is attacker-controlled. See the module comment.
+        if len > self.bytes_remaining() {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEndOfInput,
+                Location::InputOffset(start),
+            ));
+        }
+        let end = self.byte_pos.checked_add(len).ok_or_else(|| {
+            Error::new(
+                ErrorKind::UnexpectedEndOfInput,
+                Location::InputOffset(start),
+            )
+        })?;
+        let span = self.data.get(self.byte_pos..end).ok_or_else(|| {
+            Error::new(
+                ErrorKind::UnexpectedEndOfInput,
+                Location::InputOffset(start),
+            )
+        })?;
+        self.byte_pos = end;
+        Ok(span)
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
@@ -165,8 +218,12 @@ impl<'a> BitCursor<'a> {
     /// parent is exactly where the next OBU begins. An under-read is otherwise
     /// silent.
     pub fn sub_reader(&mut self, len_bytes: usize) -> Result<BitCursor<'a>> {
-        let _ = len_bytes;
-        Ok(BitCursor::new(&[]))
+        // `read_uint8_span` already owns the alignment check, the
+        // bounds-check-before-reserve rule and the advance. Expressing the
+        // sub-reader in terms of it means there is one implementation of that
+        // rule, not two that can drift.
+        let span = self.read_uint8_span(len_bytes)?;
+        Ok(BitCursor::new(span))
     }
 
     /// Consume one bit, MSB-first within the current byte.
