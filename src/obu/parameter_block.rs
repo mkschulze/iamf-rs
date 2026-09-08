@@ -323,9 +323,8 @@ pub fn read_parameter_block(
             )
         })?;
         let count = if fields.constant_subblock_duration == 0 {
-            u32::try_from(fields.subblock_durations.len()).map_err(|_| {
-                Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start))
-            })?
+            u32::try_from(fields.subblock_durations.len())
+                .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?
         } else {
             subblocks_implied_by(fields.duration, fields.constant_subblock_duration, start)?
         };
@@ -334,8 +333,8 @@ pub fn read_parameter_block(
 
     // `subblock_duration` is on the wire exactly when mode is 1 AND
     // `constant_subblock_duration` is 0.
-    let include_subblock_duration = duration_fields
-        .is_some_and(|fields| fields.constant_subblock_duration == 0);
+    let include_subblock_duration =
+        duration_fields.is_some_and(|fields| fields.constant_subblock_duration == 0);
 
     // T-01-32: `num_subblocks` is attacker-controlled and drives an allocation.
     // The smallest possible subblock is one byte, so more subblocks than bytes
@@ -400,6 +399,7 @@ pub fn read_parameter_block(
 pub fn write_parameter_block(
     w: &mut BitWriter,
     def: &ParamDefinition,
+    kind: ParamDefinitionType,
     block: &ParameterBlock,
 ) -> Result<()> {
     if block.parameter_id != def.parameter_id {
@@ -413,6 +413,9 @@ pub fn write_parameter_block(
             ErrorKind::ParameterModeMismatch,
             Location::Field("param_definition_mode"),
         ));
+    }
+    for subblock in &block.subblocks {
+        validate_parameter_data_kind(&subblock.data, kind)?;
     }
 
     w.write_uleb128_minimal(block.parameter_id)?;
@@ -437,6 +440,22 @@ pub fn write_parameter_block(
     Ok(())
 }
 
+fn validate_parameter_data_kind(data: &ParameterData, kind: ParamDefinitionType) -> Result<()> {
+    let matches = matches!(
+        (kind, data),
+        (ParamDefinitionType::MixGain, ParameterData::MixGain(_))
+            | (ParamDefinitionType::Reserved(_), ParameterData::Raw(_))
+    );
+    if matches {
+        Ok(())
+    } else {
+        Err(Error::new(
+            ErrorKind::UnsupportedParameterData,
+            Location::Field("parameter_data"),
+        ))
+    }
+}
+
 /// `ceil(duration / constant_subblock_duration)`, with the division checked.
 ///
 /// Integer division with a ceiling correction, exactly as `GetNumSubblocks`
@@ -445,7 +464,12 @@ pub fn write_parameter_block(
 /// holds only by argument stops holding when the argument is edited.
 // ref: iamf-tools@v2.1.0 iamf/obu/parameter_block.cc ParameterBlockObu::GetNumSubblocks
 fn subblocks_implied_by(duration: u32, constant_subblock_duration: u32, at: u64) -> Result<u32> {
-    let overflow = || Error::new(ErrorKind::SubblockDurationMismatch, Location::InputOffset(at));
+    let overflow = || {
+        Error::new(
+            ErrorKind::SubblockDurationMismatch,
+            Location::InputOffset(at),
+        )
+    };
     let whole = duration
         .checked_div(constant_subblock_duration)
         .ok_or_else(overflow)?;
@@ -550,7 +574,10 @@ fn write_parameter_data(w: &mut BitWriter, data: &ParameterData) -> Result<()> {
         }
         ParameterData::Raw(bytes) => {
             let size = u32::try_from(bytes.len()).map_err(|_| {
-                Error::new(ErrorKind::ObuTooLarge, Location::Field("parameter_data_size"))
+                Error::new(
+                    ErrorKind::ObuTooLarge,
+                    Location::Field("parameter_data_size"),
+                )
             })?;
             w.write_uleb128_minimal(size)?;
             w.write_bytes(bytes)
@@ -561,6 +588,10 @@ fn write_parameter_data(w: &mut BitWriter, data: &ParameterData) -> Result<()> {
 /// A signed 16-bit big-endian field, the width every Q7.8 point uses.
 // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadSigned16
 fn read_i16(r: &mut BitCursor<'_>) -> Result<i16> {
-    i16::try_from(r.read_signed(16)?)
-        .map_err(|_| Error::new(ErrorKind::ValueExceedsWidth { bits: 16 }, Location::Unlocated))
+    i16::try_from(r.read_signed(16)?).map_err(|_| {
+        Error::new(
+            ErrorKind::ValueExceedsWidth { bits: 16 },
+            Location::Unlocated,
+        )
+    })
 }

@@ -45,8 +45,9 @@ use crate::bits::BitWriter;
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::{DescriptorSet, write_descriptors};
 use crate::obu::{
-    AudioFrame, Obu, ObuHeader, ObuType, ParamDefinition, ParameterBlock, TemporalDelimiter,
-    write_audio_frame, write_obu_with_header, write_parameter_block, write_temporal_delimiter,
+    AudioFrame, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionType, ParameterBlock,
+    TemporalDelimiter, write_audio_frame, write_obu_with_header, write_parameter_block,
+    write_temporal_delimiter,
 };
 
 /// One temporal unit: everything between one presentation instant and the
@@ -128,7 +129,7 @@ pub struct SequenceWriter<W: Write> {
     /// Every `ParamDefinition` the descriptors published, so a Parameter Block
     /// can be written against the definition that governs it without the
     /// caller supplying a second copy.
-    definitions: Vec<ParamDefinition>,
+    definitions: Vec<GoverningDefinition>,
     /// Bytes handed to the sink so far — the position a sink error reports at.
     bytes_written: u64,
 }
@@ -222,9 +223,9 @@ impl<W: Write> SequenceWriter<W> {
             // borrow into `self.definitions` would outlive that. A
             // ParamDefinition is a handful of scalars plus at most one Vec, and
             // this path is not taken at all for LPCM.
-            let definition = self.definition_for(block.payload.parameter_id)?.clone();
+            let governing = self.definition_for(block.payload.parameter_id)?.clone();
             self.emit_obu(block, |w, _header, payload| {
-                write_parameter_block(w, &definition, payload)
+                write_parameter_block(w, &governing.definition, governing.kind, payload)
             })?;
         }
 
@@ -264,10 +265,10 @@ impl<W: Write> SequenceWriter<W> {
     }
 
     /// The `ParamDefinition` governing `parameter_id`, or a typed error.
-    fn definition_for(&self, parameter_id: u32) -> Result<&ParamDefinition> {
+    fn definition_for(&self, parameter_id: u32) -> Result<&GoverningDefinition> {
         self.definitions
             .iter()
-            .find(|definition| definition.parameter_id == parameter_id)
+            .find(|governing| governing.definition.parameter_id == parameter_id)
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::NoGoverningParamDefinition,
@@ -318,14 +319,28 @@ impl<W: Write> SequenceWriter<W> {
 /// can carry two definitions with one `parameter_id`, and a map would make that
 /// a silent overwrite. The first published wins, which is what a decoder
 /// reading forward binds to.
-fn collect_param_definitions(descriptors: &DescriptorSet) -> Vec<ParamDefinition> {
+#[derive(Debug, Clone)]
+struct GoverningDefinition {
+    definition: ParamDefinition,
+    kind: ParamDefinitionType,
+}
+
+fn collect_param_definitions(descriptors: &DescriptorSet) -> Vec<GoverningDefinition> {
     let mut definitions = Vec::new();
     for element in &descriptors.audio_elements {
         for param in &element.params {
             match param {
-                crate::obu::AudioElementParam::Demixing { definition, .. }
-                | crate::obu::AudioElementParam::ReconGain { definition } => {
-                    definitions.push(definition.clone());
+                crate::obu::AudioElementParam::Demixing { definition, .. } => {
+                    definitions.push(GoverningDefinition {
+                        definition: definition.clone(),
+                        kind: ParamDefinitionType::Demixing,
+                    });
+                }
+                crate::obu::AudioElementParam::ReconGain { definition } => {
+                    definitions.push(GoverningDefinition {
+                        definition: definition.clone(),
+                        kind: ParamDefinitionType::ReconGain,
+                    });
                 }
                 // An extension carries its bytes verbatim and no modelled
                 // definition, so there is nothing to publish.
@@ -336,9 +351,15 @@ fn collect_param_definitions(descriptors: &DescriptorSet) -> Vec<ParamDefinition
     for presentation in &descriptors.mix_presentations {
         for sub_mix in &presentation.sub_mixes {
             for element in &sub_mix.elements {
-                definitions.push(element.element_mix_gain.definition.clone());
+                definitions.push(GoverningDefinition {
+                    definition: element.element_mix_gain.definition.clone(),
+                    kind: ParamDefinitionType::MixGain,
+                });
             }
-            definitions.push(sub_mix.output_mix_gain.definition.clone());
+            definitions.push(GoverningDefinition {
+                definition: sub_mix.output_mix_gain.definition.clone(),
+                kind: ParamDefinitionType::MixGain,
+            });
         }
     }
     definitions

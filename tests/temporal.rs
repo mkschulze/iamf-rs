@@ -15,12 +15,13 @@ use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::obu::{
-    AnimationType, AudioFrame, DurationFields, MixGainParameterData, Obu, ObuHeader, ObuType,
-    ParamDefinition, ParamDefinitionType, ParameterSubblock, TemporalDelimiter, Trimming,
-    TypeSpecific, obu_type_for, plan_frames, read_audio_frame, read_obu_with,
-    read_obu_with_header, read_parameter_block, read_temporal_delimiter, substream_id_for,
-    validate_temporal_unit, write_audio_frame, write_obu, write_obu_with, write_obu_with_header,
-    write_parameter_block, write_temporal_delimiter,
+    AnimationType, AudioFrame, BlockDurationFields, DurationFields, MixGainParameterData, Obu,
+    ObuHeader, ObuType, ParamDefinition, ParamDefinitionType, ParameterBlock, ParameterData,
+    ParameterSubblock, TemporalDelimiter, Trimming, TypeSpecific, obu_type_for, plan_frames,
+    read_audio_frame, read_obu_with, read_obu_with_header, read_parameter_block,
+    read_temporal_delimiter, substream_id_for, validate_temporal_unit, write_audio_frame,
+    write_obu, write_obu_with, write_obu_with_header, write_parameter_block,
+    write_temporal_delimiter,
 };
 
 /// The vendored reference file the whole suite is measured against.
@@ -158,7 +159,10 @@ fn reading_a_type_6_frame_derives_its_substream_id_and_consumes_no_id_bytes() {
         512,
         "the whole remainder is the frame — no id bytes were consumed"
     );
-    assert!(obu.trailing.is_empty(), "the frame claims the whole payload");
+    assert!(
+        obu.trailing.is_empty(),
+        "the frame claims the whole payload"
+    );
     assert_eq!(frame_bytes(&obu), bytes, "and it re-serialises unchanged");
 }
 
@@ -343,10 +347,16 @@ fn a_temporal_unit_whose_frames_disagree_on_trim_is_rejected() {
 
 #[test]
 fn a_temporal_delimiter_emits_exactly_two_bytes() {
-    let obu = Obu::new(ObuHeader::new(ObuType::TemporalDelimiter), TemporalDelimiter);
+    let obu = Obu::new(
+        ObuHeader::new(ObuType::TemporalDelimiter),
+        TemporalDelimiter,
+    );
     let mut w = BitWriter::new();
     let written = write_obu_with(&mut w, &obu, write_temporal_delimiter);
-    assert!(written.is_ok(), "a Temporal Delimiter serialises: {written:?}");
+    assert!(
+        written.is_ok(),
+        "a Temporal Delimiter serialises: {written:?}"
+    );
 
     assert_eq!(
         w.finish().unwrap_or_default(),
@@ -421,7 +431,10 @@ fn a_mode_1_parameter_block_carries_its_own_duration_fields() {
     assert_eq!(block.parameter_id, 100);
     assert_eq!(block.subblocks.len(), 1);
     assert_eq!(
-        block.subblocks.first().and_then(ParameterSubblock::mix_gain),
+        block
+            .subblocks
+            .first()
+            .and_then(ParameterSubblock::mix_gain),
         Some(&MixGainParameterData::Step {
             start_point_value: 0
         }),
@@ -429,7 +442,7 @@ fn a_mode_1_parameter_block_carries_its_own_duration_fields() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(&mut w, &definition, &block);
+    let written = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block);
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(w.finish().unwrap_or_default(), bytes);
 
@@ -473,7 +486,7 @@ fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(&mut w, &definition, &block);
+    let written = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block);
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(w.finish().unwrap_or_default(), bytes);
 }
@@ -542,13 +555,41 @@ fn an_unmodelled_parameter_definition_type_preserves_its_payload_verbatim() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(&mut w, &definition, &block);
+    let written = write_parameter_block(
+        &mut w,
+        &definition,
+        ParamDefinitionType::Reserved(7),
+        &block,
+    );
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(
         w.finish().unwrap_or_default(),
         bytes,
         "and it re-serialises unchanged"
     );
+}
+
+#[test]
+fn a_mix_gain_definition_rejects_raw_parameter_data_before_writing() {
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let block = ParameterBlock {
+        parameter_id: 5,
+        duration_fields: Some(BlockDurationFields {
+            duration: 1,
+            constant_subblock_duration: 1,
+        }),
+        subblocks: vec![ParameterSubblock {
+            subblock_duration: None,
+            data: ParameterData::Raw(vec![0xde, 0xad]),
+        }],
+    };
+    let mut w = BitWriter::new();
+
+    let err = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block)
+        .expect_err("raw data cannot be framed as Mix Gain syntax");
+
+    assert_eq!(err.kind(), &ErrorKind::UnsupportedParameterData);
+    assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
 }
 
 #[test]
