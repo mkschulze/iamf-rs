@@ -439,6 +439,8 @@ pub fn read_mix_presentation(r: &mut BitCursor<'_>) -> Result<MixPresentation> {
 /// Faithful, not validating (D-07): a sub-mix without a stereo layout is
 /// written, and `validate()` is where its absence is reported.
 pub fn write_mix_presentation(w: &mut BitWriter, v: &MixPresentation) -> Result<()> {
+    validate_annotation_counts(v)?;
+
     w.write_uleb128_minimal(v.mix_presentation_id)?;
     write_derived_count(w, v.count_label(), "count_label")?;
     for language in &v.annotations_language {
@@ -452,6 +454,27 @@ pub fn write_mix_presentation(w: &mut BitWriter, v: &MixPresentation) -> Result<
         write_sub_mix(w, sub_mix)?;
     }
     w.write_bytes(&v.trailing)
+}
+
+fn validate_annotation_counts(v: &MixPresentation) -> Result<()> {
+    let count_label = v.count_label();
+    if v.localized_presentation_annotations.len() != count_label {
+        return Err(Error::new(
+            ErrorKind::AnnotationCountMismatch,
+            Location::Field("localized_presentation_annotations"),
+        ));
+    }
+    for sub_mix in &v.sub_mixes {
+        for element in &sub_mix.elements {
+            if element.localized_element_annotations.len() != count_label {
+                return Err(Error::new(
+                    ErrorKind::AnnotationCountMismatch,
+                    Location::Field("localized_element_annotations"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128

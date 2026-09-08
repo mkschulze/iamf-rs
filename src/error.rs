@@ -107,6 +107,8 @@ pub enum ErrorKind {
     UnsupportedParameterData,
     #[error("subblock durations do not sum to the block duration")]
     SubblockDurationMismatch,
+    #[error("annotation count disagrees with count_label")]
+    AnnotationCountMismatch,
     #[error("channel count exceeds what the profile permits")]
     ChannelCountExceedsProfile,
     #[error("audio element count exceeds what the profile permits")]

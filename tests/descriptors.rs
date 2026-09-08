@@ -699,6 +699,38 @@ fn mix_presentation_round_trips_through_read() {
     assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
 }
 
+#[test]
+fn presentation_annotation_count_mismatch_is_rejected_before_writing() {
+    let mut presentation = published_mix_presentation().payload;
+    presentation.localized_presentation_annotations.clear();
+    let mut w = BitWriter::new();
+
+    let err = write_mix_presentation(&mut w, &presentation)
+        .expect_err("the wire carries no independent annotation count");
+
+    assert_eq!(err.kind(), &ErrorKind::AnnotationCountMismatch);
+    assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
+}
+
+#[test]
+fn element_annotation_count_mismatch_is_rejected_before_writing() {
+    let mut presentation = published_mix_presentation().payload;
+    presentation
+        .sub_mixes
+        .first_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .expect("the published presentation has an element")
+        .localized_element_annotations
+        .clear();
+    let mut w = BitWriter::new();
+
+    let err = write_mix_presentation(&mut w, &presentation)
+        .expect_err("the parser consumes count_label annotations");
+
+    assert_eq!(err.kind(), &ErrorKind::AnnotationCountMismatch);
+    assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
+}
+
 // ---------------------------------------------------------------------------
 // Descriptor ordering and collections — DESC-08, DESC-09
 // ---------------------------------------------------------------------------
