@@ -179,8 +179,76 @@ impl CodecConfig {
     // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/lpcm_decoder_config.cc LpcmDecoderConfig::Validate
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
-        Vec::new() // STUB(GREEN)
-}
+        let mut findings = Vec::new();
+        let field = |name: &'static str, message: String| Finding {
+            at: Location::Field(name),
+            message,
+        };
+
+        if !matches!(
+            self.codec_id,
+            CODEC_ID_LPCM | CODEC_ID_OPUS | CODEC_ID_FLAC | CODEC_ID_AAC
+        ) {
+            findings.push(field(
+                "codec_id",
+                format!(
+                    "codec_id {:?} is not one of ipcm/Opus/fLaC/mp4a; both libiamf revisions \
+                     reject an unknown codec_id outright",
+                    String::from_utf8_lossy(&self.codec_id)
+                ),
+            ));
+        }
+        if self.num_samples_per_frame == 0 || self.num_samples_per_frame > MAX_SAMPLES_PER_FRAME {
+            findings.push(field(
+                "num_samples_per_frame",
+                format!(
+                    "num_samples_per_frame is {}, outside 1..={MAX_SAMPLES_PER_FRAME}",
+                    self.num_samples_per_frame
+                ),
+            ));
+        }
+        if let Some(lpcm) = self.lpcm_config() {
+            if matches!(lpcm.sample_format_flags, SampleFormatFlags::Reserved(_)) {
+                findings.push(field(
+                    "sample_format_flags",
+                    format!(
+                        "sample_format_flags is {}, outside {{0 (big-endian), 1 (little-endian)}}",
+                        lpcm.sample_format_flags.value()
+                    ),
+                ));
+            }
+            if !matches!(lpcm.sample_size, 16 | 24 | 32) {
+                findings.push(field(
+                    "sample_size",
+                    format!(
+                        "sample_size is {}, outside {{16, 24, 32}}; libiamf@v1.1.0 does not check \
+                         this and falls through to a 16-bit little-endian reader with no error",
+                        lpcm.sample_size
+                    ),
+                ));
+            }
+            if !VALID_SAMPLE_RATES.contains(&lpcm.sample_rate) {
+                findings.push(field(
+                    "sample_rate",
+                    format!(
+                        "sample_rate is {}, outside {VALID_SAMPLE_RATES:?}",
+                        lpcm.sample_rate
+                    ),
+                ));
+            }
+        }
+        let required = required_audio_roll_distance(&self.decoder_config);
+        if self.audio_roll_distance != required {
+            findings.push(field(
+                "audio_roll_distance",
+                format!(
+                    "audio_roll_distance is {}, expected {required} for this codec",
+                    self.audio_roll_distance
+                ),
+            ));
+        }
+        findings
+    }
 }
 
 /// `GetRequiredAudioRollDistance()` — `0` for LPCM.
@@ -209,8 +277,40 @@ pub const fn required_audio_roll_distance(decoder_config: &DecoderConfig) -> i16
 /// by [`crate::obu::read_obu_with`] ends exactly at `obu_size`, so
 /// `bytes_remaining()` is the decoder-config length the reference computes.
 pub fn read_codec_config(r: &mut BitCursor<'_>) -> Result<CodecConfig> {
-    let _ = r; // STUB(GREEN)
-    Ok(CodecConfig::lpcm(0, 0, LpcmDecoderConfig { sample_format_flags: SampleFormatFlags::BigEndian, sample_size: 0, sample_rate: 0 }))
+    let codec_config_id = r.read_uleb128()?;
+    let mut codec_id = [0_u8; 4];
+    for slot in &mut codec_id {
+        *slot = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
+    }
+    let num_samples_per_frame = r.read_uleb128()?;
+    let audio_roll_distance = i16::try_from(r.read_signed(16)?).unwrap_or(0);
+
+    let decoder_config = if codec_id == CODEC_ID_LPCM && r.bytes_remaining() >= 6 {
+        DecoderConfig::Lpcm(read_lpcm_decoder_config(r)?)
+    } else {
+        // Everything left, for a codec this phase does not model — or for an
+        // `ipcm` config too short to be one, which stays reproducible rather
+        // than becoming a parse failure the reference would not have raised.
+        let remaining = r.bytes_remaining();
+        DecoderConfig::Raw {
+            codec_id,
+            bytes: r.read_uint8_span(remaining)?.to_vec(),
+        }
+    };
+
+    // The payload-level drain (D-05 precedence): whatever the decoder config
+    // did not claim is captured here, so the OBU-level `trailing` stays empty.
+    let remaining = r.bytes_remaining();
+    let trailing = r.read_uint8_span(remaining)?.to_vec();
+
+    Ok(CodecConfig {
+        codec_config_id,
+        codec_id,
+        num_samples_per_frame,
+        audio_roll_distance,
+        decoder_config,
+        trailing,
+    })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/codec_config.cc CodecConfigObu::ValidateAndWriteObu
@@ -220,8 +320,15 @@ pub fn read_codec_config(r: &mut BitCursor<'_>) -> Result<CodecConfig> {
 /// on the wire, so `serialize(parse(bytes)) == bytes` survives for foreign
 /// files. `validate()` is the separate, explicit pass.
 pub fn write_codec_config(w: &mut BitWriter, v: &CodecConfig) -> Result<()> {
-    let _ = (w, v); // STUB(GREEN)
-    Ok(())
+    w.write_uleb128_minimal(v.codec_config_id)?;
+    w.write_bytes(&v.codec_id)?;
+    w.write_uleb128_minimal(v.num_samples_per_frame)?;
+    w.write_signed(i64::from(v.audio_roll_distance), 16)?;
+    match &v.decoder_config {
+        DecoderConfig::Lpcm(cfg) => write_lpcm_decoder_config(w, cfg)?,
+        DecoderConfig::Raw { bytes, .. } => w.write_bytes(bytes)?,
+    }
+    w.write_bytes(&v.trailing)
 }
 
 // ref: libiamf@v1.1.0 code/src/iamf_dec/pcm/IAMF_pcm_decoder.c pcm_init
@@ -230,14 +337,22 @@ pub fn write_codec_config(w: &mut BitWriter, v: &CodecConfig) -> Result<()> {
 // the opposite; the code is authoritative.
 /// Read the six LPCM `decoder_config` bytes.
 fn read_lpcm_decoder_config(r: &mut BitCursor<'_>) -> Result<LpcmDecoderConfig> {
-    let _ = r; // STUB(GREEN)
-    Ok(LpcmDecoderConfig { sample_format_flags: SampleFormatFlags::BigEndian, sample_size: 0, sample_rate: 0 })
+    let sample_format_flags =
+        SampleFormatFlags::from_value(u8::try_from(r.read_unsigned(8)?).unwrap_or(0));
+    let sample_size = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
+    let sample_rate = u32::try_from(r.read_unsigned(32)?).unwrap_or(0);
+    Ok(LpcmDecoderConfig {
+        sample_format_flags,
+        sample_size,
+        sample_rate,
+    })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/lpcm_decoder_config.cc LpcmDecoderConfig::ValidateAndWrite
 /// Write the six LPCM `decoder_config` bytes: flags, size, then the rate as an
 /// unsigned 32-bit **big-endian** field.
 fn write_lpcm_decoder_config(w: &mut BitWriter, v: &LpcmDecoderConfig) -> Result<()> {
-    let _ = (w, v); // STUB(GREEN)
-    Ok(())
+    w.write_unsigned(u64::from(v.sample_format_flags.value()), 8)?;
+    w.write_unsigned(u64::from(v.sample_size), 8)?;
+    w.write_unsigned(u64::from(v.sample_rate), 32)
 }

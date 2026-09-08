@@ -27,13 +27,19 @@ use iamf::obu::{
 const TEST_000003: &[u8] = include_bytes!("fixtures/reference/test_000003.iamf");
 
 /// Serialise one whole OBU (header + payload) and hand back its bytes.
+///
+/// The helpers here are ordinary functions rather than `#[test]` bodies, and
+/// GUARD-04's `allow-expect-in-tests` carve-out does not reach them, so they
+/// are written without a panic path at all — the same convention
+/// `tests/obu_header.rs` established.
 fn obu_bytes<T>(
     obu: &Obu<T>,
     write_payload: impl FnOnce(&mut BitWriter, &T) -> iamf::Result<()>,
 ) -> Vec<u8> {
     let mut w = BitWriter::new();
-    write_obu_with(&mut w, obu, write_payload).expect("the vector serialises");
-    w.finish().expect("the writer ends byte-aligned")
+    let written = write_obu_with(&mut w, obu, write_payload);
+    assert!(written.is_ok(), "the vector serialises: {written:?}");
+    w.finish().unwrap_or_default()
 }
 
 /// The `test_000003` IA Sequence Header, as its textproto publishes it:
