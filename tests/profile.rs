@@ -312,78 +312,96 @@ fn a_layout_with_no_fixed_channel_count_is_a_typed_error_not_a_guess() {
 // PROF-03 — the Q7.8 loudness helper, and the D-21 escape census
 // ---------------------------------------------------------------------------
 
-/// `lufs_to_q7_8`, or the raw `i16` a failure should not have produced.
-fn q7_8(lufs: f64) -> Result<i16, ErrorKind> {
-    lufs_to_q7_8(lufs)
-        .map(Q7_8::to_i16)
-        .map_err(|e| e.kind().clone())
-}
+/// The float-typed half of PROF-03's contract.
+///
+/// `clippy.toml` bans `f64` crate-wide, and the ban reaches test targets too —
+/// `cargo clippy --all-targets` is the gate. Testing a function whose whole
+/// purpose is to accept an `f64` therefore needs an escape, and it is confined
+/// to this module so that `tests/` has exactly one, mirroring the one `src/`
+/// has. The D-21 census counts escapes in `src/` only, so this does not touch
+/// it; the census test below re-proves that.
+#[allow(
+    clippy::disallowed_types,
+    reason = "PROF-03's helper takes an f64 by definition; testing it requires \
+              naming the type. Scoped to this module so tests/ has exactly one \
+              escape, as src/ does."
+)]
+mod quantisation {
+    use super::{ErrorKind, Loudness, Q7_8, lufs_to_q7_8};
 
-#[test]
-fn the_two_published_loudness_values_of_test_000003_round_trip() {
-    // integrated_loudness: -13733, and -13733 / 256 == -53.64453125 exactly.
-    assert_eq!(q7_8(-53.644_531_25), Ok(-13733));
-    // digital_peak: -12879, and -12879 / 256 == -50.30859375 exactly.
-    assert_eq!(q7_8(-50.308_593_75), Ok(-12879));
-}
+    /// `lufs_to_q7_8`, or the raw `i16` a failure should not have produced.
+    fn q7_8(lufs: f64) -> Result<i16, ErrorKind> {
+        lufs_to_q7_8(lufs)
+            .map(Q7_8::to_i16)
+            .map_err(|e| e.kind().clone())
+    }
 
-#[test]
-fn whole_numbers_scale_by_two_hundred_and_fifty_six() {
-    assert_eq!(q7_8(0.0), Ok(0));
-    assert_eq!(q7_8(1.0), Ok(256));
-    assert_eq!(q7_8(-1.0), Ok(-256));
-}
+    #[test]
+    fn the_two_published_loudness_values_of_test_000003_round_trip() {
+        // integrated_loudness: -13733, and -13733 / 256 == -53.64453125 exactly.
+        assert_eq!(q7_8(-53.644_531_25), Ok(-13733));
+        // digital_peak: -12879, and -12879 / 256 == -50.30859375 exactly.
+        assert_eq!(q7_8(-50.308_593_75), Ok(-12879));
+    }
 
-#[test]
-fn ties_round_to_even_in_both_directions() {
-    // The half-LSB inputs, expressed as the fractions they are so the intent
-    // survives: -13733.5 / 256 and -13732.5 / 256.
-    assert_eq!(q7_8(-13733.5 / 256.0), Ok(-13734), "-13733.5 -> even");
-    assert_eq!(q7_8(-13732.5 / 256.0), Ok(-13732), "-13732.5 -> even");
-    // And on the positive side, so "ties to even" is not confused with
-    // "ties away from zero" by coincidence of sign.
-    assert_eq!(q7_8(13733.5 / 256.0), Ok(13734));
-    assert_eq!(q7_8(13732.5 / 256.0), Ok(13732));
-}
+    #[test]
+    fn whole_numbers_scale_by_two_hundred_and_fifty_six() {
+        assert_eq!(q7_8(0.0), Ok(0));
+        assert_eq!(q7_8(1.0), Ok(256));
+        assert_eq!(q7_8(-1.0), Ok(-256));
+    }
 
-#[test]
-fn truncation_toward_zero_would_bias_every_negative_value_upward() {
-    // The specific defect PROF-03 names. `as i16` on -13733.5 yields -13733,
-    // one LSB *louder* than the input — and every loudness value in a real
-    // file is negative, so the error is systematic rather than a wobble.
-    assert_ne!(q7_8(-13733.5 / 256.0), Ok(-13733));
-    assert_eq!(q7_8(-13733.5 / 256.0), Ok(-13734));
-}
+    #[test]
+    fn ties_round_to_even_in_both_directions() {
+        // The half-LSB inputs, expressed as the fractions they are so the intent
+        // survives: -13733.5 / 256 and -13732.5 / 256.
+        assert_eq!(q7_8(-13733.5 / 256.0), Ok(-13734), "-13733.5 -> even");
+        assert_eq!(q7_8(-13732.5 / 256.0), Ok(-13732), "-13732.5 -> even");
+        // And on the positive side, so "ties to even" is not confused with
+        // "ties away from zero" by coincidence of sign.
+        assert_eq!(q7_8(13733.5 / 256.0), Ok(13734));
+        assert_eq!(q7_8(13732.5 / 256.0), Ok(13732));
+    }
 
-#[test]
-fn nan_and_both_infinities_are_typed_errors() {
-    assert_eq!(q7_8(f64::NAN), Err(ErrorKind::LoudnessOutOfRange));
-    assert_eq!(q7_8(f64::INFINITY), Err(ErrorKind::LoudnessOutOfRange));
-    assert_eq!(q7_8(f64::NEG_INFINITY), Err(ErrorKind::LoudnessOutOfRange));
-}
+    #[test]
+    fn truncation_toward_zero_would_bias_every_negative_value_upward() {
+        // The specific defect PROF-03 names. `as i16` on -13733.5 yields -13733,
+        // one LSB *louder* than the input — and every loudness value in a real
+        // file is negative, so the error is systematic rather than a wobble.
+        assert_ne!(q7_8(-13733.5 / 256.0), Ok(-13733));
+        assert_eq!(q7_8(-13733.5 / 256.0), Ok(-13734));
+    }
 
-#[test]
-fn values_outside_the_q7_8_range_are_errors_not_saturations() {
-    // i16::MAX / 256 == 127.99609375; i16::MIN / 256 == -128.0.
-    assert_eq!(q7_8(127.996_093_75), Ok(i16::MAX));
-    assert_eq!(q7_8(-128.0), Ok(i16::MIN));
+    #[test]
+    fn nan_and_both_infinities_are_typed_errors() {
+        assert_eq!(q7_8(f64::NAN), Err(ErrorKind::LoudnessOutOfRange));
+        assert_eq!(q7_8(f64::INFINITY), Err(ErrorKind::LoudnessOutOfRange));
+        assert_eq!(q7_8(f64::NEG_INFINITY), Err(ErrorKind::LoudnessOutOfRange));
+    }
 
-    assert_eq!(q7_8(128.0), Err(ErrorKind::LoudnessOutOfRange));
-    assert_eq!(q7_8(-128.005), Err(ErrorKind::LoudnessOutOfRange));
-    assert_eq!(q7_8(1.0e30), Err(ErrorKind::LoudnessOutOfRange));
-    assert_eq!(q7_8(-1.0e30), Err(ErrorKind::LoudnessOutOfRange));
-}
+    #[test]
+    fn values_outside_the_q7_8_range_are_errors_not_saturations() {
+        // i16::MAX / 256 == 127.99609375; i16::MIN / 256 == -128.0.
+        assert_eq!(q7_8(127.996_093_75), Ok(i16::MAX));
+        assert_eq!(q7_8(-128.0), Ok(i16::MIN));
 
-#[test]
-fn the_quantised_pair_reaches_the_loudness_block_without_a_float() {
-    // The join between the float→fixed path and the wire model. Any call site
-    // scaling by 256 and casting for itself would be a second rounding rule.
-    let integrated = lufs_to_q7_8(-53.644_531_25).unwrap_or(Q7_8::from_raw(0));
-    let digital_peak = lufs_to_q7_8(-50.308_593_75).unwrap_or(Q7_8::from_raw(0));
-    let loudness = Loudness::from_q7_8(integrated, digital_peak);
+        assert_eq!(q7_8(128.0), Err(ErrorKind::LoudnessOutOfRange));
+        assert_eq!(q7_8(-128.005), Err(ErrorKind::LoudnessOutOfRange));
+        assert_eq!(q7_8(1.0e30), Err(ErrorKind::LoudnessOutOfRange));
+        assert_eq!(q7_8(-1.0e30), Err(ErrorKind::LoudnessOutOfRange));
+    }
 
-    assert_eq!(loudness, Loudness::new(-13733, -12879));
-    assert_eq!(loudness.info_type(), 0);
+    #[test]
+    fn the_quantised_pair_reaches_the_loudness_block_without_a_float() {
+        // The join between the float→fixed path and the wire model. Any call site
+        // scaling by 256 and casting for itself would be a second rounding rule.
+        let integrated = lufs_to_q7_8(-53.644_531_25).unwrap_or(Q7_8::from_raw(0));
+        let digital_peak = lufs_to_q7_8(-50.308_593_75).unwrap_or(Q7_8::from_raw(0));
+        let loudness = Loudness::from_q7_8(integrated, digital_peak);
+
+        assert_eq!(loudness, Loudness::new(-13733, -12879));
+        assert_eq!(loudness.info_type(), 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

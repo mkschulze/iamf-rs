@@ -117,9 +117,10 @@ pub fn lufs_to_q7_8(lufs: f64) -> Result<Q7_8> {
 
     // Exact: 256 is a power of two, so this only adjusts the exponent.
     let scaled = lufs * 256.0;
-    // STUB(GREEN): truncates toward zero — exactly the `as i16` behaviour
-    // PROF-03 forbids — so the tie cases fail while the exact ones pass.
-    let rounded = scaled.trunc();
+    // The IEEE-754 default rounding mode, specified bit for bit. Not a
+    // transcendental, and deliberately NOT on clippy.toml's banned list —
+    // adding it there would break PROF-03 for no gain.
+    let rounded = scaled.round_ties_even();
 
     // Range-checked BEFORE the conversion, so out-of-range is a typed error
     // rather than whatever a saturating cast happens to produce.
