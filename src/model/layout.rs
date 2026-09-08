@@ -113,6 +113,38 @@ impl LoudspeakerLayout {
         }
     }
 
+    /// How many channels this layout carries, or `None` for a layout whose
+    /// channel count this spec version does not fix.
+    ///
+    /// Counted from the reference header's **own channel-label comments**,
+    /// quoted verbatim beside each arm — the labels are the definition, so
+    /// counting them is a transcription rather than a derivation. Note
+    /// `kLayout3_1_2_ch`'s comment contains a stray double slash
+    /// (`L/C/R//Ltf/Rtf/LFE`); it lists six labels, not seven.
+    ///
+    /// `None` for `Reserved` (no labels are defined) and for `Expanded` (the
+    /// count depends on the `expanded_loudspeaker_layout` byte, which Phase 1
+    /// preserves without interpreting). A caller that needs a number for one of
+    /// those is asking a question the format has not answered, and a guess
+    /// there would select a profile from nothing.
+    // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.h ChannelAudioLayerConfig::LoudspeakerLayout
+    #[must_use]
+    pub const fn channel_count(self) -> Option<u32> {
+        match self {
+            Self::Mono => Some(1),          // C.
+            Self::Stereo => Some(2),        // L/R.
+            Self::Ch5_1 => Some(6),         // L/C/R/Ls/Rs/LFE.
+            Self::Ch5_1_2 => Some(8),       // L/C/R/Ls/Rs/Ltf/Rtf/LFE.
+            Self::Ch5_1_4 => Some(10),      // L/C/R/Ls/Rs/Ltf/Rtf/Ltr/Rtr/LFE.
+            Self::Ch7_1 => Some(8),         // L/C/R/Lss/Rss/Lrs/Rrs/LFE.
+            Self::Ch7_1_2 => Some(10),      // + Ltf/Rtf.
+            Self::Ch7_1_4 => Some(12),      // + Ltf/Rtf/Ltb/Rtb.
+            Self::Ch3_1_2 => Some(6),       // L/C/R/Ltf/Rtf/LFE.
+            Self::Binaural => Some(2),      // L/R.
+            Self::Reserved(_) | Self::Expanded(_) => None,
+        }
+    }
+
     /// The `expanded_loudspeaker_layout` byte this layout carries, if any.
     #[must_use]
     pub const fn expanded(self) -> Option<ExpandedLoudspeakerLayout> {
@@ -251,6 +283,17 @@ pub enum AmbisonicsConfig {
 }
 
 impl AmbisonicsConfig {
+    /// `output_channel_count`, or `None` for a reserved mode — the reference
+    /// reads no fields at all for one, so there is no count to report.
+    #[must_use]
+    pub const fn output_channel_count(&self) -> Option<u8> {
+        match self {
+            Self::Mono(config) => Some(config.output_channel_count),
+            Self::Projection(config) => Some(config.output_channel_count),
+            Self::Reserved { .. } => None,
+        }
+    }
+
     /// The `ambisonics_mode` uleb128 that precedes this config.
     #[must_use]
     pub const fn mode(&self) -> u32 {

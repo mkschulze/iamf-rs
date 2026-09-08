@@ -17,6 +17,9 @@
 //! breaks the four-target byte-identity guarantee.
 
 pub mod layout;
+pub mod profile;
+
+pub use profile::{Profile, select_minimum_profile};
 
 use crate::bits::BitWriter;
 use crate::error::{Finding, Location, Result};
