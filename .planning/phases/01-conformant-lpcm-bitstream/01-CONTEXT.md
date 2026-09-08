@@ -220,6 +220,18 @@ Parallax-facing API surface (Phase 4).
   DESC-08's ascending-ID property would no longer be what is observed. Accepted cost: two
   elements push the minimum profile Simple → **Base**, which PROF-02 must exercise anyway.
   Full evidence in `CONFORMANCE-GATE.md` § Experiment 2. **Plan 01-08 inherits two fixtures.**
+  — **AMENDED AGAIN 2026-09-08 (plan 01-08 Task 1, the A1 gating probe).** The
+  sample-identity fixture is 24-bit **little**-endian, not big-endian, and a third
+  small stereo **16-bit big-endian** fixture carries DESC-03's endianness-sense
+  sample identity. Reason: `libiamf@v1.1.0`'s `reads24be`
+  (`code/src/iamf_dec/bitstream.c:206-210`) calls `readu16le` where `readu16be` was
+  meant, transposing the top two bytes of every 24-bit big-endian sample — so no
+  conformant encoder can produce a 24-bit big-endian file that decoder reads
+  correctly. 595 of 600 samples came back wrong, and all 600 are exactly explained
+  by that code. 24-bit LE and 16-bit BE each round-trip with **zero** differing
+  samples. Waiver W-1 in `CONFORMANCE-GATE.md` records the clause, the attempt, the
+  cause, the weaker properties asserted instead, and an *executable* restoration
+  condition. **Plan 01-08 inherits three fixtures.**
   — **Research item for plan 01-02 — EXECUTED 2026-09-08, see the amendment above:** confirm `iamf-tools`' strict parser accepts a Codec Config
   that no Audio Element references. If it does not, fall back to differing the two configs and
   having the element use whichever is legal.

@@ -50,8 +50,9 @@ archaeology, and **no waiver is available for it**. Anyone opening one must
 first explain why the published textproto is insufficient.
 
 Note that `test_000003.iamf` is stereo, 16 kHz, 16-bit little-endian — it is
-**not** the D-18 Phase 1 fixture (5.1, 48 kHz, 24-bit big-endian). CONF-08 and
-CONF-02..05 are two different files. Do not conflate them.
+**not** the D-18 Phase 1 fixture (5.1, 48 kHz, 24-bit; see Experiment 3 for why
+its endianness is little and not big). CONF-08 and CONF-02..05 are two different
+files. Do not conflate them.
 
 ### The descriptor prologue is **120 bytes, not 118**
 
@@ -423,9 +424,166 @@ sequence-level parser.
 Assumption A4's status in `01-RESEARCH.md` moves from `[CITED]` to
 `[VERIFIED-FROM-CODE: iamf-tools@v2.1.0 iamf/cli/temporal_unit_view.cc:128-164]`.
 
+### Experiment 3 — research assumption A1: does a 24-bit round trip survive the reference exactly? (EXECUTED, 2026-09-08)
+
+Research's highest-risk `[ASSUMED]` claim, and plan 01-08's **gating** first task:
+the empirical proof that `iamf_decoder_plane2stride_out`'s float→int conversion is
+exact was run at **16 bit**, and D-18 chose 24-bit **big-endian** specifically to
+cover DESC-03's endianness sense. It ran before the fixture was frozen, because the
+golden hash, the annotated dump and the diff ledger are all derived from the fixture.
+
+**A1 is REFUTED — and not where it was expected.** The output conversion is exact.
+The *input* read is not.
+
+```c
+/* libiamf@v1.1.0 code/src/iamf_dec/bitstream.c:202-210 */
+uint32_t readu24be(uint8_t *data, int offset) {
+  return readu16be(data, offset) << 8 | data[offset + 2];   /* correct */
+}
+
+int reads24be(uint8_t *data, int offset) {
+  uint32_t ret = readu16le(data, offset) << 8 | data[offset + 2];
+  /*             ^^^^^^^^^ readu16be was meant */
+  int iret = ret << 8;
+  return (iret >> 8);
+}
+```
+
+`readu16le(data, offset) << 8 | data[offset + 2]` composes `b0<<8 | b1<<16 | b2`
+where big-endian means `b0<<16 | b1<<8 | b2`, so **the top two bytes of every
+24-bit big-endian sample are transposed**. `IAMF_pcm_decoder.c:57-61` selects
+`reads24be` for exactly `sample_size == 24 && !flags`, so nothing else is affected:
+`reads16be` uses `readu16be`, `reads24le`/`reads16le`/`reads32le` use `readu16le`,
+and `reads32be` uses `readu32be`. All of those are correct.
+`[VERIFIED-FROM-CODE: libiamf@v1.1.0 code/src/iamf_dec/bitstream.c:184-228;
+code/src/iamf_dec/pcm/IAMF_pcm_decoder.c:52-67]`
+
+**Three probes, all executed, all now committed as tests in `tests/conformance.rs`.**
+Each encodes a stereo 48 kHz fixture of 300 sample frames — a deliberate
+non-multiple of `num_samples_per_frame` 128, so the final frame carries
+`trim_at_end = 84` — through the real `SequenceWriter`, with a per-channel ramp
+capped at half full scale (−6 dBFS), and decodes it twice.
+
+| probe | sample format | decoded frames | differing samples | limiter delta |
+|---|---|---:|---:|---:|
+| `probe_24bit_little_endian_round_trips_exactly` | 24-bit LE | 300 of 300 | **0 of 600** | 0 |
+| `probe_16bit_big_endian_round_trips_exactly` | 16-bit BE | 300 of 300 | **0 of 600** | 0 |
+| `probe_24bit_big_endian_hits_the_upstream_reads24be_defect` | 24-bit BE | 300 of 300 | **595 of 600** | 600 |
+
+Verbatim, from `cargo test --test conformance -- --nocapture --test-threads=1` with
+`IAMF_REF_DECODER` pointing at the pinned `iamfdec`:
+
+```
+A1 RESULT (16-bit BE): 300 frames in, 300 out, 0 of 600 samples differ, limiter delta 0
+A1 RESULT (24-bit BE): 300 frames in, 300 out, 595 of 600 samples differ, limiter delta 600
+probe24be limiter delta 600 (expected non-zero: the misread values exceed -1 dBTP)
+A1 RESULT (24-bit LE): 300 frames in, 300 out, 0 of 600 samples differ, limiter delta 0
+```
+
+The exact command each probe runs, as printed:
+
+```sh
+"$IAMF_REF_DECODER" -i0 -o3 <out>.nolimiter.wav -r 48000 -s0 -d <16|24> \
+  -disable_limiter <in>.iamf
+"$IAMF_REF_DECODER" -i0 -o3 <out>.limiter.wav    -r 48000 -s0 -d <16|24> <in>.iamf
+```
+
+**Four things this establishes, each load-bearing.**
+
+1. **The 24-bit depth itself is exact.** 24-bit little-endian round-trips with zero
+   differing samples, so `scale_i2f = 1 << 23`, `FLOAT2INT24`'s
+   `lrintf(x * 8388608.f)` and the three-byte little-endian write in
+   `iamf_decoder_plane2stride_out` are all fine. A1's *stated* risk — float→int
+   rounding — was not the problem.
+2. **Big-endian is exact at 16 bits.** So `sample_format_flags == 0` is evaluable by
+   the reference; only its 24-bit read is not.
+3. **The failure is diagnosed, not merely observed.** All 600 decoded samples of the
+   24-bit big-endian run equal what the defective `reads24be` produces from the bytes
+   we wrote — asserted in `probe_24bit_big_endian_hits_the_upstream_reads24be_defect`.
+   That proves our encoder wrote correct big-endian bytes and the reference misread
+   them, which is the opposite conclusion from "our 24-bit big-endian writer is
+   broken", and it is the conclusion a bare "the PCM differs" would not have
+   supported. Only 595 of 600 *differ* because a sample whose top two bytes are equal
+   is invariant under a transposition — which is also why a quiet or slowly-varying
+   fixture would have hidden this entirely.
+4. **The limiter delta of 600 is a consequence, not a fixture defect.** The input
+   peaks at −6 dBFS; the *misread* values do not, so the limiter engages on samples
+   that are already wrong. `assert_limiter_is_transparent` is therefore asserted by
+   the callers that expect exactness and deliberately not inside the shared
+   round-trip helper — otherwise this case would have reported "the fixture is too
+   loud", sending a reader to lower the amplitude instead of finding the misread.
+
+**Consequence for the fixture design — decided here, before the freeze.**
+
+| fixture | shape | why |
+|---|---|---|
+| sample-identity | one 5.1 Audio Element, one Codec Config, 48 kHz, **24-bit little-endian** | CONF-02/03/05. Keeps the whole of D-18 except the endianness sense: 5.1 BCG packing, three-byte samples, non-multiple length, `trim_at_end > 0` with `trim_at_start = 0` |
+| endianness | one stereo Audio Element, 48 kHz, **16-bit big-endian** | DESC-03's `sample_format_flags == 0` sample identity, kept rather than lost, at the depth the reference can evaluate |
+| structure-only | two Audio Elements | CONF-04, per Experiment 2's adopted fallback (b) — unchanged by this experiment |
+
+**What is retained and what is lost, stated plainly.** DESC-03's endianness *sense*
+is retained: at 16 bits through the reference, and at 24 bits by hand-computed byte
+vectors (`store_sample_writes_the_declared_byte_order` asserts that `0x123456` stores
+as `12 34 56` big-endian and `56 34 12` little-endian, and that `-1` stores as
+`FF FF FF`) — evidence that involves no permissive reader at all and is therefore
+stronger than the round trip it replaces. What is lost is exactly one thing: the
+*combination* of a three-byte sample and big-endian order, verified end to end
+through `libiamf`. That is the waiver below.
+
+**What was NOT done.** The 24-bit big-endian combination was not silently dropped,
+no tolerance window was introduced, and nothing in the harness compensates for the
+transposition. The defect probe asserts that the misread is *complete and exactly
+explained*; it never applies the transposition to make a comparison pass.
+
+
 ## Waivers
 
-*(none)*
+### W-1 — CONF-05 for the 24-bit **big-endian** sample format (opened 2026-09-08, plan 01-08)
+
+1. **The clause.** CONF-05 — "`libiamf` decodes the file and the PCM is
+   sample-identical" — as applied to a fixture with `sample_size == 24` and
+   `sample_format_flags == 0` (big-endian). CONF-05 itself is **not** waived: it is
+   asserted in full on the 24-bit little-endian sample-identity fixture and again on
+   the 16-bit big-endian endianness fixture. What cannot be evaluated is the
+   combination.
+
+2. **What was attempted.** A stereo 48 kHz 24-bit big-endian file, written through
+   the real `SequenceWriter` with a −6 dBFS per-channel ramp and 300 sample frames,
+   decoded by the pinned `iamfdec` with `-r 48000 -s0 -d 24 -disable_limiter`. The
+   decode succeeded: 300 of 300 sample frames, correct channel count, structurally
+   sound. 595 of 600 samples came back wrong. See Experiment 3 for the full run.
+
+3. **Why it cannot be met.** `libiamf@v1.1.0`'s `reads24be`
+   (`code/src/iamf_dec/bitstream.c:206-210`) calls `readu16le` where `readu16be` was
+   meant, transposing the top two bytes of every 24-bit big-endian sample. This is a
+   defect in the pinned reference, not in this crate: every one of the 600 decoded
+   samples equals what that code computes from the bytes we wrote, which is asserted
+   by `probe_24bit_big_endian_hits_the_upstream_reads24be_defect`. No conformant
+   encoder can produce a 24-bit big-endian file that this decoder reads correctly, so
+   the clause is unevaluable rather than failing.
+
+4. **What weaker property is asserted instead.** Three, together covering both halves
+   of what 24-bit big-endian was chosen for:
+   - **24-bit depth, end to end:** `probe_24bit_little_endian_round_trips_exactly`
+     and the sample-identity fixture — zero differing samples through the reference.
+   - **Big-endian sense, end to end:** `probe_16bit_big_endian_round_trips_exactly`
+     and the endianness fixture — zero differing samples through the reference.
+   - **24-bit big-endian storage, by hand:** `store_sample_writes_the_declared_byte_order`
+     asserts the exact three bytes for a positive and a negative sample in both
+     orders, against values computed by hand and not captured from our own output.
+   - **The defect is bounded:** the misread is asserted to be *complete* — all 600
+     samples explained — so "24-bit big-endian is wrong somewhere else too" is ruled
+     out rather than assumed.
+
+5. **What would restore it.** An upstream fix to `reads24be`, and `REFERENCES.md`'s
+   `libiamf` pin moving to a revision carrying it. **This condition is executable:**
+   `probe_24bit_big_endian_hits_the_upstream_reads24be_defect` asserts
+   `trip.differing > 0`, so the day the round trip becomes exact that test fails with
+   a message pointing back at this waiver. Remove this entry and move the
+   sample-identity fixture to 24-bit big-endian, which is what D-18 originally
+   specified.
+
+
 
 Any reduction to the four-target byte-identity matrix — for example dropping
 `x86_64-apple-darwin` if GitHub retires its last x86_64 macOS runner image — is
