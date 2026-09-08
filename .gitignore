@@ -28,3 +28,7 @@ target
 # Reference implementation checkouts and the D-13 runtime manifest
 /.reference/
 /.reference-manifest.json
+
+# GSD session-scoped runtime state (PID/session-id locks, dispatch sentinels)
+/.gsd/
+/.planning/milestone.lock
