@@ -39,6 +39,11 @@ use crate::obu::{AudioElement, AudioElementType};
 /// profile or goes through [`select_minimum_profile`]. A default would let a
 /// caller ship Simple by accident for a configuration that needs Base, which
 /// `libiamf` refuses to decode at all.
+///
+/// ```compile_fail
+/// // There is no Default impl, so this does not compile.
+/// let _profile: iamf::model::Profile = Default::default();
+/// ```
 // ref: iamf-tools@v2.1.0 iamf/obu/ia_sequence_header.h ProfileVersion
 // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_types.h IAMF_PROFILE_COUNT
 #[non_exhaustive]
@@ -145,9 +150,20 @@ pub fn select_minimum_profile(elements: &[&AudioElement]) -> Result<(Profile, Pr
         ));
     }
 
-    // STUB(GREEN): every configuration answers Simple.
-    let _ = (element_count, channel_count);
-    let profile = Profile::Simple;
+    // The tiers, in ascending order. A configuration takes the first one that
+    // permits BOTH its element count and its channel count — which is what
+    // makes two stereo elements Base even though four channels would fit
+    // Simple twice over.
+    let profile =
+        if element_count <= SIMPLE_MAX_AUDIO_ELEMENTS && channel_count <= SIMPLE_MAX_CHANNELS {
+            Profile::Simple
+        } else if element_count <= BASE_MAX_AUDIO_ELEMENTS && channel_count <= BASE_MAX_CHANNELS {
+            Profile::Base
+        } else {
+            // Both Base-Enhanced ceilings were checked above, so this arm is
+            // reached only when the configuration fits them.
+            Profile::BaseEnhanced
+        };
 
     // Equal, always. The ordering rule can then never be tripped.
     Ok((profile, profile))

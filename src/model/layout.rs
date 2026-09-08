@@ -131,16 +131,16 @@ impl LoudspeakerLayout {
     #[must_use]
     pub const fn channel_count(self) -> Option<u32> {
         match self {
-            Self::Mono => Some(1),          // C.
-            Self::Stereo => Some(2),        // L/R.
-            Self::Ch5_1 => Some(6),         // L/C/R/Ls/Rs/LFE.
-            Self::Ch5_1_2 => Some(8),       // L/C/R/Ls/Rs/Ltf/Rtf/LFE.
-            Self::Ch5_1_4 => Some(10),      // L/C/R/Ls/Rs/Ltf/Rtf/Ltr/Rtr/LFE.
-            Self::Ch7_1 => Some(8),         // L/C/R/Lss/Rss/Lrs/Rrs/LFE.
-            Self::Ch7_1_2 => Some(10),      // + Ltf/Rtf.
-            Self::Ch7_1_4 => Some(12),      // + Ltf/Rtf/Ltb/Rtb.
-            Self::Ch3_1_2 => Some(6),       // L/C/R/Ltf/Rtf/LFE.
-            Self::Binaural => Some(2),      // L/R.
+            Self::Mono => Some(1),     // C.
+            Self::Stereo => Some(2),   // L/R.
+            Self::Ch5_1 => Some(6),    // L/C/R/Ls/Rs/LFE.
+            Self::Ch5_1_2 => Some(8),  // L/C/R/Ls/Rs/Ltf/Rtf/LFE.
+            Self::Ch5_1_4 => Some(10), // L/C/R/Ls/Rs/Ltf/Rtf/Ltr/Rtr/LFE.
+            Self::Ch7_1 => Some(8),    // L/C/R/Lss/Rss/Lrs/Rrs/LFE.
+            Self::Ch7_1_2 => Some(10), // + Ltf/Rtf.
+            Self::Ch7_1_4 => Some(12), // + Ltf/Rtf/Ltb/Rtb.
+            Self::Ch3_1_2 => Some(6),  // L/C/R/Ltf/Rtf/LFE.
+            Self::Binaural => Some(2), // L/R.
             Self::Reserved(_) | Self::Expanded(_) => None,
         }
     }

@@ -14,14 +14,15 @@
 //! passes the Audio Elements of one Mix Presentation.
 
 use iamf::error::ErrorKind;
-use iamf::model::layout::LoudspeakerLayout;
+use iamf::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig, LoudspeakerLayout};
 use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
 };
 use iamf::model::{Profile, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, ChannelAudioLayerConfig, IaSequenceHeader, ScalableChannelLayoutConfig,
+    AudioElement, AudioElementType, ChannelAudioLayerConfig, IaSequenceHeader,
+    ScalableChannelLayoutConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,9 @@ fn element(id: u32, layout: LoudspeakerLayout) -> AudioElement {
 /// `n` distinct stereo Audio Elements — the cheapest way to vary the element
 /// count without also varying the channel count faster than the limits.
 fn stereo_elements(n: u32) -> Vec<AudioElement> {
-    (0..n).map(|i| element(i, LoudspeakerLayout::Stereo)).collect()
+    (0..n)
+        .map(|i| element(i, LoudspeakerLayout::Stereo))
+        .collect()
 }
 
 /// Select the minimum profile for these elements, as one Mix Presentation.
@@ -86,16 +89,21 @@ fn base_enhanced_is_two_and_the_draft_v2_profiles_are_absent() {
 
 #[test]
 fn profile_has_no_default_impl() {
-    // A compile-time claim, so it is asserted the only way a test can: by
-    // naming the trait bound a `Default` impl would satisfy. `assert_not_impl`
-    // needs a dependency; this needs none.
-    fn is_default<T: Default>() -> bool {
-        true
-    }
-    assert!(is_default::<u8>(), "the helper detects a real Default impl");
-    // `is_default::<Profile>()` does not compile. A default would let a caller
-    // ship Simple by accident for a configuration that needs Base, which
-    // libiamf refuses to decode at all.
+    // A compile-time claim, proved by a `compile_fail` doctest on `Profile`
+    // rather than at run time — `Default::default()` for a type that has no
+    // impl is a compile error, not a value a test can inspect. This test
+    // records the *reason*, which is the part that rots: a default would let a
+    // caller ship Simple by accident for a configuration that needs Base, and
+    // libiamf refuses to decode that at all.
+    //
+    // What can be checked here is that the two ways of getting a Profile both
+    // demand a choice: `from_wire` takes a byte, `select_minimum_profile` takes
+    // a configuration. Neither has a zero-argument form.
+    assert_eq!(Profile::from_wire(1), Profile::Base);
+    assert_eq!(
+        select(&stereo_elements(2)).map(|(p, _)| p),
+        Ok(Profile::Base)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +127,7 @@ fn two_audio_elements_select_base() {
 #[test]
 fn three_audio_elements_select_base_enhanced() {
     let elements = stereo_elements(3);
-    assert_eq!(
-        select(&elements).map(|(p, _)| p),
-        Ok(Profile::BaseEnhanced)
-    );
+    assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::BaseEnhanced));
 }
 
 #[test]
@@ -133,10 +138,7 @@ fn twenty_eight_audio_elements_select_base_enhanced() {
     let elements: Vec<AudioElement> = (0..28)
         .map(|i| element(i, LoudspeakerLayout::Mono))
         .collect();
-    assert_eq!(
-        select(&elements).map(|(p, _)| p),
-        Ok(Profile::BaseEnhanced)
-    );
+    assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::BaseEnhanced));
 }
 
 #[test]
@@ -152,30 +154,33 @@ fn twenty_nine_audio_elements_are_a_typed_error() {
 // PROF-02 — the channel-count limits, each with one step either side
 // ---------------------------------------------------------------------------
 
-/// One element carrying exactly `channels` channels, built from mono elements
-/// where a single layout cannot supply the number.
+/// **One** Audio Element carrying exactly `channels` channels.
 ///
-/// The channel limits are per Mix Presentation, so the count is the *sum*
-/// across elements — but the element limits would fire first for large counts.
-/// Every case below therefore stays inside the element ceiling.
-fn elements_totalling(channels: u32) -> Vec<AudioElement> {
-    // 7.1.4 is 12 channels, the largest single modelled layout. Two of them is
-    // 24; adding mono elements fills the rest. That is 2 + n elements, which
-    // stays under 28 for every count this test file uses.
-    let mut elements = Vec::new();
-    let mut remaining = channels;
-    let mut next_id = 0_u32;
-    while remaining >= 12 && elements.len() < 2 {
-        elements.push(element(next_id, LoudspeakerLayout::Ch7_1_4));
-        next_id = next_id.saturating_add(1);
-        remaining = remaining.saturating_sub(12);
+/// Built scene-based, because `output_channel_count` is a plain `u8` and can
+/// therefore hit any count — the modelled loudspeaker layouts top out at 12
+/// (7.1.4), so 17 channels is not expressible as one channel-based element at
+/// all. Using one element isolates the **channel** limit from the **element**
+/// limit; the element axis is varied separately by `stereo_elements`.
+fn scene_element(id: u32, channels: u8) -> AudioElement {
+    AudioElement {
+        audio_element_id: id,
+        audio_element_type: AudioElementType::scene_based_for_test(AmbisonicsConfig::Mono(
+            AmbisonicsMonoConfig {
+                output_channel_count: channels,
+                substream_count: channels,
+                channel_mapping: (0..channels).collect(),
+            },
+        )),
+        codec_config_id: 200,
+        audio_substream_ids: (0..u32::from(channels)).collect(),
+        params: Vec::new(),
+        trailing: Vec::new(),
     }
-    while remaining > 0 {
-        elements.push(element(next_id, LoudspeakerLayout::Mono));
-        next_id = next_id.saturating_add(1);
-        remaining = remaining.saturating_sub(1);
-    }
-    elements
+}
+
+/// One element totalling `channels` channels.
+fn elements_totalling(channels: u8) -> Vec<AudioElement> {
+    vec![scene_element(0, channels)]
 }
 
 #[test]
@@ -185,10 +190,8 @@ fn a_single_five_one_six_channel_element_selects_simple() {
     // (<= 16).
     let elements = vec![element(0, LoudspeakerLayout::Ch5_1)];
     assert_eq!(
-        elements
-            .first()
-            .and_then(|e| e.audio_substream_ids.len().try_into().ok()),
-        Some(6_usize),
+        elements.first().map(|e| e.audio_substream_ids.len()),
+        Some(6),
         "the 5.1 element carries six channels"
     );
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::Simple));
@@ -197,10 +200,14 @@ fn a_single_five_one_six_channel_element_selects_simple() {
 #[test]
 fn sixteen_channels_in_one_element_select_simple() {
     assert_eq!(SIMPLE_MAX_CHANNELS, 16);
-    // One 7.1.4 element is 12 channels; 16 needs more than one element, and
-    // more than one element is Base regardless. So the 16-channel boundary is
-    // exercised at one element by the largest modelled layout that fits, and
-    // the sum-across-elements form is covered by the 17/18/19 cases below.
+    let elements = elements_totalling(16);
+    assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::Simple));
+}
+
+#[test]
+fn twelve_channels_in_one_channel_based_element_select_simple() {
+    // The largest modelled loudspeaker layout, through the channel-based path
+    // rather than the scene-based one the boundary cases use.
     let elements = vec![element(0, LoudspeakerLayout::Ch7_1_4)];
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::Simple));
 }
@@ -221,20 +228,14 @@ fn eighteen_channels_select_base() {
 #[test]
 fn nineteen_channels_select_base_enhanced() {
     let elements = elements_totalling(19);
-    assert_eq!(
-        select(&elements).map(|(p, _)| p),
-        Ok(Profile::BaseEnhanced)
-    );
+    assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::BaseEnhanced));
 }
 
 #[test]
 fn twenty_eight_channels_select_base_enhanced() {
     assert_eq!(BASE_ENHANCED_MAX_CHANNELS, 28);
     let elements = elements_totalling(28);
-    assert_eq!(
-        select(&elements).map(|(p, _)| p),
-        Ok(Profile::BaseEnhanced)
-    );
+    assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::BaseEnhanced));
 }
 
 #[test]
@@ -252,10 +253,8 @@ fn twenty_nine_channels_are_a_typed_error() {
 fn selection_never_returns_additional_below_primary() {
     for count in 1..=4_u32 {
         let elements = stereo_elements(count);
-        let (primary, additional) = select(&elements).unwrap_or((
-            Profile::Reserved(255),
-            Profile::Reserved(0),
-        ));
+        let (primary, additional) =
+            select(&elements).unwrap_or((Profile::Reserved(255), Profile::Reserved(0)));
         assert!(
             additional >= primary,
             "libiamf's _valid_profile rejects the whole sequence otherwise"
@@ -284,6 +283,17 @@ fn a_manually_inverted_profile_pair_is_a_finding_and_a_write_rejection() {
         written.map_err(|e| e.kind().clone()),
         Err(ErrorKind::AdditionalProfileBelowPrimary)
     );
+}
+
+#[test]
+fn channel_counts_are_summed_across_elements_with_checked_addition() {
+    // T-01-38. Two elements of 255 channels is 510 — far over every ceiling.
+    // A wrapping `u8` or `u16` sum could land back inside a lower profile,
+    // which is the failure mode where the header is accepted and the content
+    // is then mis-handled. `checked_add` on a `u32` cannot.
+    let elements = vec![scene_element(0, 255), scene_element(1, 255)];
+    let err = select(&elements).expect_err("510 channels exceed every profile");
+    assert_eq!(err.kind(), &ErrorKind::ChannelCountExceedsProfile);
 }
 
 #[test]
