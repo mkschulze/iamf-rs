@@ -1,10 +1,21 @@
 //! The published error surface (D-08 / D-09).
 //!
-//! **RED-phase stub.** The type *shape* is here so `tests/error_shape.rs`
-//! compiles and can assert on it; the *behaviour* is not. `Display` renders
-//! the kind's message and nothing else, so every test that asserts a position
-//! reaches the rendered string fails. The compile-time size budget is not
-//! installed yet either. Both land in the GREEN commit.
+//! One [`Error`] type everywhere, carrying its position exactly once in a
+//! [`Location`] rather than repeating a byte `offset` into every
+//! [`ErrorKind`] variant. That is GUARD-13's intent met structurally: it keeps
+//! the three error sources — read, write and validate — distinguishable, gives
+//! "no position" a representation, and keeps `size_of::<Error>()` inside its
+//! budget as variants accumulate across four milestones.
+//!
+//! [`Finding`] is the validate-side counterpart. `validate()` returns
+//! `Vec<Finding>`, never `Result<(), Error>`: one run tells an import adapter
+//! everything wrong with a foreign file, which is what it needs to explain a
+//! rejection rather than approximate one.
+//!
+//! These types are part of the contract with Parallax's import adapter.
+//! Adding an `ErrorKind` or `Location` variant is additive under
+//! `#[non_exhaustive]`; changing an existing one is a breaking change across
+//! two repositories.
 
 use core::fmt;
 
@@ -94,14 +105,42 @@ impl Error {
 }
 
 impl fmt::Display for Error {
-    // RED-phase stub: renders the kind only. The position fragment is the
-    // behaviour under test and does not exist yet.
+    /// The kind's message, followed by a position fragment when there is a
+    /// position. Offsets render in decimal and hex because a fuzz report is
+    /// read next to a hex dump.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.kind)
+        write!(f, "{}", self.kind)?;
+        match self.at {
+            Location::InputOffset(offset) => {
+                write!(f, " at input offset {offset} (0x{offset:x})")
+            }
+            Location::OutputOffset(offset) => {
+                write!(f, " at output offset {offset} (0x{offset:x})")
+            }
+            Location::Field(path) => write!(f, " at field `{path}`"),
+            Location::Unlocated => Ok(()),
+        }
     }
 }
 
-impl core::error::Error for Error {}
+impl core::error::Error for Error {
+    /// Always `None`. There are no `#[from]` conversions in this crate — a
+    /// blanket `From` loses the offset, so conversion happens at the call site
+    /// where the position is known (D-08).
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        None
+    }
+}
+
+/// `Result<T, Error>` is returned from every primitive in the crate, so the
+/// error's size is a cost every call pays. Thirty-two bytes is the budget:
+/// `Location` is 24 (a `&'static str` is a fat pointer, plus a discriminant)
+/// and `ErrorKind`'s largest payload is a `u8`.
+///
+/// This is a `const` assertion, not a test, so a future variant that wants to
+/// carry a `String` or a `Vec` fails the **build** rather than the suite. Box
+/// such a payload.
+const _: () = assert!(size_of::<Error>() <= 32);
 
 /// One thing `validate()` found wrong (D-09).
 #[derive(Debug, Clone, PartialEq, Eq)]
