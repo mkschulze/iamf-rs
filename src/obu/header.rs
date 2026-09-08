@@ -338,17 +338,29 @@ pub(crate) fn obu_size_for(after: &BitWriter, payload_len: usize) -> Result<u32>
     // The size field's own length depends on the value it carries, so the bound
     // is computed from the candidate rather than from a constant.
     let size_of_obu_size = crate::bits::minimal_uleb128_len(obu_size);
+    validate_obu_size(
+        obu_size,
+        size_of_obu_size,
+        Location::OutputOffset(0),
+    )?;
+    Ok(obu_size)
+}
+
+pub(crate) fn validate_obu_size(
+    obu_size: u32,
+    size_of_obu_size: usize,
+    at: Location,
+) -> Result<()> {
+    let obu_size = usize::try_from(obu_size)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, at))?;
     let max = ENTIRE_OBU_SIZE_MAX
         .checked_sub(1)
         .and_then(|v| v.checked_sub(size_of_obu_size))
-        .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, Location::OutputOffset(0)))?;
-    if total > max {
-        return Err(Error::new(
-            ErrorKind::ObuTooLarge,
-            Location::OutputOffset(0),
-        ));
+        .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, at))?;
+    if obu_size > max {
+        return Err(Error::new(ErrorKind::ObuTooLarge, at));
     }
-    Ok(obu_size)
+    Ok(())
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ValidateAndWrite
@@ -410,7 +422,18 @@ pub(crate) fn read_obu_header_parts(r: &mut BitCursor<'_>) -> Result<(ObuHeader,
     let obu_redundant_copy = r.read_bool()?;
     let trimming_status_flag = r.read_bool()?;
     let extension_flag = r.read_bool()?;
+    let size_start = r.byte_position();
     let obu_size = r.read_uleb128()?;
+    let size_of_obu_size = r
+        .byte_position()
+        .checked_sub(size_start)
+        .and_then(|size| usize::try_from(size).ok())
+        .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(size_start)))?;
+    validate_obu_size(
+        obu_size,
+        size_of_obu_size,
+        Location::InputOffset(size_start.saturating_sub(1)),
+    )?;
     let after_size_start = r.byte_position();
 
     // The reader is deliberately NOT stricter than the reference. It does not

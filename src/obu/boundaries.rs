@@ -27,7 +27,7 @@
 
 use crate::bits::BitCursor;
 use crate::error::{Error, ErrorKind, Location, Result};
-use crate::obu::header::ENTIRE_OBU_SIZE_MAX;
+use crate::obu::header::validate_obu_size;
 
 /// Every OBU start offset in `bytes`, plus the final end offset.
 ///
@@ -79,14 +79,12 @@ pub fn find_obu_boundaries(bytes: &[u8]) -> Result<Vec<usize>> {
         // The ceiling is checked BEFORE the bounds check, so a 2 MiB claim
         // inside a small buffer reports the real defect rather than the
         // consequence of it.
-        let obu_size = usize::try_from(obu_size).unwrap_or(usize::MAX);
-        let max = ENTIRE_OBU_SIZE_MAX
-            .checked_sub(1)
-            .and_then(|v| v.checked_sub(size_of_obu_size))
-            .ok_or_else(|| too_large(position))?;
-        if obu_size > max {
-            return Err(too_large(position));
-        }
+        validate_obu_size(
+            obu_size,
+            size_of_obu_size,
+            Location::InputOffset(offset(position)),
+        )?;
+        let obu_size = usize::try_from(obu_size).map_err(|_| too_large(position))?;
 
         let next = position
             .checked_add(1)

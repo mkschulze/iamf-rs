@@ -250,6 +250,33 @@ fn the_largest_payload_under_the_ceiling_is_accepted() {
     assert_eq!(bytes.len(), LARGEST_PAYLOAD.saturating_add(4));
 }
 
+#[test]
+fn generic_obu_parsing_rejects_an_oversized_claim_before_payload_access() {
+    // obu_size = 2 MiB, encoded in four bytes. The complete input is tiny on
+    // purpose: the ceiling violation must win over the later truncation.
+    let bytes = hex!("f8 80 80 80 01");
+    let mut r = BitCursor::new(&bytes);
+
+    let err = iamf::obu::read_obu_with(&mut r, |_payload| Ok(()))
+        .expect_err("generic parsing applies the same ceiling as the boundary walker");
+
+    assert_eq!(err.kind(), &ErrorKind::ObuTooLarge);
+}
+
+#[test]
+fn generic_obu_parsing_accepts_a_legal_non_minimal_size_field() {
+    // obu_size 1 encoded as the legal fixed-width `81 00`, followed by one
+    // payload byte. Measuring those two bytes is required for the ceiling.
+    let bytes = hex!("f8 81 00 aa");
+    let mut r = BitCursor::new(&bytes);
+
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_unsigned(8))
+        .expect("non-minimal ULEB128 remains accepted");
+
+    assert_eq!(obu.payload, 0xaa);
+    assert_eq!(r.byte_position(), 4);
+}
+
 // ---------------------------------------------------------------------------
 // The extension header (OBU-06)
 // ---------------------------------------------------------------------------
