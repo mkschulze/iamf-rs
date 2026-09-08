@@ -1,24 +1,25 @@
 {
   "version": "1.0",
-  "timestamp": "2026-09-08T22:42:09+02:00",
+  "timestamp": "2026-09-09T00:05:13+02:00",
   "phase": "01",
   "phase_name": "Conformant LPCM Bitstream",
   "phase_dir": ".planning/phases/01-conformant-lpcm-bitstream",
-  "plan": 8,
-  "task": 7,
+  "plan": 9,
+  "task": 0,
   "total_tasks": 7,
-  "status": "gaps_found",
-  "context_summary": "All 8 plans and the code-review gate are complete. Phase-goal verification returned gaps_found (2/5 truths): planning-contract drift and missing current four-target CI evidence block phase closure.",
+  "status": "gap_plans_ready",
+  "context_summary": "All 8 implementation plans and the code-review gate are complete. Phase-goal verification returned gaps_found (2/5 truths), and two verified closure plans now cover contract reconciliation plus branch-appropriate current-candidate CI evidence.",
   "completed_tasks": [
     {"id": 1, "name": "All 8 plans executed (01-01..01-08), each with a SUMMARY.md", "status": "done", "commit": "5f6d5f5"},
     {"id": 2, "name": "Gate: blocking anti-pattern check (no .continue-here.md existed)", "status": "done"},
     {"id": 3, "name": "Gate: aggregate_results — wave table, plan details, issues, security-gate check", "status": "done"},
     {"id": 4, "name": "Gate: execute:post TDD review-checkpoint — tripped, investigated, waived by user", "status": "done", "commit": "ca59aa5"},
     {"id": 5, "name": "Gate: code_review_gate — six findings fixed and independently re-reviewed", "status": "done", "commit": "ab9e0e1"},
-    {"id": 6, "name": "Gate: verify_phase_goal — gaps_found, 2/5 authoritative truths verified", "status": "done", "artifact": ".planning/phases/01-conformant-lpcm-bitstream/01-VERIFICATION.md"}
+    {"id": 6, "name": "Gate: verify_phase_goal — gaps_found, 2/5 authoritative truths verified", "status": "done", "artifact": ".planning/phases/01-conformant-lpcm-bitstream/01-VERIFICATION.md"},
+    {"id": 7, "name": "Plan verification gaps as 01-09 and 01-10", "status": "done", "artifacts": [".planning/phases/01-conformant-lpcm-bitstream/01-09-PLAN.md", ".planning/phases/01-conformant-lpcm-bitstream/01-10-PLAN.md"]}
   ],
   "remaining_tasks": [
-    {"id": 7, "name": "Close verification gaps, re-verify, then update_roadmap + close_phase_todos + delegate_post_completion", "status": "not_started"}
+    {"id": 8, "name": "Execute gap plans 01-09 and 01-10, re-verify, then update_roadmap + close_phase_todos + delegate_post_completion", "status": "not_started"}
   ],
   "blockers": [
     {
@@ -54,6 +55,6 @@
   ],
   "uncommitted_files": [],
   "uncommitted_note": "All source fixes and review/state artifacts are committed. No source code is uncommitted.",
-  "next_action": "Run `/gsd-plan-phase 1 --gaps` to create contract-reconciliation and four-target evidence plans from 01-VERIFICATION.md.",
-  "context_notes": "The core local conformance path is strong: 285 tests, strict Clippy, both reference oracles, zero-byte iamf-tools diff, cargo-deny, 6/6 guard proofs, 55/55 artifacts and 30/30 links passed. Closure is blocked because ROADMAP criteria 2/3 and REQUIREMENTS BITS-01/BITS-07/CONF-11 retain superseded wording, and no complete green four-target CI run exists for current head. Do not mark Phase 01 complete until gap closure and re-verification pass. The standing TDD waiver remains binding."
+  "next_action": "Run `/gsd-execute-phase 1 --gaps-only` to execute verified plans 01-09 and 01-10.",
+  "context_notes": "Plan 01-09 reconciles ROADMAP criteria 2/3 and REQUIREMENTS BITS-01/BITS-07/CONF-11. Plan 01-10 proves one CI-tested candidate using either the normal four-target branch or the strict D-17 three-target waiver branch, and contains an explicit authorization checkpoint before any push or PR mutation. The core local conformance path remains strong: 285 tests, strict Clippy, both reference oracles, zero-byte iamf-tools diff, cargo-deny, 6/6 guard proofs, 55/55 artifacts and 30/30 links passed. Do not mark Phase 01 complete until gap closure and re-verification pass. The standing TDD waiver remains binding."
 }

@@ -4,15 +4,15 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Phase 01 verification found contract-drift and four-target evidence gaps
-last_updated: "2026-09-08T22:42:09+02:00"
-last_activity: 2026-09-08
-last_activity_desc: Phase 01 verification completed — gaps found (2/5 truths verified)
-state_head: b296786
+stopped_at: Phase 01 gap plans 01-09 and 01-10 created and plan-checker verified
+last_updated: "2026-09-09T00:05:13+02:00"
+last_activity: 2026-09-09
+last_activity_desc: Phase 01 verification gaps planned — 2 gap plans in 2 waves
+state_head: f02c5d3
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 8
+  total_plans: 10
   completed_plans: 8
 ---
 
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 8 of 8
-Status: Verification gaps found
-Last activity: 2026-09-08 — Phase 01 verification completed (2/5 truths verified)
+Plan: 8 of 10
+Status: Verification gaps planned
+Last activity: 2026-09-09 — Gap plans 01-09 and 01-10 created and verified
 
-Progress: [██████████] 100% of Phase 01 plans
+Progress: [████████░░] 80% of Phase 01 plans
 
 ## Performance Metrics
 
@@ -111,7 +111,8 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- Execute 01-09 to reconcile the authoritative ROADMAP/REQUIREMENTS contract.
+- Execute 01-10 to obtain branch-appropriate current-candidate CI evidence and re-verify Phase 1.
 
 ### Blockers/Concerns
 
@@ -143,6 +144,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T22:42:09+02:00
-Stopped at: Phase 01 verification found contract-drift and four-target evidence gaps
+Last session: 2026-09-09T00:05:13+02:00
+Stopped at: Phase 01 gap plans 01-09 and 01-10 created and plan-checker verified
 Resume file: .planning/phases/01-conformant-lpcm-bitstream/.continue-here.md

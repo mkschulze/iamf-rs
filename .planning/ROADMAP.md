@@ -45,10 +45,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Research**: Yes — read `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` for payload-level rejection rules before the LPCM path is written; fetch `iamf-tools` tags `v2.0.0`/`v2.1.0` to check whether either is a v1.1.0-exact tree; read AOM Patent License 1.0 §1.2
 **Decisions settled here**: DEC-04 (`iamf-tools` tag) and DEC-05 (payload rejection rules), both before the type model is written. DEC-01 and DEC-02 were **answered by the user on 2026-09-08** and are now implementation, not investigation: pin `SPEC_VERSION = "1.1.0"`, and carry `MIT OR Apache-2.0` into `Cargo.toml` plus the `NOTICE` file (the licence files themselves already landed)
-**Plans**: 8/8 plans executed
+**Plans**: 8/10 plans executed
 
-Plans (8 plans, 8 waves — strictly sequential; each layer genuinely needs the one below, and D-24
-forces 01-01 → 01-02 before any bitstream code):
+Plans (10 plans, 10 waves — the eight implementation waves are complete, followed by two
+strictly ordered verification-gap closure waves):
 
 - [x] 01-01-PLAN.md — Repo scaffolding and every guardrail, each **proven to bite**: `deny.toml` allow-list-only, `clippy.toml` `disallowed-types`/`disallowed-methods`, hardening lints, `rust-toolchain.toml`, `SPEC_VERSION`, `REFERENCES.md` pinned SHAs, `NOTICE`, `PATENTS`, `CONTRIBUTING.md` checkbox, the D-08 error surface, four-target CI matrix
 - [x] 01-02-PLAN.md — External-tooling track on day one: `tools/build-reference.sh` builds `libiamf`+`iamfdec` at the pinned SHA and **self-validates against a file we did not write**, `.reference-manifest.json` asserted at runtime, a vendored reference fixture corpus with a D-14 manifest (no Bazel needed — research correction 6), the digest-pinned `iamf-tools` container, and two recorded experiments
@@ -58,6 +58,8 @@ forces 01-01 → 01-02 before any bitstream code):
 - [x] 01-06-PLAN.md — Time-varying OBUs and LPCM framing: Audio Frame with implicit substream IDs, BCG coupled-pairs-then-mono packing proven three independent ways, final-frame trimming, Temporal Delimiter, Parameter Block with an explicit `ParamDefinition` argument
 - [x] 01-07-PLAN.md — Sequence writer, profile and metadata: the streaming `push_descriptors`/`push_temporal_unit`/`finish` primitive reproducing all 32567 bytes of `test_000003.iamf`, the whole-file wrapper, the profile enum, minimum-profile selection, and the `round_ties_even` Q7.8 helper carrying the single documented float escape
 - [x] 01-08-PLAN.md — `assert_conformant(config, pcm)` and the seven-clause exit gate: the **gating 24-bit probe first** (research assumption A1), the D-18/D-19 fixture, D-20's three golden artifacts, D-12's executable diff ledger, both reference oracles, and the always-on offline layer
+- [ ] 01-09-PLAN.md — Reconcile ROADMAP criteria 2/3 and BITS-01, BITS-07 and CONF-11 with the evidence-backed decisions already implemented, preserving all requirement IDs and traceability
+- [ ] 01-10-PLAN.md — Prove byte identity for an exact CI-tested candidate across the four target paths, with explicit publication authorization, native→Rosetta→D-17 handling for macOS x86_64, durable evidence and fresh phase verification
 
 ### Phase 2: Parser, Round-Trip and Fuzzing
 
