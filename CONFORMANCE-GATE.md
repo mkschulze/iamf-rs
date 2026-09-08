@@ -596,6 +596,47 @@ and that DEC-04's settlement of the `iamf-tools` pin removed most of the
 CONF-06/07 risk, both of which are now demonstrated rather than merely expected.
 
 
+## Cross-target byte-identity evidence (GUARD-09 / ROADMAP criterion 4)
+
+**Outcome:** normal-four-target
+
+**CI-tested candidate SHA:** `5fea02a00d23665353fed8e317d7cb7ab8325694`
+
+- **Workflow run:** [CI run 34287100850](https://github.com/mkschulze/iamf-rs/actions/runs/34287100850)
+- **Run state:** `completed` / `success`
+- **Completed:** 2026-09-08T22:42:13Z
+- **Committed golden SHA-256:** `3e53f10babd78b721d524c0e41fbb0806a5ad37d2f5b4dd247a4336e0be1282c`
+
+The run's `headSha` is the exact candidate above. Every target executed the full
+test suite and then the separately named `Golden fixture reproduces on this target
+(GUARD-09, GUARD-10)` step. A successful named step means that target regenerated
+the IAMF output, matched the committed golden artifact and hash byte-for-byte, and
+passed the same-process double-encode assertion.
+
+| target | job | runner route | job conclusion | golden status | golden conclusion |
+|---|---|---|---|---|---|
+| aarch64-apple-darwin | [102265091867](https://github.com/mkschulze/iamf-rs/actions/runs/34287100850/job/102265091867) | native `macos-latest` arm64 | success | completed | success |
+| x86_64-apple-darwin | [102265092177](https://github.com/mkschulze/iamf-rs/actions/runs/34287100850/job/102265092177) | x86_64 binaries executed under Rosetta 2 on `macos-latest` arm64 | success | completed | success |
+| x86_64-pc-windows-msvc | [102265092145](https://github.com/mkschulze/iamf-rs/actions/runs/34287100850/job/102265092145) | native `windows-latest`, committed LF bytes preserved before checkout | success | completed | success |
+| x86_64-unknown-linux-gnu | [102265092207](https://github.com/mkschulze/iamf-rs/actions/runs/34287100850/job/102265092207) | native `ubuntu-latest` x86_64 | success | completed | success |
+
+The predecessor run
+[34286069472](https://github.com/mkschulze/iamf-rs/actions/runs/34286069472),
+for candidate `61ba098413b48751838035c41a068b270a7a1ba0`, reproduced two
+infrastructure failures: Windows checkout converted the committed golden dump from
+LF to CRLF, and GitHub no longer offered the native `macos-13` x86_64 runner. Commit
+`5fea02a00d23665353fed8e317d7cb7ab8325694` changed only the workflow: it disables
+checkout conversion before Windows checkout and executes the x86_64 macOS test
+binaries through Rosetta. No successful jobs were combined across SHAs; every row
+above comes from the new, complete run 34287100850.
+
+The later closure HEAD may contain this evidence and Phase 1 planning/state records,
+but the candidate remains the tested code identity. Closure therefore requires an
+ancestry check plus the explicit documentation/state descendant-path allowlist from
+plan 01-10; any source, test, fixture, workflow, toolchain or dependency change after
+this candidate invalidates this evidence and requires a new matrix run.
+
+
 ## Waivers
 
 ### W-1 — CONF-05 for the 24-bit **big-endian** sample format (opened 2026-09-08, plan 01-08)
