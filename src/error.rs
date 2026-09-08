@@ -121,6 +121,8 @@ pub enum ErrorKind {
     NoGoverningParamDefinition,
     #[error("the output sink refused a write")]
     SinkWrite,
+    #[error("the sequence writer is poisoned after a partial output failure")]
+    SequenceWriterPoisoned,
 }
 
 /// An error, with the position it happened at attached exactly once.

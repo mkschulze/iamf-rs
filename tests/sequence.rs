@@ -32,7 +32,10 @@ mod support;
 use std::io::{self, Write};
 
 use iamf::error::ErrorKind;
-use iamf::obu::{AudioFrame, find_obu_boundaries, plan_frames};
+use iamf::obu::{
+    AudioFrame, BlockDurationFields, Obu, ObuHeader, ObuType, ParameterBlock, ParameterData,
+    ParameterSubblock, TemporalDelimiter, find_obu_boundaries, plan_frames,
+};
 use iamf::sequence::{SequenceWriter, TemporalUnit, write_sequence};
 use support::{
     FILE_LEN, PROLOGUE_LEN, SAMPLES_PER_FRAME, TEST_000003, TRIM_AT_END, assert_bytes_eq,
@@ -214,6 +217,79 @@ fn a_failing_sink_is_a_named_error_not_a_panic() {
         .push_descriptors(&published_descriptor_set())
         .expect_err("the sink refuses");
     assert_eq!(err.kind(), &ErrorKind::SinkWrite);
+}
+
+#[test]
+fn an_invalid_temporal_unit_is_fully_preflighted_before_its_delimiter_is_flushed() {
+    let mut writer = SequenceWriter::new(Vec::new());
+    writer
+        .push_descriptors(&published_descriptor_set())
+        .expect("prologue");
+    let invalid = TemporalUnit {
+        temporal_delimiter: Some(TemporalDelimiter),
+        parameter_blocks: vec![Obu::new(
+            ObuHeader::new(ObuType::ParameterBlock),
+            ParameterBlock {
+                parameter_id: 100,
+                duration_fields: Some(BlockDurationFields {
+                    duration: 1,
+                    constant_subblock_duration: 1,
+                }),
+                subblocks: vec![ParameterSubblock {
+                    subblock_duration: None,
+                    data: ParameterData::Raw(vec![0xde]),
+                }],
+            },
+        )],
+        audio_frames: Vec::new(),
+    };
+
+    let err = writer
+        .push_temporal_unit(&invalid)
+        .expect_err("raw data does not match the published Mix Gain definition");
+    assert_eq!(err.kind(), &ErrorKind::UnsupportedParameterData);
+
+    let sink = writer.finish().expect("a preflight error does not poison the sink");
+    assert_eq!(sink.len(), PROLOGUE_LEN, "the delimiter was never flushed");
+}
+
+#[test]
+fn a_partial_sink_write_poisons_every_later_operation_and_tracks_written_bytes() {
+    #[derive(Debug)]
+    struct PartialThenFail {
+        accepted: usize,
+    }
+    impl Write for PartialThenFail {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.accepted == 7 {
+                return Err(io::Error::other("terminal failure"));
+            }
+            let remaining = 7_usize.saturating_sub(self.accepted);
+            let written = remaining.min(bytes.len());
+            self.accepted = self.accepted.saturating_add(written);
+            Ok(written)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = SequenceWriter::new(PartialThenFail { accepted: 0 });
+    let first = writer
+        .push_descriptors(&published_descriptor_set())
+        .expect_err("the sink fails after seven bytes");
+    assert_eq!(first.kind(), &ErrorKind::SinkWrite);
+    assert_eq!(writer.bytes_written(), 7);
+
+    let retry = writer
+        .push_descriptors(&published_descriptor_set())
+        .expect_err("a poisoned stream cannot duplicate its prefix");
+    assert_eq!(retry.kind(), &ErrorKind::SequenceWriterPoisoned);
+
+    let finish = writer
+        .finish()
+        .expect_err("a poisoned stream cannot be reported as finished");
+    assert_eq!(finish.kind(), &ErrorKind::SequenceWriterPoisoned);
 }
 
 #[test]

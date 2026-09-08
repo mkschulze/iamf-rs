@@ -108,6 +108,8 @@ enum State {
     Fresh,
     /// The prologue is out. `push_temporal_unit` and `finish` are legal.
     DescriptorsWritten,
+    /// The sink may hold a partial terminal sequence; no operation may resume it.
+    Poisoned,
 }
 
 /// A streaming IA Sequence writer over any [`Write`] sink.
@@ -173,6 +175,7 @@ impl<W: Write> SequenceWriter<W> {
                     Location::OutputOffset(self.bytes_written),
                 ));
             }
+            State::Poisoned => return Err(self.poisoned_error()),
         }
 
         self.definitions = collect_param_definitions(descriptors);
@@ -207,13 +210,14 @@ impl<W: Write> SequenceWriter<W> {
                 ));
             }
             State::DescriptorsWritten => {}
+            State::Poisoned => return Err(self.poisoned_error()),
         }
 
-        crate::obu::validate_temporal_unit(&unit.audio_frames)?;
+        self.preflight_temporal_unit(unit)?;
 
         if let Some(delimiter) = unit.temporal_delimiter.as_ref() {
             let obu = Obu::new(ObuHeader::new(ObuType::TemporalDelimiter), *delimiter);
-            self.emit_obu(&obu, |w, _header, payload| {
+            self.emit_preflighted_obu(&obu, |w, _header, payload| {
                 write_temporal_delimiter(w, payload)
             })?;
         }
@@ -224,13 +228,13 @@ impl<W: Write> SequenceWriter<W> {
             // ParamDefinition is a handful of scalars plus at most one Vec, and
             // this path is not taken at all for LPCM.
             let governing = self.definition_for(block.payload.parameter_id)?.clone();
-            self.emit_obu(block, |w, _header, payload| {
+            self.emit_preflighted_obu(block, |w, _header, payload| {
                 write_parameter_block(w, &governing.definition, governing.kind, payload)
             })?;
         }
 
         for frame in &unit.audio_frames {
-            self.emit_obu(frame, write_audio_frame)?;
+            self.emit_preflighted_obu(frame, write_audio_frame)?;
         }
 
         Ok(())
@@ -257,11 +261,42 @@ impl<W: Write> SequenceWriter<W> {
     ///
     /// Whatever the sink reports when flushed, as [`ErrorKind::SinkWrite`].
     pub fn finish(mut self) -> Result<W> {
+        if self.state == State::Poisoned {
+            return Err(self.poisoned_error());
+        }
         let at = Location::OutputOffset(self.bytes_written);
         self.sink
             .flush()
             .map_err(|_| Error::new(ErrorKind::SinkWrite, at))?;
         Ok(self.sink)
+    }
+
+    fn poisoned_error(&self) -> Error {
+        Error::new(
+            ErrorKind::SequenceWriterPoisoned,
+            Location::OutputOffset(self.bytes_written),
+        )
+    }
+
+    fn preflight_temporal_unit(&mut self, unit: &TemporalUnit) -> Result<()> {
+        crate::obu::validate_temporal_unit(&unit.audio_frames)?;
+
+        if let Some(delimiter) = unit.temporal_delimiter.as_ref() {
+            let obu = Obu::new(ObuHeader::new(ObuType::TemporalDelimiter), *delimiter);
+            self.serialize_obu(&obu, |w, _header, payload| {
+                write_temporal_delimiter(w, payload)
+            })?;
+        }
+        for block in &unit.parameter_blocks {
+            let governing = self.definition_for(block.payload.parameter_id)?.clone();
+            self.serialize_obu(block, |w, _header, payload| {
+                write_parameter_block(w, &governing.definition, governing.kind, payload)
+            })?;
+        }
+        for frame in &unit.audio_frames {
+            self.serialize_obu(frame, write_audio_frame)?;
+        }
+        Ok(())
     }
 
     /// The `ParamDefinition` governing `parameter_id`, or a typed error.
@@ -283,9 +318,25 @@ impl<W: Write> SequenceWriter<W> {
     where
         F: FnOnce(&mut BitWriter, &ObuHeader, &T) -> Result<()>,
     {
-        self.scratch.clear();
-        write_obu_with_header(&mut self.scratch, obu, write_payload)?;
+        self.serialize_obu(obu, write_payload)?;
         self.flush_scratch()
+    }
+
+    fn serialize_obu<T, F>(&mut self, obu: &Obu<T>, write_payload: F) -> Result<()>
+    where
+        F: FnOnce(&mut BitWriter, &ObuHeader, &T) -> Result<()>,
+    {
+        self.scratch.clear();
+        write_obu_with_header(&mut self.scratch, obu, write_payload)
+    }
+
+    fn emit_preflighted_obu<T, F>(&mut self, obu: &Obu<T>, write_payload: F) -> Result<()>
+    where
+        F: FnOnce(&mut BitWriter, &ObuHeader, &T) -> Result<()>,
+    {
+        self.emit_obu(obu, write_payload).inspect_err(|_| {
+            self.state = State::Poisoned;
+        })
     }
 
     /// Hand whatever is in the scratch buffer to the sink and account for it.
@@ -295,20 +346,35 @@ impl<W: Write> SequenceWriter<W> {
     fn flush_scratch(&mut self) -> Result<()> {
         // Disjoint field borrows: `scratch` immutably, `sink` mutably.
         let bytes = self.scratch.as_bytes()?;
-        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        self.sink.write_all(bytes).map_err(|_| {
-            Error::new(
-                ErrorKind::SinkWrite,
-                Location::OutputOffset(self.bytes_written),
-            )
-        })?;
-        // `checked_add` rather than `+`: `bytes_written` is a running total
-        // over a stream with no declared length, so it is the one counter in
-        // this module a long enough file could overflow.
-        self.bytes_written = self
-            .bytes_written
-            .checked_add(len)
-            .ok_or_else(|| Error::new(ErrorKind::ObuSizeOverflow, Location::Unlocated))?;
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            match self.sink.write(remaining) {
+                Ok(0) => {
+                    self.state = State::Poisoned;
+                    return Err(Error::new(
+                        ErrorKind::SinkWrite,
+                        Location::OutputOffset(self.bytes_written),
+                    ));
+                }
+                Ok(written) => {
+                    self.bytes_written = self.bytes_written.checked_add(
+                        u64::try_from(written).unwrap_or(u64::MAX),
+                    ).ok_or_else(|| {
+                        self.state = State::Poisoned;
+                        Error::new(ErrorKind::ObuSizeOverflow, Location::Unlocated)
+                    })?;
+                    remaining = remaining.get(written..).unwrap_or_default();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => {
+                    self.state = State::Poisoned;
+                    return Err(Error::new(
+                        ErrorKind::SinkWrite,
+                        Location::OutputOffset(self.bytes_written),
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }
