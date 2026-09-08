@@ -23,6 +23,7 @@
 //! property that can prove we preserved something we did not understand.
 
 mod audio_element;
+mod audio_frame;
 mod boundaries;
 mod codec_config;
 mod header;
@@ -30,6 +31,10 @@ mod mix_presentation;
 mod param_definition;
 mod sequence_header;
 
+pub use audio_frame::{
+    AudioFrame, MAX_IMPLICIT_SUBSTREAM_ID, obu_type_for, read_audio_frame, substream_id_for,
+    write_audio_frame,
+};
 pub use audio_element::{
     AudioElement, AudioElementParam, AudioElementType, ChannelAudioLayerConfig, ChannelBasedConfig,
     OutputGain, PARAM_DEFINITION_DEMIXING, PARAM_DEFINITION_RECON_GAIN,
@@ -95,6 +100,23 @@ pub fn read_obu_with<T, F>(r: &mut BitCursor<'_>, parse: F) -> Result<Obu<T>>
 where
     F: FnOnce(&mut BitCursor<'_>) -> Result<T>,
 {
+    read_obu_with_header(r, |_header, payload| parse(payload))
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ReadAndValidate
+/// As [`read_obu_with`], but handing the already-parsed header to the payload
+/// parser.
+///
+/// Some payloads cannot be parsed without their header: an Audio Frame's
+/// `obu_type` is what decides whether an `audio_substream_id` field is present
+/// at all (TIME-01). Rather than let such a parser read the header itself —
+/// which would give the crate a second `trailing` drain site, the thing OBU-07
+/// exists to prevent — the header is passed in and the single drain below
+/// stays single.
+pub fn read_obu_with_header<T, F>(r: &mut BitCursor<'_>, parse: F) -> Result<Obu<T>>
+where
+    F: FnOnce(&ObuHeader, &mut BitCursor<'_>) -> Result<T>,
+{
     let before = r.byte_position();
     let (header, obu_size, after_size_bytes) = header::read_obu_header_parts(r)?;
 
@@ -109,7 +131,7 @@ where
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(before)))?;
 
     let mut payload_reader = r.sub_reader(payload_len)?;
-    let payload = parse(&mut payload_reader)?;
+    let payload = parse(&header, &mut payload_reader)?;
 
     // The one drain. Anything the type-specific parser did not claim is the
     // OBU-level remainder — see the module comment for its precedence against a
@@ -132,8 +154,24 @@ pub fn write_obu_with<T, F>(w: &mut BitWriter, obu: &Obu<T>, write_payload: F) -
 where
     F: FnOnce(&mut BitWriter, &T) -> Result<()>,
 {
+    write_obu_with_header(w, obu, |writer, _header, payload| {
+        write_payload(writer, payload)
+    })
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ValidateAndWrite
+/// As [`write_obu_with`], but handing the header to the payload writer.
+///
+/// The mirror of [`read_obu_with_header`], and adjacent to it for the same
+/// reason: an Audio Frame writer must see `obu_type` to know whether to emit
+/// an explicit `audio_substream_id`, and read and write have to agree on that
+/// or the crate produces files it cannot read back.
+pub fn write_obu_with_header<T, F>(w: &mut BitWriter, obu: &Obu<T>, write_payload: F) -> Result<()>
+where
+    F: FnOnce(&mut BitWriter, &ObuHeader, &T) -> Result<()>,
+{
     let mut payload = BitWriter::new();
-    write_payload(&mut payload, &obu.payload)?;
+    write_payload(&mut payload, &obu.header, &obu.payload)?;
     let mut bytes = payload.finish()?;
     bytes.extend_from_slice(&obu.trailing);
     write_obu(w, &obu.header, &bytes)
