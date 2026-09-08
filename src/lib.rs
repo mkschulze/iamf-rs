@@ -48,6 +48,7 @@
 pub const SPEC_VERSION: &str = "1.1.0";
 
 pub mod bits;
+pub mod dump;
 pub mod error;
 pub mod model;
 pub mod obu;

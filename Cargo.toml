@@ -36,6 +36,16 @@ thiserror = "2.0.20" # MIT OR Apache-2.0
 hex-literal = "1.1.0"   # MIT OR Apache-2.0 — hand-computed vectors (BITS-06, D-25)
 proptest = "1.11.0"     # MIT OR Apache-2.0 — differential oracle (D-01); MSRV 1.85, exactly GUARD-12's floor
 bitstream-io = "4.10.0" # MIT/Apache-2.0 (slash form; cargo-deny 0.20.2 resolves it as OR) — the oracle itself
+sha2 = "0.10.9"         # MIT OR Apache-2.0 — GUARD-09's golden digest (D-20), dev-only
+
+# Why `sha2` and not a platform tool: GUARD-09 runs the golden test on all four
+# targets including `x86_64-pc-windows-msvc`, where neither `shasum` nor
+# `sha256sum` exists, so a `Command`-based digest would silently reduce the
+# matrix to three. Why not hand-rolled: a hand-rolled digest is a second thing
+# that can be wrong inside a test whose only job is to detect change. It is a
+# change-detection digest, not a security boundary, and it reaches nothing
+# shipped — `cargo tree -e normal,no-proc-macro` still lists exactly `iamf` and
+# `thiserror`.
 
 # No `[features]` table, deliberately (D-22). Phase 1 has nothing to gate: no
 # codec crates until Phase 3 (dev-only), `bitstream-io` is a dev-dependency
