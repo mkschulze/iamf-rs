@@ -60,8 +60,7 @@ impl Identified for MixPresentation {
 /// Returns `None` on an empty slice.
 #[must_use]
 pub fn by_id<T: Identified>(items: &[T], id: u32) -> Option<&T> {
-    let _ = (items, id); // STUB(GREEN)
-    None
+    items.iter().find(|item| item.id() == id)
 }
 
 /// Every descriptor OBU of one IA Sequence, in model form.
@@ -197,7 +196,39 @@ fn duplicate_id_findings<T: Identified>(items: &[T], field: &'static str) -> Vec
 /// Header, Codec Configs ascending by id, Audio Elements ascending by id, then
 /// Mix Presentations in list order.
 pub fn write_descriptors(w: &mut BitWriter, set: &DescriptorSet) -> Result<()> {
-    let _ = (w, set); // STUB(GREEN)
+    write_obu_with(
+        w,
+        &Obu::new(
+            ObuHeader::new(ObuType::IaSequenceHeader),
+            set.sequence_header.clone(),
+        ),
+        write_ia_sequence_header,
+    )?;
+
+    for config in sorted_by_id(&set.codec_configs) {
+        write_obu_with(
+            w,
+            &Obu::new(ObuHeader::new(ObuType::CodecConfig), config.clone()),
+            write_codec_config,
+        )?;
+    }
+    for element in sorted_by_id(&set.audio_elements) {
+        write_obu_with(
+            w,
+            &Obu::new(ObuHeader::new(ObuType::AudioElement), element.clone()),
+            write_audio_element,
+        )?;
+    }
+    for presentation in &set.mix_presentations {
+        write_obu_with(
+            w,
+            &Obu::new(
+                ObuHeader::new(ObuType::MixPresentation),
+                presentation.clone(),
+            ),
+            write_mix_presentation,
+        )?;
+    }
     Ok(())
 }
 

@@ -392,13 +392,26 @@ impl MixPresentation {
 /// as is every uleb128, so a count above the bytes left is unreadable by
 /// construction.
 pub fn read_mix_presentation(r: &mut BitCursor<'_>) -> Result<MixPresentation> {
-    let _ = r; // STUB(GREEN)
+    let mix_presentation_id = r.read_uleb128()?;
+    let count_label = read_bounded_count(r)?;
+    let annotations_language = read_strings(r, count_label)?;
+    let localized_presentation_annotations = read_strings(r, count_label)?;
+
+    let num_sub_mixes = read_bounded_count(r)?;
+    let mut sub_mixes = Vec::with_capacity(num_sub_mixes);
+    for _ in 0..num_sub_mixes {
+        sub_mixes.push(read_sub_mix(r, count_label)?);
+    }
+
+    let remaining = r.bytes_remaining();
+    let trailing = r.read_uint8_span(remaining)?.to_vec();
+
     Ok(MixPresentation {
-        mix_presentation_id: 0,
-        annotations_language: Vec::new(),
-        localized_presentation_annotations: Vec::new(),
-        sub_mixes: Vec::new(),
-        trailing: Vec::new(),
+        mix_presentation_id,
+        annotations_language,
+        localized_presentation_annotations,
+        sub_mixes,
+        trailing,
     })
 }
 
@@ -408,8 +421,19 @@ pub fn read_mix_presentation(r: &mut BitCursor<'_>) -> Result<MixPresentation> {
 /// Faithful, not validating (D-07): a sub-mix without a stereo layout is
 /// written, and `validate()` is where its absence is reported.
 pub fn write_mix_presentation(w: &mut BitWriter, v: &MixPresentation) -> Result<()> {
-    let _ = (w, v); // STUB(GREEN)
-    Ok(())
+    w.write_uleb128_minimal(v.mix_presentation_id)?;
+    write_derived_count(w, v.count_label(), "count_label")?;
+    for language in &v.annotations_language {
+        w.write_string(language)?;
+    }
+    for annotation in &v.localized_presentation_annotations {
+        w.write_string(annotation)?;
+    }
+    write_derived_count(w, v.sub_mixes.len(), "num_sub_mixes")?;
+    for sub_mix in &v.sub_mixes {
+        write_sub_mix(w, sub_mix)?;
+    }
+    w.write_bytes(&v.trailing)
 }
 
 // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
