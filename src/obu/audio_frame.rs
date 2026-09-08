@@ -270,20 +270,63 @@ impl FramePlan {
     /// The trimming the frame at `index` carries — `None` for every frame but
     /// the last, and `None` for the last too when nothing needs trimming.
     #[must_use]
-    pub fn trimming_for(&self, _index: u64) -> Option<Trimming> {
-        // STUB(GREEN): the placement lands with the planner.
-        None
+    pub fn trimming_for(&self, index: u64) -> Option<Trimming> {
+        let is_last = index.checked_add(1) == Some(self.frame_count);
+        if is_last && self.trim_at_end > 0 {
+            // LPCM has no priming, so `at_start` is 0 and the two values
+            // differ. See the type comment.
+            Some(Trimming {
+                at_end: self.trim_at_end,
+                at_start: 0,
+            })
+        } else {
+            None
+        }
     }
 }
 
 /// Divide `total_samples` into frames of `num_samples_per_frame`, placing the
 /// end trim on the last frame only (TIME-03).
-pub fn plan_frames(_total_samples: u64, num_samples_per_frame: u32) -> Result<FramePlan> {
-    // STUB(GREEN): the checked arithmetic lands with the GREEN commit.
+///
+/// Every step is checked (T-01-34). A `num_samples_per_frame` of 0 is a typed
+/// error rather than a division by zero — and that is not hypothetical: the
+/// vendored `tones_256samp_5p1_pcm.iamf` carries exactly that value, which is
+/// why plan 01-02 filed it as a negative fixture.
+pub fn plan_frames(total_samples: u64, num_samples_per_frame: u32) -> Result<FramePlan> {
+    if num_samples_per_frame == 0 {
+        return Err(Error::new(
+            ErrorKind::ZeroSamplesPerFrame,
+            Location::Field("num_samples_per_frame"),
+        ));
+    }
+    let overflow = || {
+        Error::new(
+            ErrorKind::FramePlanOverflow,
+            Location::Field("total_samples"),
+        )
+    };
+    let per_frame = u64::from(num_samples_per_frame);
+
+    let whole = total_samples.checked_div(per_frame).ok_or_else(overflow)?;
+    let remainder = total_samples.checked_rem(per_frame).ok_or_else(overflow)?;
+    let frame_count = if remainder == 0 {
+        whole
+    } else {
+        whole.checked_add(1).ok_or_else(overflow)?
+    };
+
+    // The frames hold `frame_count * num_samples_per_frame` samples between
+    // them; the surplus over `total_samples` is what the last frame trims.
+    let capacity = frame_count.checked_mul(per_frame).ok_or_else(overflow)?;
+    let surplus = capacity.checked_sub(total_samples).ok_or_else(overflow)?;
+    // `surplus < num_samples_per_frame` by construction, so it fits in a u32
+    // whatever the total was.
+    let trim_at_end = u32::try_from(surplus).map_err(|_| overflow())?;
+
     Ok(FramePlan {
-        frame_count: 0,
+        frame_count,
         num_samples_per_frame,
-        trim_at_end: 0,
+        trim_at_end,
     })
 }
 
@@ -295,7 +338,29 @@ pub fn plan_frames(_total_samples: u64, num_samples_per_frame: u32) -> Result<Fr
 /// reference also checks are not enforced: timestamps are not a wire field of
 /// the Audio Frame OBU, they are `iamf-tools`' internal bookkeeping, and this
 /// crate has no temporal-unit timeline until Phase 2's sequence parser.
-pub fn validate_temporal_unit(_frames: &[Obu<AudioFrame>]) -> Result<()> {
-    // STUB(GREEN): the two clauses land with the GREEN commit.
+pub fn validate_temporal_unit(frames: &[Obu<AudioFrame>]) -> Result<()> {
+    let Some(first) = frames.first() else {
+        return Ok(());
+    };
+    // A `Vec` membership scan rather than a set: GUARD-02 bans the hashed
+    // containers, and a temporal unit holds `substream_count` frames — 4 for
+    // the 5.1 fixture, at most 28 channels' worth under Base-Enhanced — so the
+    // quadratic term is bounded by the format itself.
+    let mut seen: Vec<u32> = Vec::with_capacity(frames.len());
+    for frame in frames {
+        if frame.header.type_specific != first.header.type_specific {
+            return Err(Error::new(
+                ErrorKind::TemporalUnitTrimMismatch,
+                Location::Field("obu_trimming_status_flag"),
+            ));
+        }
+        if seen.contains(&frame.payload.substream_id) {
+            return Err(Error::new(
+                ErrorKind::DuplicateSubstreamId,
+                Location::Field("audio_substream_id"),
+            ));
+        }
+        seen.push(frame.payload.substream_id);
+    }
     Ok(())
 }

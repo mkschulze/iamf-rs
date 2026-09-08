@@ -280,26 +280,287 @@ pub struct ParameterBlock {
 /// arguments — see the module comment for why that is the requirement rather
 /// than a convenience.
 pub fn read_parameter_block(
-    _r: &mut BitCursor<'_>,
+    r: &mut BitCursor<'_>,
     def: &ParamDefinition,
-    _kind: ParamDefinitionType,
+    kind: ParamDefinitionType,
 ) -> Result<ParameterBlock> {
-    // STUB(GREEN): the wire behaviour lands with the GREEN commit.
+    let start = r.byte_position();
+    let parameter_id = r.read_uleb128()?;
+    // The reference checks that the id in the bitstream agrees with the
+    // definition it was handed. Ours can too, and for the same reason: a
+    // disagreement means the caller looked up the wrong definition, and every
+    // field after this point would then be shaped by the wrong rules.
+    if parameter_id != def.parameter_id {
+        return Err(Error::new(
+            ErrorKind::ParameterIdMismatch,
+            Location::InputOffset(start),
+        ));
+    }
+
+    // Under mode 1 the block carries its own duration fields; under mode 0 they
+    // come from the definition and the block omits them. This is the single
+    // fact that makes the definition an argument rather than a convenience.
+    let (duration_fields, num_subblocks) = if def.param_definition_mode() {
+        let duration = r.read_uleb128()?;
+        let constant_subblock_duration = r.read_uleb128()?;
+        let num_subblocks = if constant_subblock_duration == 0 {
+            r.read_uleb128()?
+        } else {
+            subblocks_implied_by(duration, constant_subblock_duration, start)?
+        };
+        (
+            Some(BlockDurationFields {
+                duration,
+                constant_subblock_duration,
+            }),
+            num_subblocks,
+        )
+    } else {
+        let fields = def.duration_fields.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::ParameterModeMismatch,
+                Location::InputOffset(start),
+            )
+        })?;
+        let count = if fields.constant_subblock_duration == 0 {
+            u32::try_from(fields.subblock_durations.len()).map_err(|_| {
+                Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start))
+            })?
+        } else {
+            subblocks_implied_by(fields.duration, fields.constant_subblock_duration, start)?
+        };
+        (None, count)
+    };
+
+    // `subblock_duration` is on the wire exactly when mode is 1 AND
+    // `constant_subblock_duration` is 0.
+    let include_subblock_duration = duration_fields
+        .is_some_and(|fields| fields.constant_subblock_duration == 0);
+
+    // T-01-32: `num_subblocks` is attacker-controlled and drives an allocation.
+    // The smallest possible subblock is one byte, so more subblocks than bytes
+    // left is unreadable by construction — checked before a single element is
+    // reserved (the one rule every count in this format obeys).
+    let num_subblocks = usize::try_from(num_subblocks)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
+    if num_subblocks > r.bytes_remaining() {
+        return Err(Error::new(
+            ErrorKind::UnexpectedEndOfInput,
+            Location::InputOffset(start),
+        ));
+    }
+
+    let mut subblocks = Vec::with_capacity(num_subblocks);
+    let mut total_subblock_duration = 0_u64;
+    for _ in 0..num_subblocks {
+        let subblock_duration = if include_subblock_duration {
+            let value = r.read_uleb128()?;
+            total_subblock_duration = total_subblock_duration
+                .checked_add(u64::from(value))
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::SubblockDurationMismatch,
+                        Location::InputOffset(start),
+                    )
+                })?;
+            Some(value)
+        } else {
+            None
+        };
+        subblocks.push(ParameterSubblock {
+            subblock_duration,
+            data: read_parameter_data(r, kind)?,
+        });
+    }
+
+    if include_subblock_duration {
+        let declared = duration_fields.map_or(0, |fields| u64::from(fields.duration));
+        if total_subblock_duration != declared {
+            return Err(Error::new(
+                ErrorKind::SubblockDurationMismatch,
+                Location::InputOffset(start),
+            ));
+        }
+    }
+
     Ok(ParameterBlock {
-        parameter_id: def.parameter_id,
-        duration_fields: None,
-        subblocks: Vec::new(),
+        parameter_id,
+        duration_fields,
+        subblocks,
     })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/parameter_block.cc ParameterBlockObu::ValidateAndWritePayload
 /// Write a Parameter Block payload, given the definition that governs it.
+///
+/// A block whose `duration_fields` presence disagrees with the definition's
+/// `param_definition_mode` is a typed error, not a silent choice: writing the
+/// fields under mode 0 (or omitting them under mode 1) produces a block the
+/// reference re-frames from the wrong offset.
 pub fn write_parameter_block(
-    _w: &mut BitWriter,
-    _def: &ParamDefinition,
-    _block: &ParameterBlock,
+    w: &mut BitWriter,
+    def: &ParamDefinition,
+    block: &ParameterBlock,
 ) -> Result<()> {
-    // STUB(GREEN): emits nothing.
-    let _ = Error::new(ErrorKind::ParameterIdMismatch, Location::Unlocated);
+    if block.parameter_id != def.parameter_id {
+        return Err(Error::new(
+            ErrorKind::ParameterIdMismatch,
+            Location::Field("parameter_id"),
+        ));
+    }
+    if block.duration_fields.is_some() != def.param_definition_mode() {
+        return Err(Error::new(
+            ErrorKind::ParameterModeMismatch,
+            Location::Field("param_definition_mode"),
+        ));
+    }
+
+    w.write_uleb128_minimal(block.parameter_id)?;
+    if let Some(fields) = block.duration_fields {
+        w.write_uleb128_minimal(fields.duration)?;
+        w.write_uleb128_minimal(fields.constant_subblock_duration)?;
+        if fields.constant_subblock_duration == 0 {
+            // `num_subblocks` is derived from the list it counts (Pattern 2).
+            let count = u32::try_from(block.subblocks.len()).map_err(|_| {
+                Error::new(ErrorKind::ObuTooLarge, Location::Field("num_subblocks"))
+            })?;
+            w.write_uleb128_minimal(count)?;
+        }
+    }
+
+    for subblock in &block.subblocks {
+        if let Some(duration) = subblock.subblock_duration {
+            w.write_uleb128_minimal(duration)?;
+        }
+        write_parameter_data(w, &subblock.data)?;
+    }
     Ok(())
+}
+
+/// `ceil(duration / constant_subblock_duration)`, with the division checked.
+///
+/// Integer division with a ceiling correction, exactly as `GetNumSubblocks`
+/// computes it. The divisor is non-zero at every call site here, and it is
+/// still `checked_div`: GUARD-03 denies bare arithmetic because a bound that
+/// holds only by argument stops holding when the argument is edited.
+// ref: iamf-tools@v2.1.0 iamf/obu/parameter_block.cc ParameterBlockObu::GetNumSubblocks
+fn subblocks_implied_by(duration: u32, constant_subblock_duration: u32, at: u64) -> Result<u32> {
+    let overflow = || Error::new(ErrorKind::SubblockDurationMismatch, Location::InputOffset(at));
+    let whole = duration
+        .checked_div(constant_subblock_duration)
+        .ok_or_else(overflow)?;
+    let remainder = duration
+        .checked_rem(constant_subblock_duration)
+        .ok_or_else(overflow)?;
+    if remainder == 0 {
+        Ok(whole)
+    } else {
+        whole.checked_add(1).ok_or_else(overflow)
+    }
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/mix_gain_parameter_data.cc MixGainParameterData::ReadAndValidate
+// ref: iamf-tools@v2.1.0 iamf/obu/extension_parameter_data.cc ExtensionParameterData::ReadAndValidate
+// NOTE: an animation type above 2 is `absl::UnimplementedError` in the
+// reference, and it has to be: the wire carries no length for an unrecognised
+// animation, so there is no boundary to preserve verbatim without inventing
+// one. Matching the reference exactly is the rule — being looser here would
+// mean guessing where the next subblock starts. An unmodelled
+// `param_definition_type` is a different case entirely: it has an explicit
+// `parameter_data_size` on the wire, so "verbatim" is well defined.
+fn read_parameter_data(r: &mut BitCursor<'_>, kind: ParamDefinitionType) -> Result<ParameterData> {
+    let start = r.byte_position();
+    match kind {
+        ParamDefinitionType::MixGain => {
+            let animation = AnimationType::from_value(r.read_uleb128()?);
+            let data = match animation {
+                AnimationType::Step => MixGainParameterData::Step {
+                    start_point_value: read_i16(r)?,
+                },
+                AnimationType::Linear => MixGainParameterData::Linear {
+                    start_point_value: read_i16(r)?,
+                    end_point_value: read_i16(r)?,
+                },
+                AnimationType::Bezier => MixGainParameterData::Bezier {
+                    start_point_value: read_i16(r)?,
+                    end_point_value: read_i16(r)?,
+                    control_point_value: read_i16(r)?,
+                    control_point_relative_time: u8::try_from(r.read_unsigned(8)?).unwrap_or(0),
+                },
+                AnimationType::Reserved(_) => {
+                    return Err(Error::new(
+                        ErrorKind::UnsupportedParameterData,
+                        Location::InputOffset(start),
+                    ));
+                }
+            };
+            Ok(ParameterData::MixGain(data))
+        }
+        // `parameter_data_size` then exactly that many bytes. The length goes
+        // through `read_uint8_span`, which caps it against `bytes_remaining()`
+        // before reserving.
+        ParamDefinitionType::Reserved(_) => {
+            let size = r.read_uleb128()?;
+            let size = usize::try_from(size)
+                .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
+            Ok(ParameterData::Raw(r.read_uint8_span(size)?.to_vec()))
+        }
+        // Demixing and recon-gain parameter data are Phase 2/3 work. Recon
+        // gain in particular cannot be parsed from the definition alone — it
+        // needs the referenced Audio Element's layer configuration — so
+        // modelling it here would mean inventing a second hidden context, the
+        // exact thing TIME-05 exists to prevent.
+        ParamDefinitionType::Demixing | ParamDefinitionType::ReconGain => Err(Error::new(
+            ErrorKind::UnsupportedParameterData,
+            Location::InputOffset(start),
+        )),
+    }
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/mix_gain_parameter_data.cc MixGainParameterData::Write
+// ref: iamf-tools@v2.1.0 iamf/obu/extension_parameter_data.cc ExtensionParameterData::Write
+fn write_parameter_data(w: &mut BitWriter, data: &ParameterData) -> Result<()> {
+    match data {
+        ParameterData::MixGain(mix_gain) => {
+            // The selector is derived from the variant, never stored (Pattern 2).
+            w.write_uleb128_minimal(mix_gain.animation_type().value())?;
+            match *mix_gain {
+                MixGainParameterData::Step { start_point_value } => {
+                    w.write_signed(i64::from(start_point_value), 16)
+                }
+                MixGainParameterData::Linear {
+                    start_point_value,
+                    end_point_value,
+                } => {
+                    w.write_signed(i64::from(start_point_value), 16)?;
+                    w.write_signed(i64::from(end_point_value), 16)
+                }
+                MixGainParameterData::Bezier {
+                    start_point_value,
+                    end_point_value,
+                    control_point_value,
+                    control_point_relative_time,
+                } => {
+                    w.write_signed(i64::from(start_point_value), 16)?;
+                    w.write_signed(i64::from(end_point_value), 16)?;
+                    w.write_signed(i64::from(control_point_value), 16)?;
+                    w.write_unsigned(u64::from(control_point_relative_time), 8)
+                }
+            }
+        }
+        ParameterData::Raw(bytes) => {
+            let size = u32::try_from(bytes.len()).map_err(|_| {
+                Error::new(ErrorKind::ObuTooLarge, Location::Field("parameter_data_size"))
+            })?;
+            w.write_uleb128_minimal(size)?;
+            w.write_bytes(bytes)
+        }
+    }
+}
+
+/// A signed 16-bit big-endian field, the width every Q7.8 point uses.
+// ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadSigned16
+fn read_i16(r: &mut BitCursor<'_>) -> Result<i16> {
+    i16::try_from(r.read_signed(16)?)
+        .map_err(|_| Error::new(ErrorKind::ValueExceedsWidth { bits: 16 }, Location::Unlocated))
 }
