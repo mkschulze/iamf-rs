@@ -45,7 +45,32 @@ project's outbound MIT OR Apache-2.0 licence.
 Vendored test fixtures
 --------------------------------------------------------------------------------
 
-None yet. Plan 01-02 adds conformance fixtures derived from the reference trees
-above; each entry belongs here with its source repository, revision, per-file
-path and copyright line. Extend this section in place — do not restructure the
-file, because the sections above are load-bearing for the licence audit.
+The files under `tests/fixtures/reference/` are **verbatim copies** taken from
+the two reference repositories at the revisions pinned above. Nothing in that
+directory was written by this project. Each one is listed individually, with its
+source path, size and the reason it was vendored, in
+`tests/fixtures/MANIFEST.md`; the per-file size cap and the file count stated
+there are enforced by `tests/fixtures_cap.rs`.
+
+  tests/fixtures/reference/*.iamf
+  tests/fixtures/reference/*.textproto
+  tests/fixtures/reference/*.wav
+  Source: AOMediaCodec/libiamf, tests/
+  Revision: f06e919e2ad5502a2adc4bdd4e146f2e7e7ffb63 (tag v1.1.0)
+  Copyright (c) 2024, Alliance for Open Media. All rights reserved.
+  Licensed under BSD-3-Clause-Clear and the Alliance for Open Media Patent
+  License 1.0.
+
+  tests/fixtures/reference/iamf-tools/*
+  tests/fixtures/reference/negative/tones_256samp_5p1_pcm.iamf
+  Source: AOMediaCodec/iamf-tools, iamf/cli/testdata/ and
+          iamf/cli/testdata/iamf/
+  Revision: 848c6ff4968ff8cc6f728259892ab4f90cb83256 (tag v2.1.0)
+  Copyright (c) 2023, Alliance for Open Media. All rights reserved.
+  Licensed under BSD-3-Clause-Clear and the Alliance for Open Media Patent
+  License 1.0.
+
+Adding a fixture means adding it to `tests/fixtures/MANIFEST.md` as well; the
+count assertion in `tests/fixtures_cap.rs` fails otherwise. Extend this section
+in place — do not restructure the file, because the sections above are
+load-bearing for the licence audit.
