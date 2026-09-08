@@ -22,8 +22,10 @@
 //! decode→encode byte-identity property becomes untestable — which is the only
 //! property that can prove we preserved something we did not understand.
 
+mod boundaries;
 mod header;
 
+pub use boundaries::find_obu_boundaries;
 pub use header::{ObuHeader, ObuType, Trimming, TypeSpecific, read_obu_header, write_obu};
 
 use crate::bits::{BitCursor, BitWriter};
