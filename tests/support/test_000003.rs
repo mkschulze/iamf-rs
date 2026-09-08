@@ -111,9 +111,7 @@ pub fn published_mix_presentation() -> Obu<MixPresentation> {
             sub_mixes: vec![SubMix {
                 elements: vec![SubMixAudioElement {
                     audio_element_id: 300,
-                    localized_element_annotations: vec![
-                        b"test_sub_mix_0_audio_element_0".to_vec(),
-                    ],
+                    localized_element_annotations: vec![b"test_sub_mix_0_audio_element_0".to_vec()],
                     rendering_config: RenderingConfig::stereo(),
                     element_mix_gain: published_mix_gain(),
                 }],
@@ -145,7 +143,10 @@ pub fn published_descriptor_set() -> DescriptorSet {
 pub fn descriptor_bytes(set: &DescriptorSet) -> Vec<u8> {
     let mut w = BitWriter::new();
     let written = write_descriptors(&mut w, set);
-    assert!(written.is_ok(), "the descriptor set serialises: {written:?}");
+    assert!(
+        written.is_ok(),
+        "the descriptor set serialises: {written:?}"
+    );
     w.finish().unwrap_or_default()
 }
 
@@ -162,26 +163,40 @@ pub fn sawtooth_pcm() -> &'static [u8] {
     assert_eq!(SAWTOOTH_WAV.get(12..16), Some(b"fmt ".as_slice()));
     // 2 channels, 16000 Hz, 16 bits per sample.
     assert_eq!(SAWTOOTH_WAV.get(22..24), Some([0x02, 0x00].as_slice()));
-    assert_eq!(SAWTOOTH_WAV.get(24..28), Some([0x80, 0x3e, 0x00, 0x00].as_slice()));
+    assert_eq!(
+        SAWTOOTH_WAV.get(24..28),
+        Some([0x80, 0x3e, 0x00, 0x00].as_slice())
+    );
     assert_eq!(SAWTOOTH_WAV.get(34..36), Some([0x10, 0x00].as_slice()));
     assert_eq!(SAWTOOTH_WAV.get(36..40), Some(b"data".as_slice()));
 
     let len = SAWTOOTH_WAV
         .get(40..44)
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
+        .and_then(|len| usize::try_from(len).ok())
         .unwrap_or(0);
     assert_eq!(len, 32_000, "8000 sample frames of 16-bit stereo");
-    SAWTOOTH_WAV.get(44..44 + len).unwrap_or_default()
+    let end = 44_usize.checked_add(len).unwrap_or(0);
+    SAWTOOTH_WAV.get(44..end).unwrap_or_default()
 }
 
 /// Assert byte equality, naming the **first differing offset** and dumping a
 /// window around it.
 ///
 /// "32567 bytes differ" is unactionable; the offset immediately identifies
-/// which OBU is wrong, because every OBU boundary in this file is known.
+/// which OBU is wrong, because every OBU boundary in this file is known. The
+/// diagnostic is built first and asserted second so that `assert_eq!` never
+/// gets the chance to print two 32 KB byte vectors at each other.
 pub fn assert_bytes_eq(produced: &[u8], expected: &[u8], what: &str) {
+    let difference = describe_difference(produced, expected, what);
+    assert!(difference.is_none(), "{}", difference.unwrap_or_default());
+}
+
+/// `None` when the two are equal; otherwise the readable diagnostic.
+fn describe_difference(produced: &[u8], expected: &[u8], what: &str) -> Option<String> {
     if produced == expected {
-        return;
+        return None;
     }
     let first = produced
         .iter()
@@ -190,8 +205,10 @@ pub fn assert_bytes_eq(produced: &[u8], expected: &[u8], what: &str) {
         .unwrap_or_else(|| produced.len().min(expected.len()));
 
     let start = first.saturating_sub(16);
-    let end = (first + 16).min(produced.len().max(expected.len()));
-    panic!(
+    let end = first
+        .saturating_add(16)
+        .min(produced.len().max(expected.len()));
+    Some(format!(
         "{what}: first difference at offset {first} (0x{first:x})\n\
          produced len {} expected len {}\n\
          produced[0x{start:x}..0x{end:x}] = {}\n\
@@ -200,7 +217,7 @@ pub fn assert_bytes_eq(produced: &[u8], expected: &[u8], what: &str) {
         expected.len(),
         hex_window(produced, start, end),
         hex_window(expected, start, end),
-    );
+    ))
 }
 
 /// A space-separated hex dump of `bytes[start..end]`, clamped.

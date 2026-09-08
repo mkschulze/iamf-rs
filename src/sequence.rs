@@ -94,14 +94,19 @@ impl TemporalUnit {
 /// transition, rather than a debug assertion: a caller driving this from
 /// Parallax's export path must get a named error it can surface, never a panic
 /// that only exists in a debug build.
+///
+/// **There is no `Finished` state, on purpose.** [`SequenceWriter::finish`]
+/// takes `self` by value, so "push after finish" is not a runtime error to
+/// report — it is a *compile* error, which is strictly stronger. A `Finished`
+/// variant and a matching `ErrorKind` would both be unreachable through the
+/// public API, and an error that can never be produced is worse than no error
+/// at all: it tells a caller to handle a case that does not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     /// Nothing written. Only `push_descriptors` is legal.
     Fresh,
     /// The prologue is out. `push_temporal_unit` and `finish` are legal.
     DescriptorsWritten,
-    /// `finish` has been called. Nothing further is legal.
-    Finished,
 }
 
 /// A streaming IA Sequence writer over any [`Write`] sink.
@@ -156,9 +161,8 @@ impl<W: Write> SequenceWriter<W> {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::DescriptorsAlreadyWritten`] if called twice,
-    /// [`ErrorKind::SequenceFinished`] after [`finish`](Self::finish), plus
-    /// whatever the descriptor writers reject.
+    /// [`ErrorKind::DescriptorsAlreadyWritten`] if called twice, plus whatever
+    /// the descriptor writers reject.
     pub fn push_descriptors(&mut self, descriptors: &DescriptorSet) -> Result<()> {
         match self.state {
             State::Fresh => {}
@@ -168,7 +172,6 @@ impl<W: Write> SequenceWriter<W> {
                     Location::OutputOffset(self.bytes_written),
                 ));
             }
-            State::Finished => return Err(self.finished()),
         }
 
         self.definitions = collect_param_definitions(descriptors);
@@ -191,7 +194,6 @@ impl<W: Write> SequenceWriter<W> {
     ///
     /// [`ErrorKind::DescriptorsNotWritten`] before
     /// [`push_descriptors`](Self::push_descriptors),
-    /// [`ErrorKind::SequenceFinished`] after [`finish`](Self::finish),
     /// [`ErrorKind::NoGoverningParamDefinition`] for a Parameter Block whose
     /// `parameter_id` the descriptors never published, plus whatever
     /// [`crate::obu::validate_temporal_unit`] rejects.
@@ -204,7 +206,6 @@ impl<W: Write> SequenceWriter<W> {
                 ));
             }
             State::DescriptorsWritten => {}
-            State::Finished => return Err(self.finished()),
         }
 
         crate::obu::validate_temporal_unit(&unit.audio_frames)?;
@@ -240,16 +241,25 @@ impl<W: Write> SequenceWriter<W> {
     /// descriptors-only file; a sequence with no descriptors produces an empty
     /// one. Neither is an error — an IA Sequence has no trailer to omit.
     ///
+    /// **Takes `self` by value**, so the third illegal transition — pushing
+    /// after finishing — is rejected by the compiler rather than at run time:
+    ///
+    /// ```compile_fail
+    /// use iamf::sequence::{SequenceWriter, TemporalUnit};
+    /// let mut writer = SequenceWriter::new(Vec::new());
+    /// let _sink = writer.finish();
+    /// // `writer` was moved into `finish`; this does not compile.
+    /// let _ = writer.push_temporal_unit(&TemporalUnit::default());
+    /// ```
+    ///
     /// # Errors
     ///
-    /// [`ErrorKind::SequenceFinished`] if called twice, and whatever the sink
-    /// reports when flushed.
+    /// Whatever the sink reports when flushed, as [`ErrorKind::SinkWrite`].
     pub fn finish(mut self) -> Result<W> {
-        if self.state == State::Finished {
-            return Err(self.finished());
-        }
-        self.state = State::Finished;
-        self.sink.flush().map_err(|_| self.sink_error())?;
+        let at = Location::OutputOffset(self.bytes_written);
+        self.sink
+            .flush()
+            .map_err(|_| Error::new(ErrorKind::SinkWrite, at))?;
         Ok(self.sink)
     }
 
@@ -278,24 +288,27 @@ impl<W: Write> SequenceWriter<W> {
     }
 
     /// Hand whatever is in the scratch buffer to the sink and account for it.
+    ///
+    /// The scratch is borrowed, not drained: its allocation survives to the
+    /// next OBU, which is the whole point of holding one.
     fn flush_scratch(&mut self) -> Result<()> {
-        // STUB(GREEN): the bytes are built but never reach the sink, so every
-        // byte-level assertion fails while the state machine passes.
-        let _ = self.scratch.as_bytes()?;
+        // Disjoint field borrows: `scratch` immutably, `sink` mutably.
+        let bytes = self.scratch.as_bytes()?;
+        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        self.sink.write_all(bytes).map_err(|_| {
+            Error::new(
+                ErrorKind::SinkWrite,
+                Location::OutputOffset(self.bytes_written),
+            )
+        })?;
+        // `checked_add` rather than `+`: `bytes_written` is a running total
+        // over a stream with no declared length, so it is the one counter in
+        // this module a long enough file could overflow.
+        self.bytes_written = self
+            .bytes_written
+            .checked_add(len)
+            .ok_or_else(|| Error::new(ErrorKind::ObuSizeOverflow, Location::Unlocated))?;
         Ok(())
-    }
-
-    /// The error a sink refusal reports, at the position it refused.
-    fn sink_error(&self) -> Error {
-        Error::new(ErrorKind::SinkWrite, Location::OutputOffset(self.bytes_written))
-    }
-
-    /// The error every post-`finish` call reports.
-    fn finished(&self) -> Error {
-        Error::new(
-            ErrorKind::SequenceFinished,
-            Location::OutputOffset(self.bytes_written),
-        )
     }
 }
 

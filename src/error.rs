@@ -115,8 +115,6 @@ pub enum ErrorKind {
     DescriptorsNotWritten,
     #[error("the descriptors have already been written to this sequence")]
     DescriptorsAlreadyWritten,
-    #[error("the sequence has been finished and accepts no further OBUs")]
-    SequenceFinished,
     #[error("no parameter definition in the descriptors governs this parameter_id")]
     NoGoverningParamDefinition,
     #[error("the output sink refused a write")]

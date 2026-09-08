@@ -51,20 +51,35 @@ const BYTES_PER_SAMPLE_FRAME: usize = 4;
 /// writer that invented sample values would be doing signal processing.
 fn published_temporal_units() -> Vec<TemporalUnit> {
     let pcm = sawtooth_pcm();
-    let total_samples = (pcm.len() / BYTES_PER_SAMPLE_FRAME) as u64;
-    let plan = plan_frames(total_samples, SAMPLES_PER_FRAME).expect("128 is not zero");
-    let frame_bytes = SAMPLES_PER_FRAME as usize * BYTES_PER_SAMPLE_FRAME;
+    let Ok(plan) = plan_frames(total_sample_frames(pcm), SAMPLES_PER_FRAME) else {
+        return Vec::new();
+    };
+    let frame_bytes = usize::try_from(SAMPLES_PER_FRAME)
+        .unwrap_or(0)
+        .saturating_mul(BYTES_PER_SAMPLE_FRAME);
 
     (0..plan.frame_count)
         .map(|index| {
-            let start = index as usize * frame_bytes;
-            let end = (start + frame_bytes).min(pcm.len());
+            let start = usize::try_from(index)
+                .unwrap_or(0)
+                .saturating_mul(frame_bytes);
+            let end = start.saturating_add(frame_bytes).min(pcm.len());
             let mut payload = pcm.get(start..end).unwrap_or_default().to_vec();
             payload.resize(frame_bytes, 0);
             let frame = AudioFrame::new(0, payload).into_obu(plan.trimming_for(index));
             TemporalUnit::of_frames(vec![frame])
         })
         .collect()
+}
+
+/// How many interleaved sample frames the PCM holds.
+///
+/// Checked rather than `/` and `as`: GUARD-03's `arithmetic_side_effects` has
+/// no in-tests carve-out, unlike `unwrap`/`expect`/`panic`, and a test helper
+/// that overflows is a test that lies.
+fn total_sample_frames(pcm: &[u8]) -> u64 {
+    let frames = pcm.len().checked_div(BYTES_PER_SAMPLE_FRAME).unwrap_or(0);
+    u64::try_from(frames).unwrap_or(0)
 }
 
 /// Drive the streaming primitive over a `Vec<u8>` and hand back the bytes.
@@ -93,8 +108,7 @@ fn reproduces_test_000003() {
 
 #[test]
 fn the_published_configuration_yields_63_frames_and_a_64_sample_end_trim() {
-    let pcm = sawtooth_pcm();
-    let total_samples = (pcm.len() / BYTES_PER_SAMPLE_FRAME) as u64;
+    let total_samples = total_sample_frames(sawtooth_pcm());
     assert_eq!(total_samples, 8000, "0.5 s at 16 kHz");
 
     let plan = plan_frames(total_samples, SAMPLES_PER_FRAME).expect("128 is not zero");
@@ -113,7 +127,11 @@ fn the_output_walks_67_obus_ending_exactly_on_the_file_length() {
         68,
         "67 OBU start offsets plus the final end offset"
     );
-    assert_eq!(boundaries.len() - 1, 67, "4 descriptors and 63 audio frames");
+    assert_eq!(
+        boundaries.len().saturating_sub(1),
+        67,
+        "4 descriptors and 63 audio frames"
+    );
     assert_eq!(boundaries.last().copied(), Some(FILE_LEN));
     // The first Audio Frame, and therefore the descriptor prologue length.
     assert_eq!(boundaries.get(4).copied(), Some(PROLOGUE_LEN));
@@ -163,13 +181,13 @@ fn push_descriptors_twice_is_a_typed_error() {
 }
 
 #[test]
-fn push_temporal_unit_after_finish_is_a_typed_error() {
-    // `finish` consumes the writer, so reaching the post-finish state at all
-    // needs a writer that is finished but still owned — which is exactly what
-    // the private `Finished` state models. Driving it through the public API
-    // means calling `finish` on a clone of the sink's contents is impossible,
-    // so the check is made on the one path that can reach it: a second
-    // `finish`.
+fn finish_consumes_the_writer_so_a_later_push_cannot_compile() {
+    // The plan asked for a typed `SequenceFinished` error on "push after
+    // finish". `finish` takes `self` by value, so that transition is a
+    // **compile** error instead — strictly stronger, and an ErrorKind that can
+    // never be produced would be worse than none. The compile-time half is
+    // proved by the `compile_fail` doctest on `SequenceWriter::finish`; this
+    // test covers the run-time half, that finishing is otherwise ordinary.
     let mut writer = SequenceWriter::new(Vec::new());
     writer
         .push_descriptors(&published_descriptor_set())
@@ -230,7 +248,7 @@ fn the_writer_holds_no_temporal_unit_history() {
         if let Some(before) = previous {
             // Every untrimmed frame costs exactly the same number of bytes, so
             // a writer that accumulated anything would show it here.
-            let step = written - before;
+            let step = written.saturating_sub(before);
             assert!(
                 step == 515 || step == 517,
                 "unit {index} cost {step} bytes, expected a constant 515 (or 517 trimmed)"
@@ -238,7 +256,7 @@ fn the_writer_holds_no_temporal_unit_history() {
         }
         previous = Some(written);
     }
-    assert_eq!(writer.bytes_written(), FILE_LEN as u64);
+    assert_eq!(writer.bytes_written(), u64::try_from(FILE_LEN).unwrap_or(0));
 }
 
 // ---------------------------------------------------------------------------
