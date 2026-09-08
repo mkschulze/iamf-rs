@@ -527,6 +527,10 @@ pub(crate) fn validate_parameter_block(
 }
 
 fn validate_parameter_data_kind(data: &ParameterData, kind: ParamDefinitionType) -> Result<()> {
+    // `Reserved` is publicly constructible, so normalize by wire value before
+    // matching: Reserved(0..=2) are aliases for canonical modelled kinds, not
+    // length-prefixed extension syntax.
+    let kind = ParamDefinitionType::from_value(kind.value());
     let matches = matches!(
         (kind, data),
         (ParamDefinitionType::MixGain, ParameterData::MixGain(_))

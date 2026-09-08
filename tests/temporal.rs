@@ -592,6 +592,36 @@ fn a_mix_gain_definition_rejects_raw_parameter_data_before_writing() {
     assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
 }
 
+#[test]
+fn canonical_parameter_kinds_cannot_be_smuggled_through_reserved_aliases() {
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let block = ParameterBlock {
+        parameter_id: 5,
+        duration_fields: Some(BlockDurationFields {
+            duration: 1,
+            constant_subblock_duration: 1,
+        }),
+        subblocks: vec![ParameterSubblock {
+            subblock_duration: None,
+            data: ParameterData::Raw(vec![0xde, 0xad]),
+        }],
+    };
+
+    for raw_kind in [0_u32, 1, 2] {
+        let mut w = BitWriter::new();
+        let err = write_parameter_block(
+            &mut w,
+            &definition,
+            ParamDefinitionType::Reserved(raw_kind),
+            &block,
+        )
+        .expect_err("values 0, 1, and 2 are canonical kinds, not extensions");
+
+        assert_eq!(err.kind(), &ErrorKind::UnsupportedParameterData);
+        assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
+    }
+}
+
 fn step_subblock(duration: Option<u32>) -> ParameterSubblock {
     ParameterSubblock {
         subblock_duration: duration,
