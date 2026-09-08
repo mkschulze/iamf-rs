@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 7
+open_count: 10
 waived_count: 0
 fixed_count: 3
-total_count: 10
-last_updated: 2026-09-08T06:14:27.253Z
+total_count: 13
+last_updated: 2026-09-08T07:16:07.505Z
 ---
 
 # Broken Windows Ledger
@@ -25,6 +25,9 @@ last_updated: 2026-09-08T06:14:27.253Z
 | 8 | 01 | deviation | src/packing.rs |  | Loudspeaker layouts beyond mono/stereo/binaural/5.1 return UnsupportedLayout; their packing order is not modelled in Phase 1 | open |  | 2026-09-08T05:31:46.934Z |  |
 | 9 | 01 | unrun-verify | src/sequence.rs |  | The Parameter Block path through push_temporal_unit has no byte-level test — test_000003 publishes zero parameter blocks and the D-18 fixture is mode-1 with none either | open |  | 2026-09-08T06:14:27.068Z |  |
 | 10 | 01 | unrun-verify | src/sequence.rs |  | The Temporal Delimiter path through push_temporal_unit is untested at byte level — test_000003 sets enable_temporal_delimiters: false | open |  | 2026-09-08T06:14:27.253Z |  |
+| 11 | 01 | deviation | tests/support/fixture.rs |  | D-18's '24-bit big-endian' fixture property is NOT met: libiamf@v1.1.0's reads24be (bitstream.c:206-210) uses readu16le where readu16be was meant, so 24-bit BE is unreadable by the pinned decoder. Sample-identity fixture moved to 24-bit LITTLE-endian and a third stereo 16-bit BIG-endian fixture carries DESC-03's endianness sense. Waiver W-1 in CONFORMANCE-GATE.md has all five D-17 fields and an executable restoration condition. | open |  | 2026-09-08T07:16:07.127Z |  |
+| 12 | 01 | deviation | tests/support/fixture.rs |  | Plan 01-08 specified ONE fixture ('two Codec Configs and one 5.1 Audio Element'); the phase ships THREE. Experiment 2 forced the structure-only split (decoder_main aborts on an unreferenced Codec Config) and Experiment 3 forced the endianness split. The sample-identity half stays whole and un-permuted, which is what preserves the gate's meaning. | open |  | 2026-09-08T07:16:07.307Z |  |
+| 13 | 01 | deviation | tests/fixture.rs |  | The plan's artifact table places the fixture generator in tests/fixture.rs; it lives in tests/support/fixture.rs instead, following the tests/support/test_000003.rs precedent from 01-07. A top-level tests/*.rs is its own test binary, so a #[test] there would be collected into all three including binaries and run three times. tests/fixture.rs is the property-test target. | open |  | 2026-09-08T07:16:07.505Z |  |
 
 ````json
 [
@@ -146,6 +149,42 @@ last_updated: 2026-09-08T06:14:27.253Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-08T06:14:27.253Z",
+    "resolved_at": null
+  },
+  {
+    "id": 11,
+    "kind": "deviation",
+    "phase": "01",
+    "file": "tests/support/fixture.rs",
+    "line": null,
+    "description": "D-18's '24-bit big-endian' fixture property is NOT met: libiamf@v1.1.0's reads24be (bitstream.c:206-210) uses readu16le where readu16be was meant, so 24-bit BE is unreadable by the pinned decoder. Sample-identity fixture moved to 24-bit LITTLE-endian and a third stereo 16-bit BIG-endian fixture carries DESC-03's endianness sense. Waiver W-1 in CONFORMANCE-GATE.md has all five D-17 fields and an executable restoration condition.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T07:16:07.127Z",
+    "resolved_at": null
+  },
+  {
+    "id": 12,
+    "kind": "deviation",
+    "phase": "01",
+    "file": "tests/support/fixture.rs",
+    "line": null,
+    "description": "Plan 01-08 specified ONE fixture ('two Codec Configs and one 5.1 Audio Element'); the phase ships THREE. Experiment 2 forced the structure-only split (decoder_main aborts on an unreferenced Codec Config) and Experiment 3 forced the endianness split. The sample-identity half stays whole and un-permuted, which is what preserves the gate's meaning.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T07:16:07.307Z",
+    "resolved_at": null
+  },
+  {
+    "id": 13,
+    "kind": "deviation",
+    "phase": "01",
+    "file": "tests/fixture.rs",
+    "line": null,
+    "description": "The plan's artifact table places the fixture generator in tests/fixture.rs; it lives in tests/support/fixture.rs instead, following the tests/support/test_000003.rs precedent from 01-07. A top-level tests/*.rs is its own test binary, so a #[test] there would be collected into all three including binaries and run three times. tests/fixture.rs is the property-test target.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T07:16:07.505Z",
     "resolved_at": null
   }
 ]

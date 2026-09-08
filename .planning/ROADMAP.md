@@ -45,7 +45,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Research**: Yes — read `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` for payload-level rejection rules before the LPCM path is written; fetch `iamf-tools` tags `v2.0.0`/`v2.1.0` to check whether either is a v1.1.0-exact tree; read AOM Patent License 1.0 §1.2
 **Decisions settled here**: DEC-04 (`iamf-tools` tag) and DEC-05 (payload rejection rules), both before the type model is written. DEC-01 and DEC-02 were **answered by the user on 2026-09-08** and are now implementation, not investigation: pin `SPEC_VERSION = "1.1.0"`, and carry `MIT OR Apache-2.0` into `Cargo.toml` plus the `NOTICE` file (the licence files themselves already landed)
-**Plans**: 7/8 plans executed
+**Plans**: 8/8 plans executed
 
 Plans (8 plans, 8 waves — strictly sequential; each layer genuinely needs the one below, and D-24
 forces 01-01 → 01-02 before any bitstream code):
@@ -57,7 +57,7 @@ forces 01-01 → 01-02 before any bitstream code):
 - [x] 01-05-PLAN.md — Descriptor OBUs: the full 120-byte prologue of `test_000003.iamf` reproduced byte-exact — IA Sequence Header with `additional >= primary`, Codec Config with derived `audio_roll_distance` and big-endian `sample_format_flags`, Audio Element with D-04's `AudioElementType`, Mix Presentation with two layouts and the mandatory Mix Gain param definitions, the four-type layout model, `Vec`-in-bitstream-order collections
 - [x] 01-06-PLAN.md — Time-varying OBUs and LPCM framing: Audio Frame with implicit substream IDs, BCG coupled-pairs-then-mono packing proven three independent ways, final-frame trimming, Temporal Delimiter, Parameter Block with an explicit `ParamDefinition` argument
 - [x] 01-07-PLAN.md — Sequence writer, profile and metadata: the streaming `push_descriptors`/`push_temporal_unit`/`finish` primitive reproducing all 32567 bytes of `test_000003.iamf`, the whole-file wrapper, the profile enum, minimum-profile selection, and the `round_ties_even` Q7.8 helper carrying the single documented float escape
-- [ ] 01-08-PLAN.md — `assert_conformant(config, pcm)` and the seven-clause exit gate: the **gating 24-bit probe first** (research assumption A1), the D-18/D-19 fixture, D-20's three golden artifacts, D-12's executable diff ledger, both reference oracles, and the always-on offline layer
+- [x] 01-08-PLAN.md — `assert_conformant(config, pcm)` and the seven-clause exit gate: the **gating 24-bit probe first** (research assumption A1), the D-18/D-19 fixture, D-20's three golden artifacts, D-12's executable diff ledger, both reference oracles, and the always-on offline layer
 
 ### Phase 2: Parser, Round-Trip and Fuzzing
 
@@ -145,7 +145,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Conformant LPCM Bitstream | 7/8 | In Progress|  |
+| 1. Conformant LPCM Bitstream | 8/8 | In Progress|  |
 | 2. Parser, Round-Trip and Fuzzing | 0/4 | Not started | - |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |

@@ -72,13 +72,13 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Conformance verification
 
-- [ ] **CONF-01**: A reusable `assert_conformant(config, pcm)` function, so later milestones reuse the harness unchanged
-- [ ] **CONF-02**: Test signal is per-channel-distinguishable and non-silent
-- [ ] **CONF-03**: Total sample count is **not** a multiple of the frame size, forcing `trim_at_end > 0`
-- [ ] **CONF-04**: Fixture has ≥6 OBUs including two Codec Configs or two Audio Elements, so ordering is observable
-- [ ] **CONF-05**: `libiamf` at a pinned commit decodes the file, **the decoded sample count equals what was encoded**, and the PCM is sample-identical
-- [ ] **CONF-06**: `iamf-tools`' own parser accepts the file — the only check that catches reserved-bit misuse and leb128 strictness
-- [ ] **CONF-07**: Byte-diff against an `iamf-tools`-produced file for an identical configuration is either identical or has every difference enumerated in writing
+- [x] **CONF-01**: A reusable `assert_conformant(config, pcm)` function, so later milestones reuse the harness unchanged
+- [x] **CONF-02**: Test signal is per-channel-distinguishable and non-silent
+- [x] **CONF-03**: Total sample count is **not** a multiple of the frame size, forcing `trim_at_end > 0`
+- [x] **CONF-04**: Fixture has ≥6 OBUs including two Codec Configs or two Audio Elements, so ordering is observable
+- [x] **CONF-05**: `libiamf` at a pinned commit decodes the file, **the decoded sample count equals what was encoded**, and the PCM is sample-identical
+- [x] **CONF-06**: `iamf-tools`' own parser accepts the file — the only check that catches reserved-bit misuse and leb128 strictness
+- [x] **CONF-07**: Byte-diff against an `iamf-tools`-produced file for an identical configuration is either identical or has every difference enumerated in writing
 - [x] **CONF-08**: Byte-comparison reproducing the shipped golden `libiamf/tests/test_000003.iamf`
 - [x] **CONF-09**: Reference binaries invoked by `Command` in tests, discovered via `IAMF_REF_DECODER`, with `tools/build-reference.sh` at pinned commits — in one Linux CI job, never a `build.rs`
 - [x] **CONF-10**: Golden fixtures are the always-on layer, so `cargo test` is green offline on all four targets
@@ -95,7 +95,7 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [x] **GUARD-07**: `NOTICE` file carrying attribution for ported BSD-licensed reference code
 - [x] **GUARD-08**: `CONTRIBUTING.md` carrying an explicit "did not consult `gpac` or `libspatialaudio`" checkbox
 - [x] **GUARD-09**: Cross-target byte-identity as a committed golden fixture reproduced on macOS arm64, macOS x86_64, Windows MSVC and Linux x64
-- [ ] **GUARD-10**: Same-process double-encode test — the only cheap check that catches per-process hash seeding
+- [x] **GUARD-10**: Same-process double-encode test — the only cheap check that catches per-process hash seeding
 - [x] **GUARD-11**: A no-DSP guard (grep or lint) enforcing the scope boundary
 - [x] **GUARD-12**: `rust-toolchain.toml` pinning Rust 1.85 / edition 2024, so the byte-identity matrix compiles identically everywhere
 - [x] **GUARD-13**: `thiserror` error type, `#[non_exhaustive]`, with a byte `offset` on every variant
@@ -226,13 +226,13 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | PROF-01 | Phase 1 | Complete |
 | PROF-02 | Phase 1 | Complete |
 | PROF-03 | Phase 1 | Complete |
-| CONF-01 | Phase 1 | Pending |
-| CONF-02 | Phase 1 | Pending |
-| CONF-03 | Phase 1 | Pending |
-| CONF-04 | Phase 1 | Pending |
-| CONF-05 | Phase 1 | Pending |
-| CONF-06 | Phase 1 | Pending |
-| CONF-07 | Phase 1 | Pending |
+| CONF-01 | Phase 1 | Complete |
+| CONF-02 | Phase 1 | Complete |
+| CONF-03 | Phase 1 | Complete |
+| CONF-04 | Phase 1 | Complete |
+| CONF-05 | Phase 1 | Complete |
+| CONF-06 | Phase 1 | Complete |
+| CONF-07 | Phase 1 | Complete |
 | CONF-08 | Phase 1 | Complete |
 | CONF-09 | Phase 1 | Complete |
 | CONF-10 | Phase 1 | Complete |
@@ -246,7 +246,7 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | GUARD-07 | Phase 1 | Complete |
 | GUARD-08 | Phase 1 | Complete |
 | GUARD-09 | Phase 1 | Complete |
-| GUARD-10 | Phase 1 | Pending |
+| GUARD-10 | Phase 1 | Complete |
 | GUARD-11 | Phase 1 | Complete |
 | GUARD-12 | Phase 1 | Complete |
 | GUARD-13 | Phase 1 | Complete |

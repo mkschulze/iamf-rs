@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
-status: executing
-stopped_at: Completed 01-07-PLAN.md
-last_updated: "2026-09-08T06:14:46.741Z"
+status: verifying
+stopped_at: Completed 01-08-PLAN.md — phase 01 exits the seven-clause gate
+last_updated: "2026-09-08T07:18:19.922Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 01 execution started
-state_head: 5c544cff9a763c4ca549705b3f03e307b313574a
+state_head: f4fcabea8fe2af62bf73e96bb3ca8055d4dea8a0
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
 Plan: 8 of 8
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-08 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P05 | 29min | 4 tasks | 11 files |
 | Phase 01 P06 | 26min | 3 tasks | 10 files |
 | Phase 01 P07 | 62 | 3 tasks | 13 files |
+| Phase 01 P08 | ~2h | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,9 @@ Recent decisions affecting current work:
 - [Phase 01]: The float→fixed join is lufs_to_q7_8 plus Loudness::from_q7_8, not an LUFS parameter on write_sequence — the latter would put an f64 in src/sequence.rs and break D-21's grep gate
 - [Phase 01]: Channel-count helpers return Option, so a layout the spec version does not fix a count for is ErrorKind::UnsupportedLayout rather than a profile selected from nothing
 - [Phase 01]: Shared integration-test fixtures live in tests/support/*.rs and are #[path]-included; a subdirectory of tests/ is not compiled as its own test target
+- [Phase 01]: Research assumption A1 REFUTED: libiamf@v1.1.0's reads24be (bitstream.c:206-210) uses readu16le where readu16be was meant, so 24-bit big-endian LPCM is misread with its top two bytes transposed
+- [Phase 01]: Sample-identity fixture is 24-bit LITTLE-endian; a third stereo 16-bit BIG-endian fixture keeps DESC-03's endianness sense asserted end to end (waiver W-1)
+- [Phase 01]: CONF-07 is byte-identical: our .iamf and iamf-tools' encoder_main output are both 7073 bytes with the same sha256; DIFF-LEDGER.md is empty and asserted
 
 ### Pending Todos
 
@@ -139,6 +143,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T06:14:35.552Z
-Stopped at: Completed 01-07-PLAN.md
+Last session: 2026-09-08T07:18:08.973Z
+Stopped at: Completed 01-08-PLAN.md — phase 01 exits the seven-clause gate
 Resume file: None
