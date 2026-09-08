@@ -11,13 +11,13 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Bit-level I/O
 
-- [x] **BITS-01**: `BitReader<'a>` borrowing `&[u8]` and `BitWriter`, wrapping `bitstream-io`, exposing `is_byte_aligned()`, `bits_remaining()` and `sub_reader(len)`
+- [x] **BITS-01**: Hand-rolled `BitCursor<'a>` borrowing `&[u8]` and `BitWriter`, exposing `is_byte_aligned()`, `bits_remaining()` and a bounded `sub_reader(len)`; the cursor owns the byte offset so every failure carries a native located error
 - [x] **BITS-02**: Reader and writer method names mirror `iamf-tools`' `read_bit_buffer.h` / `write_bit_buffer.h` one-for-one, with separate signed and unsigned methods
 - [x] **BITS-03**: Hand-written uleb128 writer emitting minimal form, enforcing the 8-byte and `u32::MAX` caps
 - [x] **BITS-04**: Hand-written uleb128 reader accepting 1–8 bytes, returning a typed error on a 9th continuation byte and on a value exceeding `u32::MAX`
 - [x] **BITS-05**: Byte alignment asserted at every OBU boundary — the reference pads nothing and errors instead
 - [x] **BITS-06**: Hand-computed unit vectors covering the bit primitives, written before any OBU type exists
-- [x] **BITS-07**: `bits` is the only module that touches `bitstream-io`; `std::io::Error` is mapped at that boundary and never escapes
+- [x] **BITS-07**: Only `src/bits` owns shipping bit offsets and primitives, and no `std::io::Error` escapes that boundary; `bitstream-io` is dev-only and imported solely by the randomized differential oracle, never by shipping code
 
 ### OBU header and common structure
 
@@ -82,7 +82,7 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [x] **CONF-08**: Byte-comparison reproducing the shipped golden `libiamf/tests/test_000003.iamf`
 - [x] **CONF-09**: Reference binaries invoked by `Command` in tests, discovered via `IAMF_REF_DECODER`, with `tools/build-reference.sh` at pinned commits — in one Linux CI job, never a `build.rs`
 - [x] **CONF-10**: Golden fixtures are the always-on layer, so `cargo test` is green offline on all four targets
-- [x] **CONF-11**: One-time Bazel build of `iamf-tools` generating and committing `tests/fixtures/*.iamf` — `iamf-tools` ships 338 `.textproto` files and exactly one `.iamf`
+- [x] **CONF-11**: Select the committed `libiamf@v1.1.0` `.iamf` fixtures, vendor the D-14 size-capped subset from the pinned tree using `git show`, and record selected files, skipped files and regeneration instructions in `tests/fixtures/MANIFEST.md`; the digest-pinned Bazel container generates CONF-07's matching custom fixture, not the offline reference corpus
 
 ### Guardrails
 
