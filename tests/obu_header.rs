@@ -249,3 +249,227 @@ fn the_largest_payload_under_the_ceiling_is_accepted() {
 
     assert_eq!(bytes.len(), LARGEST_PAYLOAD.saturating_add(4));
 }
+
+// ---------------------------------------------------------------------------
+// The extension header (OBU-06)
+// ---------------------------------------------------------------------------
+
+/// `f9` is `11111` (type 31) with the extension bit set. The after-size fields
+/// are then `02 aa bb` — a uleb128 length and that many bytes — so `obu_size`
+/// is `3 + 6 = 9`, which is again OBU-02's rule.
+#[test]
+fn an_extension_header_writes_its_size_then_its_bytes_and_obu_size_counts_both() {
+    let header =
+        ObuHeader::new(ObuType::IaSequenceHeader).with_extension(hex!("aa bb").to_vec());
+    let payload = hex!("69 61 6d 66 00 00");
+
+    assert_eq!(
+        emit(&header, &payload).as_slice(),
+        hex!("f9 09 02 aa bb 69 61 6d 66 00 00").as_slice()
+    );
+}
+
+#[test]
+fn an_extension_header_reads_back_verbatim() {
+    let bytes = hex!("f9 09 02 aa bb 69 61 6d 66 00 00");
+    let mut r = BitCursor::new(&bytes);
+
+    let (header, obu_size) = iamf::obu::read_obu_header(&mut r).expect("well-formed header");
+
+    assert!(header.extension_flag());
+    assert_eq!(header.extension.as_deref(), Some(hex!("aa bb").as_slice()));
+    assert_eq!(obu_size, 9);
+}
+
+/// The after-size fields are written trim-first, extension-second — the order
+/// `WriteFieldsAfterObuSize` uses.
+#[test]
+fn the_extension_header_is_written_after_both_trim_fields() {
+    let header = ObuHeader::new(ObuType::AudioFrameId0)
+        .with_type_specific(TypeSpecific::Trimming(Some(Trimming {
+            at_end: 64,
+            at_start: 7,
+        })))
+        .with_extension(hex!("aa").to_vec());
+
+    let bytes = emit(&header, &[]);
+
+    // 0x33 = type 6, redundant 0, trimming 1, extension 1. obu_size = 4.
+    assert_eq!(
+        bytes.as_slice(),
+        hex!("33 04 40 07 01 aa").as_slice(),
+        "end trim, start trim, extension size, extension bytes"
+    );
+}
+
+/// T-01-19: `extension_header_size` is attacker-controlled and drives an
+/// allocation, so it is capped against the remaining input before anything is
+/// reserved.
+#[test]
+fn an_extension_length_past_the_end_of_the_input_is_refused_without_allocating() {
+    // Claims a 200-byte extension inside a five-byte buffer.
+    let bytes = hex!("f9 09 c8 01 00");
+    let mut r = BitCursor::new(&bytes);
+
+    let err = iamf::obu::read_obu_header(&mut r)
+        .expect_err("the length is past the end of the input")
+        .kind()
+        .clone();
+
+    assert_eq!(err, ErrorKind::UnexpectedEndOfInput);
+}
+
+// ---------------------------------------------------------------------------
+// The two legality rules (OBU-03, OBU-04)
+// ---------------------------------------------------------------------------
+
+/// The rule this whole plan exists to get right. `IsTrimmingStatusFlagAllowed`
+/// returns true only for Audio Frames, and `libiamf@v1.1.0` reads the trim
+/// fields for *any* type whose bit 6 is set — so a trimming flag on a
+/// descriptor shifts its payload two bytes with no error from either side.
+#[test]
+fn the_trimming_flag_is_refused_on_every_non_audio_frame_type() {
+    for obu_type in [
+        ObuType::CodecConfig,
+        ObuType::AudioElement,
+        ObuType::MixPresentation,
+        ObuType::ParameterBlock,
+        ObuType::TemporalDelimiter,
+        ObuType::IaSequenceHeader,
+        ObuType::Reserved(24),
+    ] {
+        let header = ObuHeader::new(obu_type).with_type_specific(TypeSpecific::Trimming(Some(
+            Trimming {
+                at_end: 1,
+                at_start: 0,
+            },
+        )));
+
+        assert_eq!(
+            emit_err(&header, &[]),
+            Some(ErrorKind::TrimmingFlagNotAllowed),
+            "bit 6 must not be settable on type {}",
+            obu_type.value()
+        );
+    }
+}
+
+#[test]
+fn the_trimming_flag_is_accepted_on_every_audio_frame_type() {
+    for raw in 5_u8..=23 {
+        let header = ObuHeader::new(ObuType::from_value(raw)).with_type_specific(
+            TypeSpecific::Trimming(Some(Trimming {
+                at_end: 64,
+                at_start: 0,
+            })),
+        );
+
+        assert_eq!(emit_err(&header, &[]), None, "type {raw} is an Audio Frame");
+    }
+}
+
+#[test]
+fn a_redundant_copy_is_refused_on_parameter_blocks_delimiters_and_audio_frames() {
+    for raw in 3_u8..=23 {
+        let obu_type = ObuType::from_value(raw);
+        let type_specific = if obu_type.is_audio_frame() {
+            TypeSpecific::Trimming(None)
+        } else {
+            TypeSpecific::Reserved
+        };
+        let header = ObuHeader::new(obu_type)
+            .with_type_specific(type_specific)
+            .with_redundant_copy(true);
+
+        assert_eq!(
+            emit_err(&header, &[]),
+            Some(ErrorKind::RedundantCopyNotAllowed),
+            "obu_redundant_copy must be refused on type {raw}"
+        );
+    }
+}
+
+/// On a descriptor it is legal, and it round-trips. Byte 0 for a Codec Config
+/// with the redundant-copy bit set is `00000` + `1` + `0` + `0` = `0x04`.
+#[test]
+fn a_redundant_copy_round_trips_on_a_descriptor() {
+    let header = ObuHeader::new(ObuType::CodecConfig).with_redundant_copy(true);
+
+    let bytes = emit(&header, &[]);
+    assert_eq!(bytes.as_slice(), hex!("04 00").as_slice());
+
+    let mut r = BitCursor::new(&bytes);
+    let (read_back, _) = iamf::obu::read_obu_header(&mut r).expect("well-formed header");
+    assert!(read_back.obu_redundant_copy);
+    assert_eq!(read_back, header);
+}
+
+// ---------------------------------------------------------------------------
+// OBU-07 — the central `trailing` drain
+// ---------------------------------------------------------------------------
+
+/// A payload parser that stops short leaves the remainder in `trailing`, and
+/// `trailing`'s length is exactly `obu_size` minus what it consumed.
+#[test]
+fn a_payload_parser_that_under_reads_leaves_the_remainder_in_trailing() {
+    let bytes = hex!("f8 0c 00 01 02 03 04 05 06 07 08 09 0a 0b");
+    let mut r = BitCursor::new(&bytes);
+
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_uint8_span(10).map(<[u8]>::to_vec))
+        .expect("well-formed OBU");
+
+    assert_eq!(obu.payload.len(), 10);
+    assert_eq!(obu.trailing.as_slice(), hex!("0a 0b").as_slice());
+    assert_eq!(obu.trailing.len(), 2, "obu_size 12 minus 10 consumed");
+    assert_eq!(r.bytes_remaining(), 0, "the parent is at the next OBU");
+}
+
+#[test]
+fn a_payload_parser_that_consumes_everything_leaves_trailing_empty() {
+    let bytes = hex!("f8 0c 00 01 02 03 04 05 06 07 08 09 0a 0b");
+    let mut r = BitCursor::new(&bytes);
+
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_uint8_span(12).map(<[u8]>::to_vec))
+        .expect("well-formed OBU");
+
+    assert!(obu.trailing.is_empty());
+}
+
+#[test]
+fn a_freshly_constructed_obu_has_empty_trailing_and_serialises_without_it() {
+    let obu = iamf::obu::Obu::new(
+        ObuHeader::new(ObuType::IaSequenceHeader),
+        hex!("69 61 6d 66 00 00").to_vec(),
+    );
+
+    assert!(obu.trailing.is_empty());
+
+    let mut w = BitWriter::new();
+    iamf::obu::write_obu_with(&mut w, &obu, |scratch, payload| scratch.write_bytes(payload))
+        .expect("the header is legal");
+
+    assert_eq!(
+        w.finish().expect("byte-aligned").as_slice(),
+        hex!("f8 06 69 61 6d 66 00 00").as_slice()
+    );
+}
+
+/// `trailing` is appended **last**, after the type-specific payload, so a
+/// read-then-write of an OBU whose payload we only partly understand is
+/// byte-identical.
+#[test]
+fn an_under_read_obu_re_serialises_to_the_bytes_it_was_read_from() {
+    let original = hex!("f8 0c 00 01 02 03 04 05 06 07 08 09 0a 0b");
+    let mut r = BitCursor::new(&original);
+    let obu = iamf::obu::read_obu_with(&mut r, |payload| payload.read_uint8_span(10).map(<[u8]>::to_vec))
+        .expect("well-formed OBU");
+
+    let mut w = BitWriter::new();
+    iamf::obu::write_obu_with(&mut w, &obu, |scratch, payload| scratch.write_bytes(payload))
+        .expect("the header is legal");
+
+    assert_eq!(
+        w.finish().expect("byte-aligned").as_slice(),
+        original.as_slice()
+    );
+}
