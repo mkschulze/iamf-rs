@@ -12,13 +12,27 @@
 # TAP is a mechanical reformat of a real run.
 #
 # Usage:
-#   tools/red-evidence.sh <record.json> [cargo-test-tap.sh args...]
-#   tools/red-evidence.sh /tmp/red.json --test packing
+#   tools/red-evidence.sh [--target-test <name>] <record.json> [tap args...]
+#   tools/red-evidence.sh --target-test bcg_5_1_packs_pairs_first /tmp/red.json --test packing
 #   gsd-tools check tdd-red-evidence /tmp/red.json
+#
+# --target-test names the TEST. Without it the value is inferred from
+# `--test <name>`, which is the integration-test BINARY name -- the gate then
+# cannot match it against a `not ok` line and reports INVALID_RED (found by
+# plan 01-07).
 set -uo pipefail
 
+TARGET_OVERRIDE=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --target-test) TARGET_OVERRIDE="${2:-}"; shift 2;;
+    --target-test=*) TARGET_OVERRIDE="${1#*=}"; shift;;
+    *) break;;
+  esac
+done
+
 if [ "$#" -lt 1 ]; then
-  echo "usage: tools/red-evidence.sh <record.json> [cargo-test-tap.sh args...]" >&2
+  echo "usage: tools/red-evidence.sh [--target-test <name>] <record.json> [tap args...]" >&2
   exit 2
 fi
 
@@ -30,13 +44,22 @@ TAP="$HERE/cargo-test-tap.sh"
 OUT="$("$TAP" "$@" 2>&1)"
 EXIT=$?
 
-# Name the target under test, so the gate can attribute the record.
-TARGET="(whole suite)"
-prev=""
-for a in "$@"; do
-  case "$prev" in --test|--bin|--lib) TARGET="$a";; esac
-  prev="$a"
-done
+# Name the target under test so the gate can attribute the record. An explicit
+# --target-test always wins; otherwise fall back to the first `not ok` test name
+# in the TAP (the failing test IS the target during RED), and only then to the
+# binary name.
+TARGET="$TARGET_OVERRIDE"
+if [ -z "$TARGET" ]; then
+  TARGET="$(printf '%s\n' "$OUT" | sed -n 's/^not ok [0-9][0-9]* - //p' | head -1)"
+fi
+if [ -z "$TARGET" ]; then
+  prev=""
+  for a in "$@"; do
+    case "$prev" in --test|--bin|--lib) TARGET="$a";; esac
+    prev="$a"
+  done
+fi
+[ -n "$TARGET" ] || TARGET="(whole suite)"
 
 RECORD="$RECORD" OUT="$OUT" EXIT="$EXIT" TARGET="$TARGET" ARGS="$*" node -e '
 const fs = require("fs");
