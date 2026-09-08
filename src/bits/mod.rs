@@ -99,3 +99,11 @@ mod writer;
 
 pub use reader::BitCursor;
 pub use writer::BitWriter;
+
+/// How many bytes the minimal uleb128 encoding of a value occupies.
+///
+/// Re-exported `pub(crate)` because `obu_size`'s own ceiling depends on the
+/// length of the size field that carries it (`max_obu_size =
+/// kEntireObuSizeMaxTwoMegabytes - 1 - size_of_obu_size`), so the OBU layer has
+/// to be able to ask.
+pub(crate) use leb128::minimal_len as minimal_uleb128_len;

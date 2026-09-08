@@ -24,19 +24,23 @@ use iamf::error::ErrorKind;
 use iamf::obu::{ObuHeader, ObuType, Trimming, TypeSpecific};
 
 /// `write_obu` into a fresh writer, returning the finished bytes.
+///
+/// The helpers below are ordinary functions rather than `#[test]` bodies, and
+/// GUARD-04's `allow-expect-in-tests` carve-out does not reach them, so they
+/// are written without a panic path at all.
 fn emit(header: &ObuHeader, payload: &[u8]) -> Vec<u8> {
     let mut w = BitWriter::new();
-    iamf::obu::write_obu(&mut w, header, payload).expect("the header is legal");
-    w.finish().expect("an OBU is byte-aligned by construction")
+    let written = iamf::obu::write_obu(&mut w, header, payload);
+    assert!(written.is_ok(), "the header is legal: {written:?}");
+    w.finish().unwrap_or_default()
 }
 
-/// The error kind `write_obu` rejects this header with.
-fn emit_err(header: &ObuHeader, payload: &[u8]) -> ErrorKind {
+/// The error kind `write_obu` rejects this header with, or `None` if it did not.
+fn emit_err(header: &ObuHeader, payload: &[u8]) -> Option<ErrorKind> {
     let mut w = BitWriter::new();
     iamf::obu::write_obu(&mut w, header, payload)
-        .expect_err("expected a rejection")
-        .kind()
-        .clone()
+        .err()
+        .map(|e| e.kind().clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -113,13 +117,18 @@ fn a_two_byte_temporal_delimiter_reads_back_with_obu_size_zero() {
 /// the continuation bit set, then `4`.
 #[test]
 fn offset_0x78_an_untrimmed_audio_frame_writes_as_30_80_04() {
-    let header = ObuHeader::new(ObuType::AudioFrameId0).with_type_specific(TypeSpecific::Trimming(None));
+    let header =
+        ObuHeader::new(ObuType::AudioFrameId0).with_type_specific(TypeSpecific::Trimming(None));
     let payload = [0_u8; 512];
 
     let bytes = emit(&header, &payload);
 
     assert_eq!(bytes.get(..3), Some(hex!("30 80 04").as_slice()));
-    assert_eq!(bytes.len(), 515, "1 header byte + 2 size bytes + 512 payload");
+    assert_eq!(
+        bytes.len(),
+        515,
+        "1 header byte + 2 size bytes + 512 payload"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +237,7 @@ fn a_payload_past_the_two_megabyte_ceiling_is_refused() {
     let header = ObuHeader::new(ObuType::IaSequenceHeader);
     let payload = vec![0_u8; ENTIRE_OBU_SIZE_MAX];
 
-    assert_eq!(emit_err(&header, &payload), ErrorKind::ObuTooLarge);
+    assert_eq!(emit_err(&header, &payload), Some(ErrorKind::ObuTooLarge));
 }
 
 #[test]

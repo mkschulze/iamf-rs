@@ -259,6 +259,65 @@ impl ObuHeader {
     }
 }
 
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc WriteFieldsAfterObuSize
+// NOTE: the trim fields are written **END first, then START** — the opposite
+// of the order their names suggest and of the order they are usually spoken
+// in. Whenever the two values are equal, which is true of every Audio Frame in
+// every vendored reference fixture, the two orders produce identical bytes, so
+// no golden file can catch a swap. `tests/obu_header.rs`'s differing-value
+// vector is the only thing that can. Do not "tidy" this order.
+/// Write the fields that live between `obu_size` and the payload, in the
+/// reference's order: end-trim, then start-trim.
+fn write_fields_after_obu_size(w: &mut BitWriter, header: &ObuHeader) -> Result<()> {
+    if let TypeSpecific::Trimming(Some(trim)) = header.type_specific {
+        w.write_uleb128_minimal(trim.at_end)?;
+        w.write_uleb128_minimal(trim.at_start)?;
+    }
+    Ok(())
+}
+
+/// `obu_size` for an already-serialised after-size buffer and payload.
+///
+/// Split out from [`write_obu`] because it is the whole of Pattern 1 and the
+/// whole of OBU-02: `obu_size` is **measured**, never reserved and backfilled,
+/// and it counts the after-size fields as well as the payload.
+///
+/// The alignment check mirrors `GetObuSizeAndValidate`'s own
+/// `!temp_wb_after_obu_size.IsByteAligned()` guard. It is unreachable through
+/// the public path today — every after-size field is a whole number of bytes —
+/// which is exactly why it is checked rather than assumed: the field set grows.
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc GetObuSizeAndValidate
+pub(crate) fn obu_size_for(after: &BitWriter, payload_len: usize) -> Result<u32> {
+    if !after.is_byte_aligned() {
+        return Err(Error::new(
+            ErrorKind::UnalignedAfterSizeFields,
+            Location::OutputOffset(0),
+        ));
+    }
+    let total = after
+        .len_bytes()
+        .checked_add(payload_len)
+        .ok_or_else(|| Error::new(ErrorKind::ObuSizeOverflow, Location::OutputOffset(0)))?;
+    let obu_size = u32::try_from(total)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::OutputOffset(0)))?;
+
+    // max_obu_size = kEntireObuSizeMaxTwoMegabytes - 1 - size_of_obu_size.
+    // The size field's own length depends on the value it carries, so the bound
+    // is computed from the candidate rather than from a constant.
+    let size_of_obu_size = crate::bits::minimal_uleb128_len(obu_size);
+    let max = ENTIRE_OBU_SIZE_MAX
+        .checked_sub(1)
+        .and_then(|v| v.checked_sub(size_of_obu_size))
+        .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, Location::OutputOffset(0)))?;
+    if total > max {
+        return Err(Error::new(
+            ErrorKind::ObuTooLarge,
+            Location::OutputOffset(0),
+        ));
+    }
+    Ok(obu_size)
+}
+
 // ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ValidateAndWrite
 /// Serialise one whole OBU: byte 0, `obu_size`, the after-size fields, then the
 /// payload.
@@ -272,12 +331,23 @@ pub fn write_obu(w: &mut BitWriter, header: &ObuHeader, payload: &[u8]) -> Resul
     if !w.is_byte_aligned() {
         // BITS-05: the format has no padding mechanism, so an OBU that starts
         // mid-byte is unrepresentable rather than merely unusual.
-        return Err(Error::new(
-            ErrorKind::NotByteAligned,
-            Location::Unlocated,
-        ));
+        return Err(Error::new(ErrorKind::NotByteAligned, Location::Unlocated));
     }
-    let _ = (header, payload);
+
+    // Pass one: the fields between `obu_size` and the payload, into a scratch
+    // buffer that exists only to be measured.
+    let mut after = BitWriter::new();
+    write_fields_after_obu_size(&mut after, header)?;
+    let obu_size = obu_size_for(&after, payload.len())?;
+
+    // Pass two: byte 0, the measured size, then the bytes it counted.
+    w.write_unsigned(u64::from(header.obu_type.value()), 5)?;
+    w.write_bool(header.obu_redundant_copy)?;
+    w.write_bool(header.trimming_status_flag())?;
+    w.write_bool(header.extension_flag())?;
+    w.write_uleb128_minimal(obu_size)?;
+    w.write_bytes(&after.finish()?)?;
+    w.write_bytes(payload)?;
     Ok(())
 }
 
@@ -287,9 +357,119 @@ pub fn write_obu(w: &mut BitWriter, header: &ObuHeader, payload: &[u8]) -> Resul
 /// length is `obu_size` minus whatever the after-size fields consumed, which
 /// only the caller can attribute.
 pub fn read_obu_header(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32)> {
-    let _ = r;
-    Err(Error::new(
-        ErrorKind::UnexpectedEndOfInput,
-        Location::Unlocated,
+    let obu_type = ObuType::from_value(u8::try_from(r.read_unsigned(5)?).unwrap_or(0));
+    let obu_redundant_copy = r.read_bool()?;
+    let trimming_status_flag = r.read_bool()?;
+    let extension_flag = r.read_bool()?;
+    let obu_size = r.read_uleb128()?;
+
+    // END first, then START — see the NOTE on `write_fields_after_obu_size`.
+    let type_specific = if trimming_status_flag {
+        let at_end = r.read_uleb128()?;
+        let at_start = r.read_uleb128()?;
+        TypeSpecific::Trimming(Some(Trimming { at_end, at_start }))
+    } else if obu_type.is_audio_frame() {
+        TypeSpecific::Trimming(None)
+    } else {
+        TypeSpecific::Reserved
+    };
+
+    let extension = if extension_flag {
+        Some(Vec::new())
+    } else {
+        None
+    };
+
+    Ok((
+        ObuHeader {
+            obu_type,
+            obu_redundant_copy,
+            type_specific,
+            extension,
+        },
+        obu_size,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    //! `obu_size_for` is `pub(crate)`, so its vectors live here rather than in
+    //! `tests/obu_header.rs`. The alignment guard in particular is unreachable
+    //! through the public path — every after-size field is a whole number of
+    //! bytes — and this is the only place it can be exercised at all.
+
+    use super::{ENTIRE_OBU_SIZE_MAX, ObuType, obu_size_for};
+    use crate::bits::BitWriter;
+    use crate::error::ErrorKind;
+
+    #[test]
+    fn an_unaligned_after_size_buffer_is_refused_before_any_byte_is_emitted() {
+        let mut after = BitWriter::new();
+        after.write_bool(true).expect("one bit fits");
+
+        let err = obu_size_for(&after, 0)
+            .expect_err("an unaligned after-size buffer is refused")
+            .kind()
+            .clone();
+
+        assert_eq!(err, ErrorKind::UnalignedAfterSizeFields);
+    }
+
+    #[test]
+    fn obu_size_counts_the_after_size_bytes_as_well_as_the_payload() {
+        let mut after = BitWriter::new();
+        after.write_uleb128_minimal(64).expect("end trim");
+        after.write_uleb128_minimal(0).expect("start trim");
+
+        assert_eq!(
+            obu_size_for(&after, 512).expect("well under the ceiling"),
+            514,
+            "2 trim bytes + 512 payload bytes — offset 0x7D33 of test_000003.iamf"
+        );
+    }
+
+    #[test]
+    fn the_ceiling_is_derived_from_the_size_fields_own_length() {
+        let after = BitWriter::new();
+        // A payload of exactly `(1 << 21) - 1 - 3` fits; one more byte does not,
+        // because `obu_size` at that magnitude occupies three uleb128 bytes.
+        let limit = ENTIRE_OBU_SIZE_MAX - 1 - 3;
+
+        assert!(obu_size_for(&after, limit).is_ok());
+        assert_eq!(
+            obu_size_for(&after, limit.saturating_add(1))
+                .expect_err("one byte over the derived bound")
+                .kind()
+                .clone(),
+            ErrorKind::ObuTooLarge
+        );
+    }
+
+    #[test]
+    fn the_two_legality_predicates_match_the_references_tables() {
+        // IsTrimmingStatusFlagAllowed: audio frames only.
+        assert!(ObuType::AudioFrame.is_audio_frame());
+        assert!(ObuType::AudioFrameId0.is_audio_frame());
+        assert!(ObuType::AudioFrameId17.is_audio_frame());
+        assert!(!ObuType::TemporalDelimiter.is_audio_frame());
+        assert!(!ObuType::MixPresentation.is_audio_frame());
+        assert!(!ObuType::IaSequenceHeader.is_audio_frame());
+
+        // IsRedundantCopyAllowed: forbidden on 3, 4, 5 and 6..=23.
+        assert!(ObuType::CodecConfig.is_redundant_copy_allowed());
+        assert!(ObuType::AudioElement.is_redundant_copy_allowed());
+        assert!(ObuType::MixPresentation.is_redundant_copy_allowed());
+        assert!(ObuType::IaSequenceHeader.is_redundant_copy_allowed());
+        assert!(!ObuType::ParameterBlock.is_redundant_copy_allowed());
+        assert!(!ObuType::TemporalDelimiter.is_redundant_copy_allowed());
+        assert!(!ObuType::AudioFrame.is_redundant_copy_allowed());
+        assert!(!ObuType::AudioFrameId17.is_redundant_copy_allowed());
+    }
+
+    #[test]
+    fn every_five_bit_value_round_trips_through_the_type_enum() {
+        for raw in 0_u8..32 {
+            assert_eq!(ObuType::from_value(raw).value(), raw);
+        }
+    }
 }
