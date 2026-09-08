@@ -22,12 +22,22 @@
 //! decode→encode byte-identity property becomes untestable — which is the only
 //! property that can prove we preserved something we did not understand.
 
+mod audio_element;
 mod boundaries;
 mod codec_config;
 mod header;
+mod param_definition;
 mod sequence_header;
 
+pub use audio_element::{
+    AudioElement, AudioElementParam, AudioElementType, ChannelAudioLayerConfig, ChannelBasedConfig,
+    OutputGain, PARAM_DEFINITION_DEMIXING, PARAM_DEFINITION_RECON_GAIN,
+    ScalableChannelLayoutConfig, read_audio_element, write_audio_element,
+};
 pub use boundaries::find_obu_boundaries;
+pub use param_definition::{
+    DurationFields, ParamDefinition, read_param_definition, write_param_definition,
+};
 pub use codec_config::{
     CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig, DecoderConfig,
     LpcmDecoderConfig, MAX_SAMPLES_PER_FRAME, SampleFormatFlags, read_codec_config,

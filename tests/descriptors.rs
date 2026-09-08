@@ -17,10 +17,13 @@
 use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    CodecConfig, DecoderConfig, IaSequenceHeader, LpcmDecoderConfig, Obu, ObuHeader, ObuType,
-    SampleFormatFlags, read_codec_config, read_ia_sequence_header, read_obu_with,
-    write_codec_config, write_ia_sequence_header, write_obu_with,
+    AudioElement, AudioElementType, ChannelAudioLayerConfig, CodecConfig, DecoderConfig,
+    IaSequenceHeader, LpcmDecoderConfig, Obu, ObuHeader, ObuType, SampleFormatFlags,
+    ScalableChannelLayoutConfig, read_audio_element, read_codec_config, read_ia_sequence_header,
+    read_obu_with, write_audio_element, write_codec_config, write_ia_sequence_header,
+    write_obu_with,
 };
 
 /// The vendored reference file the whole suite is measured against.
@@ -320,4 +323,235 @@ fn the_first_26_bytes_of_test_000003_are_reproduced_from_its_published_configura
 
     assert_eq!(produced.len(), 0x1a);
     assert_eq!(produced.as_slice(), TEST_000003.get(0x00..0x1a).expect("longer"));
+}
+
+// ---------------------------------------------------------------------------
+// Audio Element — offsets 0x1A..0x28
+// ---------------------------------------------------------------------------
+
+/// The `test_000003` Audio Element, as its textproto publishes it: channel
+/// based, one substream (id 0), one stereo layer, both gate flags clear.
+fn published_audio_element() -> Obu<AudioElement> {
+    Obu::new(
+        ObuHeader::new(ObuType::AudioElement),
+        AudioElement::channel_based(
+            300,
+            200,
+            vec![0],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                LoudspeakerLayout::Stereo,
+                1,
+                1,
+            )),
+        ),
+    )
+}
+
+/// An Audio Element OBU whose `audio_element_type` is `value`, with four bytes
+/// of payload after the common fields that this crate cannot interpret.
+fn reserved_element_obu(value: u8) -> Vec<u8> {
+    let type_byte = value.wrapping_shl(5);
+    vec![
+        0x08, 0x0c, // Audio Element, obu_size 12
+        0xac, 0x02, // audio_element_id 300
+        type_byte, // audio_element_type(3) / reserved(5)
+        0xc8, 0x01, // codec_config_id 200
+        0x01, 0x00, // num_substreams 1, id 0
+        0x00, // num_parameters 0
+        0xde, 0xad, 0xbe, 0xef, // an element config we do not model
+    ]
+}
+
+#[test]
+fn audio_element_reproduces_offsets_0x1a_through_0x27() {
+    // 08 = type(5)=1 Audio Element. 0c = obu_size 12.
+    // 00 = audio_element_type(3)=0 channel-based / reserved(5)=0.
+    // 20 = num_layers(3)=1 / reserved(5)=0.
+    // 10 = loudspeaker_layout(4)=1 Stereo / output_gain(1)=0 /
+    //      recon_gain(1)=0 / reserved_a(2)=0.
+    assert_eq!(
+        obu_bytes(&published_audio_element(), write_audio_element),
+        hex!("08 0c ac 02 00 c8 01 01 00 00 20 10 01 01"),
+    );
+}
+
+#[test]
+fn audio_element_matches_the_vendored_reference_file_at_0x1a() {
+    let expected = TEST_000003.get(0x1a..0x28).expect("the file is longer");
+    assert_eq!(
+        obu_bytes(&published_audio_element(), write_audio_element),
+        expected,
+    );
+}
+
+#[test]
+fn audio_element_type_occupies_the_top_three_bits_of_one_byte() {
+    let bytes = obu_bytes(&published_audio_element(), write_audio_element);
+    assert_eq!(bytes.get(4), Some(&0x00), "channel-based is 0x00");
+
+    // The same byte with element type 3 in the top three bits is 0x60.
+    assert_eq!(reserved_element_obu(3).get(4), Some(&0x60));
+}
+
+#[test]
+fn num_layers_occupies_the_top_three_bits_of_one_byte() {
+    let bytes = obu_bytes(&published_audio_element(), write_audio_element);
+    assert_eq!(bytes.get(10), Some(&0x20), "one layer is 0x20");
+}
+
+#[test]
+fn the_layer_configuration_byte_packs_stereo_as_0x10() {
+    let bytes = obu_bytes(&published_audio_element(), write_audio_element);
+    assert_eq!(bytes.get(11), Some(&0x10));
+}
+
+#[test]
+fn the_layer_configuration_byte_packs_five_one_as_0x20() {
+    let obu = Obu::new(
+        ObuHeader::new(ObuType::AudioElement),
+        AudioElement::channel_based(
+            300,
+            200,
+            vec![0, 1, 2, 3],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                LoudspeakerLayout::Ch5_1,
+                4,
+                2,
+            )),
+        ),
+    );
+    let bytes = obu_bytes(&obu, write_audio_element);
+    // ... ac 02 | 00 | c8 01 | 04 00 01 02 03 | 00 | 20 | 20 | 04 | 02
+    assert_eq!(bytes.get(14), Some(&0x20), "5.1 with both flags clear");
+}
+
+#[test]
+fn a_five_one_single_layer_element_carries_four_substreams_and_two_coupled() {
+    // BCG packing for 5.1: L/R, Ls/Rs, C, LFE — four substreams of which two
+    // are coupled stereo pairs.
+    let obu = Obu::new(
+        ObuHeader::new(ObuType::AudioElement),
+        AudioElement::channel_based(
+            300,
+            200,
+            vec![0, 1, 2, 3],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                LoudspeakerLayout::Ch5_1,
+                4,
+                2,
+            )),
+        ),
+    );
+    let bytes = obu_bytes(&obu, write_audio_element);
+    assert_eq!(bytes.get(15), Some(&0x04), "substream_count");
+    assert_eq!(bytes.get(16), Some(&0x02), "coupled_substream_count");
+
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_audio_element).expect("the vector parses");
+    assert_eq!(parsed.payload.num_substreams(), 4);
+    assert!(parsed.payload.validate().is_empty(), "the layers agree");
+}
+
+#[test]
+fn audio_element_round_trips_through_read() {
+    let bytes = obu_bytes(&published_audio_element(), write_audio_element);
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_audio_element).expect("the vector parses");
+
+    assert_eq!(parsed.payload.audio_element_id, 300);
+    assert_eq!(parsed.payload.codec_config_id, 200);
+    assert_eq!(parsed.payload.audio_substream_ids, vec![0]);
+    assert_eq!(parsed.payload.num_parameters(), 0);
+    assert!(parsed.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_audio_element), bytes);
+}
+
+#[test]
+fn reserved_element_type_round_trips_byte_identically() {
+    // The companion invariant test D-04 exists to buy. `Reserved { value, raw }`
+    // is the ONLY mechanism in this crate that can assert byte-identity on
+    // something we did not understand — this goes red the instant a future
+    // phase reintroduces the channel-only assumption.
+    for value in 2_u8..=7 {
+        let bytes = reserved_element_obu(value);
+        let mut r = BitCursor::new(&bytes);
+        let parsed = read_obu_with(&mut r, read_audio_element)
+            .unwrap_or_else(|e| panic!("element type {value} parses: {e}"));
+
+        match &parsed.payload.audio_element_type {
+            AudioElementType::Reserved { value: got, raw } => {
+                assert_eq!(*got, value);
+                assert_eq!(raw, &vec![0xde, 0xad, 0xbe, 0xef]);
+            }
+            other => panic!("element type {value} should be Reserved, got {other:?}"),
+        }
+        assert!(
+            parsed.payload.trailing.is_empty(),
+            "raw consumed the payload, so the element-level trailing is empty"
+        );
+        assert!(
+            parsed.trailing.is_empty(),
+            "D-05 precedence: raw wins, so the OBU-level trailing stays empty"
+        );
+        assert_eq!(
+            obu_bytes(&parsed, write_audio_element),
+            bytes,
+            "element type {value} re-serialises byte-identically"
+        );
+    }
+}
+
+#[test]
+fn an_expanded_layout_carries_its_expanded_value_inside_the_variant() {
+    // The wire rule "expanded_loudspeaker_layout is present only when
+    // loudspeaker_layout == 15" is encoded in the TYPE: there is no way to
+    // build an expanded layout with a different loudspeaker_layout.
+    let layout = LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6);
+    assert_eq!(layout.value(), 15);
+    assert_eq!(layout.expanded(), Some(ExpandedLoudspeakerLayout::Ch9_1_6));
+    assert_eq!(LoudspeakerLayout::Stereo.expanded(), None);
+    assert_eq!(
+        LoudspeakerLayout::from_value(15),
+        None,
+        "15 is incomplete without the byte that follows it"
+    );
+
+    let obu = Obu::new(
+        ObuHeader::new(ObuType::AudioElement),
+        AudioElement::channel_based(
+            300,
+            200,
+            vec![0],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(layout, 1, 0)),
+        ),
+    );
+    let bytes = obu_bytes(&obu, write_audio_element);
+    let mut r = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut r, read_audio_element).expect("the vector parses");
+    assert_eq!(obu_bytes(&parsed, write_audio_element), bytes);
+}
+
+#[test]
+fn every_four_bit_loudspeaker_layout_value_round_trips_except_the_expanded_one() {
+    for raw in 0_u8..15 {
+        let layout = LoudspeakerLayout::from_value(raw)
+            .unwrap_or_else(|| panic!("{raw} is a complete layout"));
+        assert_eq!(layout.value(), raw);
+    }
+    for raw in 0_u8..=255 {
+        assert_eq!(ExpandedLoudspeakerLayout::from_value(raw).value(), raw);
+    }
+    for raw in 0_u8..16 {
+        assert_eq!(SoundSystem::from_value(raw).value(), raw);
+    }
+}
+
+#[test]
+fn a_substream_count_past_the_end_of_the_input_is_refused_without_allocating() {
+    // num_substreams = 0x7f with two payload bytes left.
+    let bytes = hex!("08 06 ac 02 00 c8 01 7f");
+    let mut r = BitCursor::new(&bytes);
+    let err = read_obu_with(&mut r, read_audio_element)
+        .expect_err("a count past the end of the input is refused");
+    assert_eq!(err.kind(), &ErrorKind::UnexpectedEndOfInput);
 }
