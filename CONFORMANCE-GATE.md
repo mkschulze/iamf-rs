@@ -374,6 +374,55 @@ clauses" valuable is genuinely weakened; what preserves the gate's meaning is th
 the *sample-identity* half — the half `libiamf`'s acceptance defines — stays whole
 and un-permuted.
 
+### Experiment B — research assumption A4, re-verified at the pinned tag (EXECUTED, 2026-09-08)
+
+`PITFALLS.md` §3 claimed that within one temporal unit `iamf-tools` requires every
+audio frame to carry identical `num_samples_to_trim_at_start`, identical
+`num_samples_to_trim_at_end` and identical timestamps, and that substream IDs must
+be unique within the unit. `01-RESEARCH.md` recorded that as **`[CITED]`, not
+`[VERIFIED]`** — it was read from the reference's development tip and not re-opened
+at `v2.1.0`. Being stricter than the pinned reference is its own defect class, so
+plan 01-06 re-opened the file before enforcing anything.
+
+**Command.** The pinned tree lives at `/src` inside the digest-pinned container
+(`REFERENCES.md` § "The `iamf-tools` container"):
+
+```sh
+docker run --rm --entrypoint /bin/sh iamf-tools:v2.1.0 \
+  -c 'cd /src && git rev-parse HEAD && cat -n iamf/cli/temporal_unit_view.cc'
+```
+
+`git rev-parse HEAD` echoed `848c6ff4968ff8cc6f728259892ab4f90cb83256` — the SHA
+`REFERENCES.md` pins for tag `v2.1.0`, so the lines below are from the pinned tree
+and not from `main`.
+
+**Result: A4 is CONFIRMED at `v2.1.0`.** `ValidateAllAudioFramesMatchStatistics`,
+`iamf/cli/temporal_unit_view.cc:128-164`, enforces all four clauses:
+
+| Clause | File and line | Enforcement |
+|---|---|---|
+| substream IDs unique within the unit | `temporal_unit_view.cc:131-140` | `InvalidArgumentError("A temporal unit must not have multiple audio with the same substream ID.")` |
+| identical `num_samples_to_trim_at_end` | `temporal_unit_view.cc:147-150` | `ValidateEqual(..., "`num_samples_to_trim_at_end` must be the same for all audio frames")` |
+| identical `num_samples_to_trim_at_start` | `temporal_unit_view.cc:151-155` | `ValidateEqual(..., "`num_samples_to_trim_at_start` must be the same for all audio frames")` |
+| identical start and end timestamps | `temporal_unit_view.cc:156-161` | `ValidateEqual(..., "must be the same for all audio frames")` |
+
+One clause research did **not** record, found in the same read and worth having:
+`ComputeTemporalUnitStatisticsFromAudioFrame`, `temporal_unit_view.cc:71-79`, requires
+`num_samples_to_trim_at_start + num_samples_to_trim_at_end <= num_samples_per_frame`
+("cumulative trim is <= `num_samples_per_frame`"), explicitly to prevent an underflow
+in the subtraction that follows.
+
+**Enforced.** `iamf::obu::validate_temporal_unit` checks the trim-equality and
+substream-uniqueness clauses, and `plan_frames` produces trim values that satisfy the
+cumulative-trim bound by construction (`0 <= trim_at_end < num_samples_per_frame`,
+`trim_at_start = 0` for LPCM). The timestamp clauses are not enforced here because
+timestamps are not a wire field of the Audio Frame OBU — they are `iamf-tools`'
+internal bookkeeping — and this crate has no temporal-unit timeline until Phase 2's
+sequence-level parser.
+
+Assumption A4's status in `01-RESEARCH.md` moves from `[CITED]` to
+`[VERIFIED-FROM-CODE: iamf-tools@v2.1.0 iamf/cli/temporal_unit_view.cc:128-164]`.
+
 ## Waivers
 
 *(none)*

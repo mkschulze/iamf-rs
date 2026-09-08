@@ -242,3 +242,60 @@ pub fn write_audio_frame(w: &mut BitWriter, header: &ObuHeader, frame: &AudioFra
     }
     w.write_bytes(&frame.payload)
 }
+
+// ---------------------------------------------------------------------------
+// The frame planner (TIME-03)
+// ---------------------------------------------------------------------------
+
+/// How a total sample count divides into Audio Frames, and where the trimming
+/// goes.
+///
+/// `trim_at_start` never appears here because it is always 0 for LPCM: there
+/// is no priming. That is what makes the Phase 1 fixture's two trim values
+/// **differ**, and a differing pair is the only thing that can catch a swapped
+/// END/START write order — whenever the two are equal, both orders produce
+/// identical bytes and no golden file can see the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FramePlan {
+    /// `ceil(total_samples / num_samples_per_frame)`.
+    pub frame_count: u64,
+    /// The Codec Config's `num_samples_per_frame`.
+    pub num_samples_per_frame: u32,
+    /// `num_samples_to_trim_at_end` for the **final** frame; 0 when the total
+    /// divides evenly. Always strictly less than `num_samples_per_frame`.
+    pub trim_at_end: u32,
+}
+
+impl FramePlan {
+    /// The trimming the frame at `index` carries — `None` for every frame but
+    /// the last, and `None` for the last too when nothing needs trimming.
+    #[must_use]
+    pub fn trimming_for(&self, _index: u64) -> Option<Trimming> {
+        // STUB(GREEN): the placement lands with the planner.
+        None
+    }
+}
+
+/// Divide `total_samples` into frames of `num_samples_per_frame`, placing the
+/// end trim on the last frame only (TIME-03).
+pub fn plan_frames(_total_samples: u64, num_samples_per_frame: u32) -> Result<FramePlan> {
+    // STUB(GREEN): the checked arithmetic lands with the GREEN commit.
+    Ok(FramePlan {
+        frame_count: 0,
+        num_samples_per_frame,
+        trim_at_end: 0,
+    })
+}
+
+/// The temporal-unit rules `iamf-tools` enforces, re-verified at the pinned tag
+/// before being enforced here (`CONFORMANCE-GATE.md`, Experiment B).
+///
+/// Within one temporal unit every Audio Frame must carry **identical** trim
+/// values and the substream ids must be **unique**. The timestamp clauses the
+/// reference also checks are not enforced: timestamps are not a wire field of
+/// the Audio Frame OBU, they are `iamf-tools`' internal bookkeeping, and this
+/// crate has no temporal-unit timeline until Phase 2's sequence parser.
+pub fn validate_temporal_unit(_frames: &[Obu<AudioFrame>]) -> Result<()> {
+    // STUB(GREEN): the two clauses land with the GREEN commit.
+    Ok(())
+}

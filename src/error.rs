@@ -91,6 +91,22 @@ pub enum ErrorKind {
     ChannelCountMismatch,
     #[error("this loudspeaker layout has no packing plan in this crate")]
     UnsupportedLayout,
+    #[error("num_samples_per_frame is zero")]
+    ZeroSamplesPerFrame,
+    #[error("frame-plan arithmetic overflowed")]
+    FramePlanOverflow,
+    #[error("audio frames in one temporal unit carry different trim values")]
+    TemporalUnitTrimMismatch,
+    #[error("two audio frames in one temporal unit claim the same substream id")]
+    DuplicateSubstreamId,
+    #[error("parameter_id disagrees with the governing parameter definition")]
+    ParameterIdMismatch,
+    #[error("parameter block and its definition disagree on param_definition_mode")]
+    ParameterModeMismatch,
+    #[error("this parameter data shape is not modelled by this crate")]
+    UnsupportedParameterData,
+    #[error("subblock durations do not sum to the block duration")]
+    SubblockDurationMismatch,
     #[error("channel count exceeds what the profile permits")]
     ChannelCountExceedsProfile,
 }

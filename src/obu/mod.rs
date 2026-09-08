@@ -29,11 +29,20 @@ mod codec_config;
 mod header;
 mod mix_presentation;
 mod param_definition;
+mod parameter_block;
 mod sequence_header;
+mod temporal_delimiter;
 
 pub use audio_frame::{
-    AudioFrame, MAX_IMPLICIT_SUBSTREAM_ID, obu_type_for, read_audio_frame, substream_id_for,
-    write_audio_frame,
+    AudioFrame, FramePlan, MAX_IMPLICIT_SUBSTREAM_ID, obu_type_for, plan_frames, read_audio_frame,
+    substream_id_for, validate_temporal_unit, write_audio_frame,
+};
+pub use parameter_block::{
+    AnimationType, BlockDurationFields, MixGainParameterData, ParamDefinitionType, ParameterBlock,
+    ParameterData, ParameterSubblock, read_parameter_block, write_parameter_block,
+};
+pub use temporal_delimiter::{
+    TemporalDelimiter, read_temporal_delimiter, write_temporal_delimiter,
 };
 pub use audio_element::{
     AudioElement, AudioElementParam, AudioElementType, ChannelAudioLayerConfig, ChannelBasedConfig,

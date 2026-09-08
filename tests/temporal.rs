@@ -15,8 +15,12 @@ use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::obu::{
-    AudioFrame, Obu, ObuHeader, ObuType, Trimming, obu_type_for, read_audio_frame,
-    read_obu_with_header, substream_id_for, write_audio_frame, write_obu, write_obu_with_header,
+    AnimationType, AudioFrame, DurationFields, MixGainParameterData, Obu, ObuHeader, ObuType,
+    ParamDefinition, ParamDefinitionType, ParameterSubblock, TemporalDelimiter, Trimming,
+    TypeSpecific, obu_type_for, plan_frames, read_audio_frame, read_obu_with,
+    read_obu_with_header, read_parameter_block, read_temporal_delimiter, substream_id_for,
+    validate_temporal_unit, write_audio_frame, write_obu, write_obu_with, write_obu_with_header,
+    write_parameter_block, write_temporal_delimiter,
 };
 
 /// The vendored reference file the whole suite is measured against.
@@ -218,5 +222,397 @@ fn a_substream_id_the_element_does_not_declare_is_a_finding_not_a_parse_failure(
         frame.validate_against_element(&[0, 1]).len(),
         1,
         "a frame for an undeclared substream is reported, not refused"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The frame planner (TIME-03)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_non_multiple_sample_count_produces_exactly_one_trimmed_frame_at_the_end() {
+    // 1000 samples at 128 per frame => 8 frames, the last carrying
+    // 8 * 128 - 1000 = 24 samples of end trim.
+    let plan = match plan_frames(1000, 128) {
+        Ok(plan) => plan,
+        Err(error) => panic!("a non-multiple length plans: {error}"),
+    };
+
+    assert_eq!(plan.frame_count, 8);
+    assert_eq!(plan.trim_at_end, 24);
+    assert!(
+        plan.trim_at_end > 0 && plan.trim_at_end < 128,
+        "strictly bounded: 0 < {} < 128",
+        plan.trim_at_end
+    );
+
+    for index in 0..7 {
+        assert_eq!(
+            plan.trimming_for(index),
+            None,
+            "frame {index} carries no trimming"
+        );
+    }
+    assert_eq!(
+        plan.trimming_for(7),
+        Some(Trimming {
+            at_end: 24,
+            at_start: 0
+        }),
+        "LPCM has no priming, so the two trim values DIFFER — which is what \
+         makes a swapped END/START write order detectable at all"
+    );
+}
+
+#[test]
+fn an_exact_multiple_sample_count_produces_no_trimmed_frame() {
+    let plan = match plan_frames(1024, 128) {
+        Ok(plan) => plan,
+        Err(error) => panic!("an exact multiple plans: {error}"),
+    };
+
+    assert_eq!(plan.frame_count, 8);
+    assert_eq!(plan.trim_at_end, 0);
+    assert_eq!(
+        plan.trimming_for(7),
+        None,
+        "a zero end-trim sets no trimming flag at all"
+    );
+}
+
+#[test]
+fn a_zero_num_samples_per_frame_is_a_typed_error_not_a_division_by_zero() {
+    // T-01-34. The shipped `tones_256samp_5p1_pcm.iamf` demonstrates that this
+    // value occurs in the wild.
+    assert_eq!(
+        plan_frames(1000, 0).err().map(|e| e.kind().clone()),
+        Some(ErrorKind::ZeroSamplesPerFrame)
+    );
+}
+
+#[test]
+fn the_frame_planner_refuses_a_sample_count_that_overflows_its_arithmetic() {
+    assert_eq!(
+        plan_frames(u64::MAX, 2).err().map(|e| e.kind().clone()),
+        Some(ErrorKind::FramePlanOverflow),
+        "checked arithmetic throughout — a frame capacity that cannot be \
+         represented is an error, not a wrap"
+    );
+}
+
+#[test]
+fn a_temporal_unit_whose_frames_disagree_on_trim_is_rejected() {
+    // Research assumption A4, re-verified at the pinned tag before being
+    // enforced — see CONFORMANCE-GATE.md, Experiment B.
+    let trim = Some(Trimming {
+        at_end: 24,
+        at_start: 0,
+    });
+    let agreeing = vec![
+        AudioFrame::new(0, vec![0x00]).into_obu(trim),
+        AudioFrame::new(1, vec![0x00]).into_obu(trim),
+    ];
+    assert!(validate_temporal_unit(&agreeing).is_ok());
+
+    let disagreeing = vec![
+        AudioFrame::new(0, vec![0x00]).into_obu(trim),
+        AudioFrame::new(1, vec![0x00]).into_obu(None),
+    ];
+    assert_eq!(
+        validate_temporal_unit(&disagreeing)
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::TemporalUnitTrimMismatch)
+    );
+
+    let duplicated = vec![
+        AudioFrame::new(0, vec![0x00]).into_obu(trim),
+        AudioFrame::new(0, vec![0x00]).into_obu(trim),
+    ];
+    assert_eq!(
+        validate_temporal_unit(&duplicated)
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::DuplicateSubstreamId)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Temporal Delimiter (TIME-04)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_temporal_delimiter_emits_exactly_two_bytes() {
+    let obu = Obu::new(ObuHeader::new(ObuType::TemporalDelimiter), TemporalDelimiter);
+    let mut w = BitWriter::new();
+    let written = write_obu_with(&mut w, &obu, write_temporal_delimiter);
+    assert!(written.is_ok(), "a Temporal Delimiter serialises: {written:?}");
+
+    assert_eq!(
+        w.finish().unwrap_or_default(),
+        hex!("20 00"),
+        "type 4 (`00100`) with all three flags clear, then obu_size 0"
+    );
+}
+
+#[test]
+fn the_trimming_flag_and_redundant_copy_are_both_refused_on_a_temporal_delimiter() {
+    let trimmed = ObuHeader::new(ObuType::TemporalDelimiter).with_type_specific(
+        TypeSpecific::Trimming(Some(Trimming {
+            at_end: 1,
+            at_start: 0,
+        })),
+    );
+    let mut w = BitWriter::new();
+    assert_eq!(
+        write_obu(&mut w, &trimmed, &[])
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::TrimmingFlagNotAllowed),
+        "libiamf@v1.1.0's splitter would read two trim bytes out of the NEXT OBU"
+    );
+
+    let redundant = ObuHeader::new(ObuType::TemporalDelimiter).with_redundant_copy(true);
+    let mut w = BitWriter::new();
+    assert_eq!(
+        write_obu(&mut w, &redundant, &[])
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::RedundantCopyNotAllowed)
+    );
+}
+
+#[test]
+fn a_temporal_delimiter_round_trips_through_the_reader() {
+    let bytes = hex!("20 00");
+    let mut r = BitCursor::new(&bytes);
+    let obu = match read_obu_with(&mut r, read_temporal_delimiter) {
+        Ok(obu) => obu,
+        Err(error) => panic!("a Temporal Delimiter parses: {error}"),
+    };
+
+    assert_eq!(obu.header.obu_type, ObuType::TemporalDelimiter);
+    assert!(obu.trailing.is_empty(), "it carries no payload at all");
+
+    let mut w = BitWriter::new();
+    let written = write_obu_with(&mut w, &obu, write_temporal_delimiter);
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(w.finish().unwrap_or_default(), bytes);
+}
+
+// ---------------------------------------------------------------------------
+// The Parameter Block, parsed with an explicit context (TIME-05)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_mode_1_parameter_block_carries_its_own_duration_fields() {
+    // parameter_id 100, duration 128, constant_subblock_duration 128 =>
+    // num_subblocks is IMPLICIT (ceil(128/128) = 1) and NOT on the wire.
+    // Then one subblock: animation_type 0 (Step), start_point_value 0.
+    let bytes = hex!("64 80 01 80 01 00 00 00");
+    let definition = ParamDefinition::mode_1(100, 16000);
+    let mut r = BitCursor::new(&bytes);
+
+    let block = match read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain) {
+        Ok(block) => block,
+        Err(error) => panic!("a mode-1 Mix Gain block parses: {error}"),
+    };
+
+    assert_eq!(block.parameter_id, 100);
+    assert_eq!(block.subblocks.len(), 1);
+    assert_eq!(
+        block.subblocks.first().and_then(ParameterSubblock::mix_gain),
+        Some(&MixGainParameterData::Step {
+            start_point_value: 0
+        }),
+        "animation type 0 is Step and carries one i16"
+    );
+
+    let mut w = BitWriter::new();
+    let written = write_parameter_block(&mut w, &definition, &block);
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(w.finish().unwrap_or_default(), bytes);
+
+    assert_eq!(AnimationType::from_value(0), AnimationType::Step);
+    assert_eq!(AnimationType::from_value(1), AnimationType::Linear);
+    assert_eq!(AnimationType::from_value(2), AnimationType::Bezier);
+    assert_eq!(AnimationType::from_value(3), AnimationType::Reserved(3));
+}
+
+#[test]
+fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
+    // The definition supplies duration and constant_subblock_duration, so the
+    // block carries ONLY the parameter id and the subblock data. The same
+    // bytes read against a mode-1 definition would be a different block —
+    // which is exactly why the definition is an argument and not hidden state.
+    let definition = ParamDefinition {
+        parameter_id: 100,
+        parameter_rate: 16000,
+        duration_fields: Some(DurationFields {
+            duration: 256,
+            constant_subblock_duration: 128,
+            subblock_durations: Vec::new(),
+        }),
+    };
+    let bytes = hex!("64 01 00 00 ff ff 01 00 00 ff ff");
+    let mut r = BitCursor::new(&bytes);
+
+    let block = match read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain) {
+        Ok(block) => block,
+        Err(error) => panic!("a mode-0 Mix Gain block parses: {error}"),
+    };
+
+    assert!(
+        block.duration_fields.is_none(),
+        "under mode 0 the block omits them — they come from the definition"
+    );
+    assert_eq!(
+        block.subblocks.len(),
+        2,
+        "num_subblocks is ceil(256 / 128) = 2, implied by the DEFINITION"
+    );
+
+    let mut w = BitWriter::new();
+    let written = write_parameter_block(&mut w, &definition, &block);
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(w.finish().unwrap_or_default(), bytes);
+}
+
+#[test]
+fn the_three_animation_shapes_have_the_reference_field_widths() {
+    let definition = ParamDefinition::mode_1(1, 48000);
+    let read_one = |body: &[u8]| -> Option<MixGainParameterData> {
+        let mut bytes = vec![0x01, 0x01, 0x01];
+        bytes.extend_from_slice(body);
+        let mut r = BitCursor::new(&bytes);
+        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+            .ok()?
+            .subblocks
+            .first()
+            .and_then(ParameterSubblock::mix_gain)
+            .cloned()
+    };
+
+    assert_eq!(
+        read_one(&hex!("00 ff 9c")),
+        Some(MixGainParameterData::Step {
+            start_point_value: -100
+        }),
+        "Step: one i16"
+    );
+    assert_eq!(
+        read_one(&hex!("01 ff 9c 00 64")),
+        Some(MixGainParameterData::Linear {
+            start_point_value: -100,
+            end_point_value: 100
+        }),
+        "Linear: two i16"
+    );
+    assert_eq!(
+        read_one(&hex!("02 ff 9c 00 64 00 32 80")),
+        Some(MixGainParameterData::Bezier {
+            start_point_value: -100,
+            end_point_value: 100,
+            control_point_value: 50,
+            control_point_relative_time: 0x80
+        }),
+        "Bezier: three i16 plus a u8 Q0.8 relative time"
+    );
+}
+
+#[test]
+fn an_unmodelled_parameter_definition_type_preserves_its_payload_verbatim() {
+    // param_definition_type 7 is not modelled: its subblock data is an
+    // explicit `parameter_data_size` uleb128 followed by that many bytes,
+    // exactly as `ExtensionParameterData` defines it — so "verbatim" has a
+    // length on the wire rather than an invented boundary.
+    let definition = ParamDefinition::mode_1(5, 48000);
+    let bytes = hex!("05 01 01 03 de ad be");
+    let mut r = BitCursor::new(&bytes);
+
+    let block = match read_parameter_block(&mut r, &definition, ParamDefinitionType::Reserved(7)) {
+        Ok(block) => block,
+        Err(error) => panic!("an unmodelled parameter type parses: {error}"),
+    };
+
+    assert_eq!(
+        block.subblocks.first().and_then(ParameterSubblock::raw),
+        Some(&[0xDE, 0xAD, 0xBE][..]),
+        "the bytes are kept verbatim so Phase 2's PARSE-06 has something to assert on"
+    );
+
+    let mut w = BitWriter::new();
+    let written = write_parameter_block(&mut w, &definition, &block);
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(
+        w.finish().unwrap_or_default(),
+        bytes,
+        "and it re-serialises unchanged"
+    );
+}
+
+#[test]
+fn an_unknown_animation_type_is_the_same_typed_error_the_reference_returns() {
+    // `iamf-tools` returns UnimplementedError("Unknown animation type= ") for
+    // values above 2, and it has to: the wire carries no length for an
+    // unrecognised animation, so there is no boundary to preserve verbatim
+    // without inventing one. Matching the reference exactly is the rule; being
+    // looser here would mean guessing where the next subblock starts.
+    let definition = ParamDefinition::mode_1(1, 48000);
+    let bytes = hex!("01 01 01 03 00 00");
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::UnsupportedParameterData)
+    );
+}
+
+#[test]
+fn a_parameter_id_disagreeing_with_the_definition_is_a_typed_error() {
+    let definition = ParamDefinition::mode_1(100, 16000);
+    let bytes = hex!("63 01 01 00 00 00");
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::ParameterIdMismatch),
+        "the reference checks the bitstream id against the definition's"
+    );
+}
+
+#[test]
+fn a_subblock_count_larger_than_the_bytes_remaining_is_refused_before_reserving() {
+    // T-01-32: `num_subblocks` is an attacker-controlled count driving an
+    // allocation. duration 0x0FFFFFFF, constant_subblock_duration 0 =>
+    // num_subblocks is explicit, and here claims 0x0FFFFFFF subblocks with
+    // nothing left in the buffer.
+    let definition = ParamDefinition::mode_1(1, 48000);
+    let bytes = hex!("01 ff ff ff 7f 00 ff ff ff 7f");
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::UnexpectedEndOfInput),
+        "bounded against bytes_remaining() before a single element is reserved"
+    );
+}
+
+#[test]
+fn a_parameter_block_may_not_carry_a_redundant_copy_flag() {
+    let header = ObuHeader::new(ObuType::ParameterBlock).with_redundant_copy(true);
+    let mut w = BitWriter::new();
+
+    assert_eq!(
+        write_obu(&mut w, &header, &[])
+            .err()
+            .map(|e| e.kind().clone()),
+        Some(ErrorKind::RedundantCopyNotAllowed)
     );
 }
