@@ -47,6 +47,10 @@ pub enum ErrorKind {
     UnexpectedEndOfInput,
     #[error("reader is not byte-aligned")]
     NotByteAligned,
+    #[error("a bit width of {bits} is outside the supported 0..=64 range")]
+    UnsupportedWidth { bits: u8 },
+    #[error("value does not fit in the {bits} bits it was asked to occupy")]
+    ValueExceedsWidth { bits: u8 },
     #[error("uleb128 continuation chain exceeds the 8-byte maximum")]
     Leb128TooLong,
     #[error("uleb128 value does not fit in u32")]

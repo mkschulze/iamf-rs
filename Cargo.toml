@@ -23,6 +23,12 @@ categories = ["encoding", "multimedia::audio"]
 [dependencies]
 thiserror = "2.0.20" # MIT OR Apache-2.0
 
+# Dev-only, and none of these reach the linked graph — `cargo tree -e
+# normal,no-proc-macro` is the instrument that proves it (plain `-e normal`
+# includes proc-macro edges and reports a false positive).
+[dev-dependencies]
+hex-literal = "1.1.0" # MIT OR Apache-2.0 — hand-computed vectors (BITS-06, D-25)
+
 # No `[features]` table, deliberately (D-22). Phase 1 has nothing to gate: no
 # codec crates until Phase 3 (dev-only), `bitstream-io` is a dev-dependency
 # (D-01), `thiserror` is unconditional (D-02). PROJECT.md's "one crate,
