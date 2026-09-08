@@ -363,20 +363,69 @@ impl AudioElement {
 /// those fields drives an allocation and every one of them is
 /// attacker-controlled.
 pub fn read_audio_element(r: &mut BitCursor<'_>) -> Result<AudioElement> {
-    let _ = r; // STUB(GREEN)
-    Ok(AudioElement::channel_based(
-        0,
-        0,
-        Vec::new(),
-        ScalableChannelLayoutConfig { layers: Vec::new() },
-    ))
+    let audio_element_id = r.read_uleb128()?;
+    let type_value = u8::try_from(r.read_unsigned(3)?).unwrap_or(0);
+    let _reserved = r.read_unsigned(5)?;
+    let codec_config_id = r.read_uleb128()?;
+
+    let audio_substream_ids = read_counted(r, |r| r.read_uleb128())?;
+    let params = read_counted(r, read_audio_element_param)?;
+
+    let audio_element_type = match type_value {
+        0 => AudioElementType::ChannelBased(ChannelBasedConfig {
+            scalable_channel_layout: read_scalable_channel_layout_config(r)?,
+        }),
+        1 => AudioElementType::SceneBased(read_ambisonics_config(r)?),
+        value => {
+            // D-05: `raw` consumes to the end of the payload, so `trailing`
+            // below — and the OBU-level drain above it — stay empty. The
+            // length is derivable only because `obu_size` bounded this reader.
+            let remaining = r.bytes_remaining();
+            AudioElementType::Reserved {
+                value,
+                raw: r.read_uint8_span(remaining)?.to_vec(),
+            }
+        }
+    };
+
+    let remaining = r.bytes_remaining();
+    let trailing = r.read_uint8_span(remaining)?.to_vec();
+
+    Ok(AudioElement {
+        audio_element_id,
+        audio_element_type,
+        codec_config_id,
+        audio_substream_ids,
+        params,
+        trailing,
+    })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AudioElementObu::ValidateAndWritePayload
 /// Write an Audio Element payload, `trailing` last.
 pub fn write_audio_element(w: &mut BitWriter, v: &AudioElement) -> Result<()> {
-    let _ = (w, v); // STUB(GREEN)
-    Ok(())
+    w.write_uleb128_minimal(v.audio_element_id)?;
+    w.write_unsigned(u64::from(v.audio_element_type.value()), 3)?;
+    w.write_unsigned(0, 5)?;
+    w.write_uleb128_minimal(v.codec_config_id)?;
+
+    write_count(w, v.audio_substream_ids.len(), "num_substreams")?;
+    for id in &v.audio_substream_ids {
+        w.write_uleb128_minimal(*id)?;
+    }
+    write_count(w, v.params.len(), "num_parameters")?;
+    for param in &v.params {
+        write_audio_element_param(w, param)?;
+    }
+
+    match &v.audio_element_type {
+        AudioElementType::ChannelBased(config) => {
+            write_scalable_channel_layout_config(w, &config.scalable_channel_layout)?;
+        }
+        AudioElementType::SceneBased(config) => write_ambisonics_config(w, config)?,
+        AudioElementType::Reserved { raw, .. } => w.write_bytes(raw)?,
+    }
+    w.write_bytes(&v.trailing)
 }
 
 /// Read a uleb128 count, bounds-check it against the input, then read that many
