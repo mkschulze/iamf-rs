@@ -49,5 +49,6 @@ pub const SPEC_VERSION: &str = "1.1.0";
 
 pub mod bits;
 pub mod error;
+pub mod obu;
 
 pub use crate::error::{Error, ErrorKind, Finding, Location, Result};
