@@ -57,10 +57,50 @@ impl BitWriter {
         Ok(())
     }
 
+    // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteSigned8 / WriteSigned9 / WriteSigned16
+    /// Write `value` as `bits` (1..=64) of two's complement, MSB-first.
+    ///
+    /// Always big-endian on the wire — `audio_roll_distance`,
+    /// `integrated_loudness`, `digital_peak` and `default_mix_gain` are all
+    /// signed-16 big-endian fields.
+    pub fn write_signed(&mut self, value: i64, bits: u32) -> Result<()> {
+        if bits == 0 || bits > 64 {
+            return Err(Error::new(
+                ErrorKind::UnsupportedWidth {
+                    bits: u8::try_from(bits).unwrap_or(u8::MAX),
+                },
+                Location::OutputOffset(self.output_offset()),
+            ));
+        }
+        let _ = value;
+        Ok(())
+    }
+
     // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteBoolean
     /// Write one bit.
     pub fn write_bool(&mut self, value: bool) -> Result<()> {
         self.write_unsigned(u64::from(value), 1)
+    }
+
+    // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteString
+    /// Write `payload` followed by a NUL terminator.
+    ///
+    /// **Asymmetric with `BitCursor::read_string` on purpose.** The reader
+    /// returns the terminator, because what was on the wire is what the caller
+    /// needs to see and the field's byte count includes it. The writer takes the
+    /// payload *without* a terminator and appends one, because a caller must not
+    /// be able to emit an unterminated string at all. Round-tripping a read
+    /// value therefore means dropping its last byte.
+    pub fn write_string(&mut self, payload: &[u8]) -> Result<()> {
+        let _ = payload;
+        Ok(())
+    }
+
+    // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteUint8Span
+    /// Write raw bytes.
+    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let _ = bytes;
+        Ok(())
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteUleb128

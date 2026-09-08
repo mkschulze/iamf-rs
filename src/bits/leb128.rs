@@ -49,6 +49,19 @@ pub(crate) fn write_uleb128_minimal(w: &mut BitWriter, value: u32) -> Result<()>
     Ok(())
 }
 
+// ref: iamf-tools@v2.1.0 iamf/common/leb_generator.h LebGenerator (kFixedSize mode)
+/// Emit `value` in exactly `size` bytes (1..=8), padding with continuation
+/// bytes rather than shortening — the reference's `kFixedSize` mode.
+///
+/// Deliberately `pub(crate)` (D-03). Byte-identity must be caller-independent,
+/// so there is no public `LebMode` knob; see the module doc comment on
+/// `src/bits/mod.rs` for what this is actually for, which is **not** what D-03
+/// records.
+pub(crate) fn write_uleb128_fixed(w: &mut BitWriter, value: u32, size: u8) -> Result<()> {
+    let _ = (w, value, size);
+    Ok(())
+}
+
 // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
 /// Decode a uleb128 of 1..=8 bytes into a `u32`.
 pub(crate) fn read_uleb128(r: &mut BitCursor<'_>) -> Result<u32> {
@@ -79,4 +92,77 @@ pub(crate) fn read_uleb128(r: &mut BitCursor<'_>) -> Result<u32> {
         ErrorKind::Leb128TooLong,
         Location::InputOffset(start),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    //! `minimal_len` and the fixed-size encoder are `pub(crate)`, so their
+    //! vectors live here rather than in `tests/vectors.rs`. They are
+    //! hand-computed the same way (D-25): the group boundaries are powers of
+    //! 2^7, worked out from the encoding, not captured from this code.
+
+    use super::{MAX_LEB128_SIZE, minimal_len, write_uleb128_fixed};
+    use crate::bits::{BitCursor, BitWriter};
+    use crate::error::ErrorKind;
+
+    #[test]
+    fn minimal_len_changes_at_every_seven_bit_boundary() {
+        assert_eq!(minimal_len(0), 1);
+        assert_eq!(minimal_len(127), 1);
+        assert_eq!(minimal_len(128), 2);
+        assert_eq!(minimal_len(16_383), 2);
+        assert_eq!(minimal_len(16_384), 3);
+        assert_eq!(minimal_len((1 << 21) - 1), 3);
+        assert_eq!(minimal_len(1 << 21), 4);
+        assert_eq!(minimal_len((1 << 28) - 1), 4);
+        assert_eq!(minimal_len(1 << 28), 5);
+        assert_eq!(minimal_len(u32::MAX), 5);
+    }
+
+    #[test]
+    fn fixed_size_encodes_6_in_five_bytes_that_still_decode_to_6() {
+        let mut w = BitWriter::new();
+        write_uleb128_fixed(&mut w, 6, 5).expect("6 fits in five bytes");
+        let bytes = w.finish().expect("byte-aligned");
+
+        assert_eq!(bytes, [0x86, 0x80, 0x80, 0x80, 0x00]);
+        assert_eq!(bytes.len(), 5, "non-minimal, and legal on the wire");
+        assert_eq!(
+            BitCursor::new(&bytes).read_uleb128().expect("decodes"),
+            6,
+            "the decoder accepts a non-minimal encoding — PARSE-04's caveat"
+        );
+    }
+
+    #[test]
+    fn fixed_size_at_one_byte_matches_the_minimal_encoding() {
+        let mut w = BitWriter::new();
+        write_uleb128_fixed(&mut w, 6, 1).expect("6 fits in one byte");
+        assert_eq!(w.finish().expect("byte-aligned"), [0x06]);
+    }
+
+    #[test]
+    fn fixed_size_refuses_a_size_outside_the_reference_cap() {
+        let mut w = BitWriter::new();
+        let size = u8::try_from(MAX_LEB128_SIZE).unwrap_or(u8::MAX).saturating_add(1);
+        let err = w_err(&mut w, 6, size);
+        assert_eq!(err, ErrorKind::Leb128SizeInvalid { size });
+
+        let mut w = BitWriter::new();
+        assert_eq!(w_err(&mut w, 6, 0), ErrorKind::Leb128SizeInvalid { size: 0 });
+    }
+
+    #[test]
+    fn fixed_size_refuses_a_value_that_does_not_fit_the_requested_size() {
+        let mut w = BitWriter::new();
+        // 128 needs two groups; one byte cannot carry it without lying.
+        assert_eq!(w_err(&mut w, 128, 1), ErrorKind::Leb128ValueTooLarge);
+    }
+
+    fn w_err(w: &mut BitWriter, value: u32, size: u8) -> ErrorKind {
+        write_uleb128_fixed(w, value, size)
+            .expect_err("expected a rejection")
+            .kind()
+            .clone()
+    }
 }

@@ -1,8 +1,27 @@
 //! [`BitCursor`] — the read half. Mirrors `writer.rs` method for method, in the
 //! same order (D-10).
+//!
+//! # One rule, every count in the format (ASVS V5, threat T-01-12)
+//!
+//! **Never allocate or reserve from a parsed length before capping it against
+//! [`BitCursor::bytes_remaining`].** Every length, count and width this crate
+//! acts on originates in attacker-shaped bytes: `obu_size`,
+//! `extension_header_size`, `info_type_size`, `num_substreams`, `num_layouts`,
+//! and every count-driven loop in every later plan. A length field that reaches
+//! a `Vec::with_capacity` before a bounds check is the OOM, and it is the first
+//! thing a fuzzer finds.
+//!
+//! [`BitCursor::read_uint8_span`] is where that rule is first enforced, and it
+//! is stated here rather than there because it governs code that does not exist
+//! yet.
 
 use crate::bits::leb128;
 use crate::error::{Error, ErrorKind, Location, Result};
+
+/// The reference's cap on a string field: 128 bytes **including** the NUL
+/// terminator. An unterminated 128-byte run is an error, not a truncation.
+// ref: iamf-tools@v2.1.0 iamf/obu/types.h kIamfMaxStringSize
+pub(crate) const MAX_STRING_BYTES: usize = 128;
 
 /// A bounded, bit-addressed cursor over borrowed input.
 ///
@@ -56,10 +75,52 @@ impl<'a> BitCursor<'a> {
         Ok(acc)
     }
 
+    // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadSigned8 / ReadSigned9 / ReadSigned16
+    /// Read `bits` (1..=64) as a two's-complement signed value, MSB-first.
+    ///
+    /// The reference exposes this as three separate functions because C++ makes
+    /// you pick a return type; one width-taking function covers all three. The
+    /// 9-bit case is the one that rules out every byte-oriented approach, and
+    /// the return type is `i64` for the same reason a 9-bit field does not fit
+    /// an `i8` — callers narrow, this does not guess.
+    pub fn read_signed(&mut self, bits: u32) -> Result<i64> {
+        let start = self.byte_position();
+        if bits == 0 || bits > 64 {
+            return Err(Error::new(
+                ErrorKind::UnsupportedWidth {
+                    bits: u8::try_from(bits).unwrap_or(u8::MAX),
+                },
+                Location::InputOffset(start),
+            ));
+        }
+        let _raw = self.read_unsigned(bits)?;
+        Ok(0)
+    }
+
     // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadBoolean
     /// Read one bit as a boolean.
     pub fn read_bool(&mut self) -> Result<bool> {
         Ok(self.read_unsigned(1)? == 1)
+    }
+
+    // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadString
+    /// Read a NUL-terminated byte string, terminator included, capped at 128
+    /// bytes **including** that terminator.
+    ///
+    /// The value is a **byte string**, never UTF-8-validated. The wire carries
+    /// bytes; validating them here would make this parser stricter on read than
+    /// the reference is, and rejecting a file the reference accepts is as much
+    /// a conformance failure as accepting one it rejects.
+    pub fn read_string(&mut self) -> Result<Vec<u8>> {
+        let _start = self.byte_position();
+        Ok(Vec::new())
+    }
+
+    // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadUint8Span
+    /// Borrow the next `len` bytes without copying them.
+    pub fn read_uint8_span(&mut self, len: usize) -> Result<&'a [u8]> {
+        let _ = len;
+        Ok(&[])
     }
 
     // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
@@ -76,6 +137,13 @@ impl<'a> BitCursor<'a> {
         bits.saturating_sub(u64::from(self.bit_off))
     }
 
+    /// Whole bytes left between the cursor and the end of the input. A pending
+    /// partial byte does not count as a byte.
+    #[must_use]
+    pub fn bytes_remaining(&self) -> usize {
+        usize::try_from(self.bits_remaining().checked_div(8).unwrap_or(0)).unwrap_or(usize::MAX)
+    }
+
     /// `true` exactly when the bit position is a multiple of 8.
     #[must_use]
     pub const fn is_byte_aligned(&self) -> bool {
@@ -87,6 +155,18 @@ impl<'a> BitCursor<'a> {
     #[must_use]
     pub fn byte_position(&self) -> u64 {
         u64::try_from(self.byte_pos).unwrap_or(u64::MAX)
+    }
+
+    /// A cursor over exactly the next `len_bytes` of this one, with the parent
+    /// advanced past them (Pattern 3).
+    ///
+    /// This is how every OBU payload gets a bounded view: the child cannot read
+    /// past the payload into the next OBU, and when the child is drained the
+    /// parent is exactly where the next OBU begins. An under-read is otherwise
+    /// silent.
+    pub fn sub_reader(&mut self, len_bytes: usize) -> Result<BitCursor<'a>> {
+        let _ = len_bytes;
+        Ok(BitCursor::new(&[]))
     }
 
     /// Consume one bit, MSB-first within the current byte.

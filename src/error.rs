@@ -59,6 +59,10 @@ pub enum ErrorKind {
     StringNotTerminated,
     #[error("string exceeds the 128-byte maximum including its NUL")]
     StringTooLong,
+    #[error("string payload contains an interior NUL")]
+    StringHasInteriorNul,
+    #[error("a uleb128 field size of {size} is outside the supported 1..=8 range")]
+    Leb128SizeInvalid { size: u8 },
     #[error("obu_size arithmetic overflowed")]
     ObuSizeOverflow,
     #[error("OBU exceeds the 2 MiB maximum")]
