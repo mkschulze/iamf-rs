@@ -1,13 +1,12 @@
-//! The conformance harness — CONF-01's reusable `assert_conformant`, the seven
-//! gate clauses, and the gating probe that had to run before the fixture was
-//! frozen.
+//! CONF-01's reusable `assert_conformant`, the Phase 1 exit gate's clauses, and
+//! the gating probe that ran before the fixture was frozen.
 //!
 //! # The exit code is never the signal
 //!
-//! Every assertion here names a real observable. That is not defensiveness: it
-//! is recorded fact. `CONFORMANCE-GATE.md` § Experiment A ran five inputs —
-//! one valid, four deliberately corrupted — through `iamfdec` and got **exit 0
-//! from all five**, two of which produced nothing but a 44-byte WAV header.
+//! Every assertion here names a real observable. That is not defensiveness; it
+//! is recorded fact. `CONFORMANCE-GATE.md` § Experiment A ran five inputs — one
+//! valid, four deliberately corrupted — through `iamfdec` and got **exit 0 from
+//! all five**, two of which produced nothing but a 44-byte WAV header.
 //! Experiment 1 did the same through `iamf-tools`' `decoder_main` and got exit
 //! 0 from three of five, one being a file truncated mid-OBU that wrote an
 //! 80-byte WAV while decoding **zero** temporal units — which `test -s` also
@@ -20,45 +19,60 @@
 //! 3. every sample is bit-identical.
 //!
 //! (2) is not redundant with (3): a wrong-length decode is never compared
-//! sample-for-sample at all unless the count is checked first.
+//! sample-for-sample at all unless the count is checked first. Experiment A's
+//! one-bit `sample_rate` flip decoded 1570 samples instead of 8000, cleanly,
+//! with exit 0.
 //!
 //! # The limiter, and why the harness does two things about it
 //!
 //! `libiamf` creates a −1 dBTP peak limiter **unconditionally** in
 //! `IAMF_decoder_open()` (1 ms attack, 200 ms release, 240-sample look-ahead;
 //! linear threshold ≈ 0.8913). Below threshold `compute_target_gain()` returns
-//! exactly 1.0 and the path is bit-exact; above it, the gain ramps for up to
+//! exactly 1.0 and the path is bit-exact; above it the gain ramps for up to
 //! 201 ms and the sample-identity assertion fails with a diffuse,
 //! amplitude-only, channel-uniform error that reads exactly like a rounding or
 //! endianness bug in our own encoder.
 //!
-//! Two independent measures, and **both** are deliberate:
-//!
-//! - every fixture here peaks at or below half full scale (−6 dBFS), and
-//! - every decode passes `-disable_limiter`.
-//!
-//! Written down because the failure mode is a later maintainer raising the
-//! amplitude "to make the signal more distinguishable" and reintroducing it.
-//! Research open question 3 is resolved the same way: the harness decodes
-//! **twice**, once with the limiter disabled and once with it at its default,
-//! and compares the two. A fixture that drifts above threshold then fails
-//! loudly instead of being masked by the flag.
+//! Two independent measures, and **both** are deliberate: every fixture peaks
+//! at or below −6 dBFS, and every decode passes `-disable_limiter`. Research
+//! open question 3 is resolved the same way — the harness decodes **twice**,
+//! once with the limiter disabled and once with it at its default, and compares
+//! the two, so a fixture that drifts above threshold fails loudly instead of
+//! being hidden by the flag.
 //!
 //! `[VERIFIED-FROM-CODE: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:4153-4159,
 //! 4231-4236; code/src/common/audio_defines.h:23-26]`
 //!
-//! # Offline discipline (CONF-10)
+//! # No knob (D-19)
 //!
-//! Every reference-dependent test prints a skip reason and returns when
-//! `IAMF_REF_DECODER` is unset. `cargo test` is green with no reference binary
-//! present, on all four byte-identity targets, which is what keeps the PR gate
-//! fast and cross-platform.
+//! There is no permutation constant, no tolerance window and no gain adjustment
+//! anywhere in this file. Comparison is exact integer equality. On a mismatch
+//! `fixture::describe_channel_mismatch` names a candidate channel swap and
+//! points at `src/packing.rs`; it never applies one. A permutation constant
+//! would be a knob, and the cheapest-looking fix for a failing comparison is to
+//! turn the knob until it goes green — which absorbs a real BCG packing bug into
+//! the harness and ships it.
 //!
-//! Nothing in this file reaches the shipping graph: the WAV reader is ~60 lines
-//! here rather than a crate, because the harness compares PCM and not
-//! containers.
+//! # Offline discipline (CONF-09, CONF-10)
+//!
+//! Every reference binary is invoked by [`Command`], discovered through an
+//! environment variable or a digest-pinned container image, **never by a build
+//! script** — a build script would force CMake, a C++20 toolchain, abseil,
+//! protobuf and fdk-aac onto every consumer's `cargo build`, including
+//! Parallax's and docs.rs's, and it cannot be made conditional on "the developer
+//! wants reference tests". Every reference-dependent clause prints a skip reason
+//! and returns when its tool is absent, so `cargo test` is green offline on all
+//! four byte-identity targets. Every intermediate file goes under a unique
+//! per-test temporary directory.
+//!
+//! Nothing here reaches the shipping graph: the WAV reader and writer are ~130
+//! lines in this file rather than a crate, because the harness compares PCM and
+//! not containers.
 
 #![allow(dead_code)]
+
+#[path = "support/fixture.rs"]
+mod fixture;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -67,24 +81,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::model::{DescriptorSet, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, AudioFrame, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
+    AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
     RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
-    plan_frames,
 };
-use iamf::packing::{SubstreamPlan, pack_channels_to_substreams};
-use iamf::sequence::{SequenceWriter, TemporalUnit};
+
+use iamf::obu::{ObuType, find_obu_boundaries, plan_frames, read_obu_header};
+
+use fixture::{
+    ElementSpec, Fixture, describe_channel_mismatch, peak_for, ramp_pcm, spec_of_first,
+    store_interleaved, store_sample,
+};
 
 // ---------------------------------------------------------------------------
-// Reference-binary discovery and per-test scratch directories (CONF-09)
+// Reference discovery and per-test scratch directories (CONF-09, T-01-49)
 // ---------------------------------------------------------------------------
 
 /// The `iamfdec` path, or `None` when the reference is not present.
-///
-/// Discovered through the environment and invoked by [`Command`] — never by a
-/// build script. A build script would force CMake and a C++20 toolchain onto
-/// every consumer's `cargo build`, including Parallax's and docs.rs's, and it
-/// cannot be made conditional on "the developer wants reference tests".
 fn reference_decoder() -> Option<PathBuf> {
     // An EMPTY value counts as unset. `IAMF_REF_DECODER=` is what a CI step
     // that means "unset" usually writes, and treating it as a path would spawn
@@ -95,7 +108,31 @@ fn reference_decoder() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Print the standard skip reason for a reference-gated test and return.
+/// The `iamf-tools` container image, pinned by digest in `REFERENCES.md`.
+///
+/// `iamf-tools` needs Bazel, abseil, protobuf and fdk-aac, so it runs only in a
+/// container — which is also why CONF-06 and CONF-07 are the two clauses that
+/// retain a defensible D-17 waiver path (see `CONFORMANCE-GATE.md`).
+fn iamf_tools_image() -> String {
+    std::env::var("IAMF_TOOLS_IMAGE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "iamf-tools:v2.1.0".to_owned())
+}
+
+/// Whether the pinned image is present locally.
+///
+/// Checked with `docker image inspect` rather than by running the tool, so an
+/// absent container is a *skip* and a broken one is a *failure* — two different
+/// outcomes a single "did it work" check would conflate.
+fn iamf_tools_available() -> bool {
+    Command::new("docker")
+        .args(["image", "inspect", &iamf_tools_image()])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Print the standard skip reason for an `iamfdec`-gated clause and return.
 fn skip_no_reference(test: &str) {
     println!(
         "SKIP {test}: IAMF_REF_DECODER is unset. Run `bash tools/build-reference.sh` and export \
@@ -104,10 +141,30 @@ fn skip_no_reference(test: &str) {
     );
 }
 
+/// Print the standard skip reason for a container-gated clause and return.
+fn skip_no_container(test: &str) {
+    println!(
+        "SKIP {test}: the pinned image {} is not available locally. Build it with \
+         `docker build -f tools/iamf-tools.Dockerfile -t iamf-tools:v2.1.0 tools/`. On macOS \
+         prepend /Applications/Docker.app/Contents/Resources/bin to PATH first — a missing \
+         docker-credential-desktop is a credsStore lookup, not a build failure. This is the \
+         expected offline state (CONF-10).",
+        iamf_tools_image()
+    );
+}
+
 /// A monotonically increasing counter, so two scratch directories requested in
 /// the same process at the same instant cannot collide.
 static SCRATCH_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
+// GUARD-04's `allow-unwrap-in-tests` / `allow-expect-in-tests` /
+// `allow-panic-in-tests` carve-out (clippy.toml) applies to `#[test]` functions
+// only — a helper reachable from tests is not one. These helpers exist solely to
+// build, run or inspect a fixture, and a failure in them is an environment or
+// programming error that must stop the run loudly rather than be swallowed.
+// Kept as narrow, per-function allows so a future helper does not inherit the
+// exemption silently.
+#[allow(clippy::expect_used)]
 /// A fresh, empty directory for one test's intermediate `.iamf` and `.wav`
 /// (T-01-49).
 ///
@@ -115,13 +172,6 @@ static SCRATCH_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 /// default thread pool never share an output path, so a comparison can never
 /// pass or fail for a reason unrelated to the bytes. Kept under `target/` so it
 /// is gitignored and still inspectable after a failure.
-// GUARD-04's `allow-expect-in-tests` carve-out (clippy.toml) applies to `#[test]`
-// functions only — a helper in a test binary is not one. These three helpers are
-// reachable from tests and nowhere else, and an `expect` here fails the run with
-// a named message rather than swallowing a broken environment, which is exactly
-// what the carve-out is for. Kept as three narrow allows rather than a file-wide
-// one so a future helper does not inherit the exemption silently.
-#[allow(clippy::expect_used)]
 fn scratch_dir(tag: &str) -> PathBuf {
     let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -134,7 +184,7 @@ fn scratch_dir(tag: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// The `iamfdec` runner — reports, never interprets
+// The reference runners — they report, they never interpret
 // ---------------------------------------------------------------------------
 
 /// Which output layout `-s` selects.
@@ -156,68 +206,53 @@ impl OutputLayout {
             Self::SoundSystemB => "-s1",
         }
     }
+
+    /// The output layout a fixture's own loudspeaker layout implies.
+    ///
+    /// **Derived, never a constant.** CONF-01 requires the harness to carry no
+    /// codec- or fixture-specific value: what it hands the reference comes from
+    /// the descriptors it just wrote.
+    fn for_layout(layout: LoudspeakerLayout) -> Result<Self, String> {
+        match layout {
+            LoudspeakerLayout::Ch5_1 => Ok(Self::SoundSystemB),
+            LoudspeakerLayout::Stereo | LoudspeakerLayout::Binaural => Ok(Self::SoundSystemA),
+            other => Err(format!(
+                "no iamfdec output layout is modelled for {other:?}; adding one is a deliberate \
+                 act, not a default"
+            )),
+        }
+    }
 }
 
-/// Everything one `iamfdec` invocation produced, with **nothing interpreted**.
+/// Everything one reference invocation produced, with **nothing interpreted**.
 ///
 /// The exit code, the two streams and the output path are four independent
 /// observations. Conflating them is how the wrong one gets chosen as the
 /// signal, which is precisely the mistake Experiments A and 1 recorded.
 #[derive(Debug)]
-struct DecodeRun {
+struct ToolRun {
     /// The process exit code. Recorded for the report, asserted on by nothing.
     exit_code: Option<i32>,
     stdout: String,
     stderr: String,
-    /// Where the WAV was asked to go. May not exist.
+    /// Where the output was asked to go. May not exist.
     output: PathBuf,
     /// The exact argv, for the failure message and for `CONFORMANCE-GATE.md`.
     command: String,
 }
 
-/// Run `iamfdec` once and report what happened.
-///
-/// `-r` and `-d` are **arguments**, never constants: a sample rate that
-/// disagrees with the file's Codec Config silently drives libiamf's speex
-/// resampler (the default is 48000), which produces a comparison failure for a
-/// reason that has nothing to do with the bitstream (T-01-50).
-fn run_iamfdec(
-    decoder: &Path,
-    input: &Path,
-    output: &Path,
-    sample_rate: u32,
-    sample_size: u8,
-    layout: OutputLayout,
-    disable_limiter: bool,
-) -> DecodeRun {
-    let rate = sample_rate.to_string();
-    let depth = sample_size.to_string();
-    let mut args: Vec<String> = vec![
-        "-i0".to_owned(),
-        "-o3".to_owned(),
-        output.display().to_string(),
-        "-r".to_owned(),
-        rate,
-        layout.flag().to_owned(),
-        "-d".to_owned(),
-        depth,
-    ];
-    if disable_limiter {
-        args.push("-disable_limiter".to_owned());
-    }
-    args.push(input.display().to_string());
-
-    let command = format!("{} {}", decoder.display(), args.join(" "));
-    let produced = Command::new(decoder).args(&args).output();
-    match produced {
-        Ok(out) => DecodeRun {
+/// Run a command and report what happened, interpreting nothing.
+fn run_tool(program: &str, args: &[String], output: &Path) -> ToolRun {
+    let command = format!("{program} {}", args.join(" "));
+    match Command::new(program).args(args).output() {
+        Ok(out) => ToolRun {
             exit_code: out.status.code(),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             output: output.to_path_buf(),
             command,
         },
-        Err(e) => DecodeRun {
+        Err(e) => ToolRun {
             exit_code: None,
             stdout: String::new(),
             stderr: format!("failed to spawn: {e}"),
@@ -227,15 +262,46 @@ fn run_iamfdec(
     }
 }
 
+/// Run `iamfdec` once.
+///
+/// `-r` and `-d` are **arguments**, never constants: a sample rate that
+/// disagrees with the file's Codec Config silently drives libiamf's speex
+/// resampler (the default is 48000), which produces a comparison failure for a
+/// reason that has nothing to do with the bitstream (T-01-50).
+fn run_iamfdec(
+    decoder: &Path,
+    input: &Path,
+    output: &Path,
+    spec: ElementSpec,
+    layout: OutputLayout,
+    disable_limiter: bool,
+) -> ToolRun {
+    let mut args: Vec<String> = vec![
+        "-i0".to_owned(),
+        "-o3".to_owned(),
+        output.display().to_string(),
+        "-r".to_owned(),
+        spec.sample_rate.to_string(),
+        layout.flag().to_owned(),
+        "-d".to_owned(),
+        spec.sample_size.to_string(),
+    ];
+    if disable_limiter {
+        args.push("-disable_limiter".to_owned());
+    }
+    args.push(input.display().to_string());
+    run_tool(&decoder.display().to_string(), &args, output)
+}
+
 // ---------------------------------------------------------------------------
-// The WAV reader — frame count and interleaved samples, nothing else
+// WAV — read and write, adjacent, so an asymmetry is visible
 // ---------------------------------------------------------------------------
 
 /// A bare canonical WAV header: `RIFF____WAVE` + `fmt ` (8 + 16) + `data` (8).
 ///
 /// The threshold the "output exists and is larger than a bare header"
 /// assertion uses. Experiment A produced exactly 44 bytes twice, from two
-/// different failures.
+/// different failures, and Experiment 1 produced 80 bytes from a third.
 const BARE_WAV_HEADER_LEN: u64 = 44;
 
 /// What a decoded WAV carries, in the only terms the harness compares.
@@ -250,24 +316,11 @@ struct Wav {
     samples: Vec<i32>,
 }
 
-impl Wav {
-    /// Channel `channel`'s samples, in order.
-    fn channel(&self, channel: usize) -> Vec<i32> {
-        self.samples
-            .iter()
-            .skip(channel)
-            .step_by(self.channels.max(1))
-            .copied()
-            .collect()
-    }
-}
-
 /// Parse a WAV by walking its chunks, never by trusting a magic offset.
 ///
 /// A `fmt ` chunk that is not 16 bytes, or an extra `LIST` chunk, would shift
-/// every sample by an unknown amount if the reader assumed offset 44 — which is
-/// the same class of silent-wrong-answer failure the whole gate exists to
-/// refuse.
+/// every sample by an unknown amount if the reader assumed offset 44 — the same
+/// class of silent-wrong-answer failure the whole gate exists to refuse.
 fn read_wav(path: &Path) -> Result<Wav, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let tag = |at: usize| bytes.get(at..at.saturating_add(4)).map(<[u8]>::to_vec);
@@ -311,13 +364,15 @@ fn read_wav(path: &Path) -> Result<Wav, String> {
             data = Some((body, end));
         }
         // Chunks are word-aligned: an odd size carries one pad byte.
-        let advance = size.saturating_add(8).saturating_add(size.checked_rem(2).unwrap_or(0));
+        let advance = size
+            .saturating_add(8)
+            .saturating_add(size.checked_rem(2).unwrap_or(0));
         cursor = cursor.saturating_add(advance.max(8));
     }
 
     let (start, end) = data.ok_or_else(|| format!("{} has no data chunk", path.display()))?;
     let payload = bytes.get(start..end).unwrap_or_default();
-    let bytes_per_sample = usize::from(bits_per_sample).saturating_add(7) / 8;
+    let bytes_per_sample = usize::from(bits_per_sample).div_ceil(8);
     if channels == 0 || bytes_per_sample == 0 {
         return Err(format!(
             "{} declares {channels} channels at {bits_per_sample} bits",
@@ -345,12 +400,46 @@ fn read_wav(path: &Path) -> Result<Wav, String> {
     })
 }
 
-/// A little-endian signed sample of 1–4 bytes, sign-extended into `i32`.
+/// Write a canonical 44-byte-header PCM WAV — the input `encoder_main` reads.
 ///
-/// WAV PCM is little-endian at every depth, including the 3-byte one. That is
-/// the *opposite* of the fixture's own storage (`sample_format_flags == 0` is
-/// big-endian), which is the whole point of DESC-03 and the reason a 24-bit
-/// fixture is worth having: the two orders are visible on the same round trip.
+/// Adjacent to [`read_wav`] on purpose: read and write in the same file, in
+/// that order, is how an asymmetry becomes visually obvious, and asymmetry is
+/// the failure mode that produces files that almost work.
+///
+/// **WAV PCM is little-endian at every depth**, including the three-byte one —
+/// the opposite of `sample_format_flags == 0`, which is the whole of DESC-03.
+fn write_wav(path: &Path, samples: &[i32], spec: ElementSpec) -> Result<(), String> {
+    let bytes_per_sample = spec.bytes_per_sample();
+    let block_align = spec.channels.saturating_mul(bytes_per_sample);
+    let byte_rate = usize::try_from(spec.sample_rate)
+        .unwrap_or(0)
+        .saturating_mul(block_align);
+    // WAV is always little-endian, whatever the Codec Config declares.
+    let data = store_interleaved(samples, spec.sample_size, false);
+
+    let u32le = |value: usize| u32::try_from(value).unwrap_or(u32::MAX).to_le_bytes();
+    let u16le = |value: usize| u16::try_from(value).unwrap_or(u16::MAX).to_le_bytes();
+
+    let mut out = Vec::with_capacity(data.len().saturating_add(44));
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&u32le(data.len().saturating_add(36)));
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&u32le(16));
+    out.extend_from_slice(&u16le(1)); // PCM
+    out.extend_from_slice(&u16le(spec.channels));
+    out.extend_from_slice(&u32le(usize::try_from(spec.sample_rate).unwrap_or(0)));
+    out.extend_from_slice(&u32le(byte_rate));
+    out.extend_from_slice(&u16le(block_align));
+    out.extend_from_slice(&u16le(usize::from(spec.sample_size)));
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&u32le(data.len()));
+    out.extend_from_slice(&data);
+
+    std::fs::write(path, &out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// A little-endian signed sample of 1–4 bytes, sign-extended into `i32`.
 fn decode_le_sample(bytes: &[u8]) -> i32 {
     // Assembled unsigned, then sign-extended once. Doing it as `i32` would let
     // a byte's own high bit smear into the slots above it.
@@ -382,349 +471,37 @@ fn sign_extend(raw: u32, width: u32) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Encoding a fixture through the real writer
+// One round trip through `iamfdec`, decoded twice
 // ---------------------------------------------------------------------------
 
-/// Everything needed to turn interleaved PCM into an `.iamf`, all of it read
-/// back out of the Codec Config so no constant is duplicated.
-#[derive(Debug, Clone, Copy)]
-struct EncodeSpec {
-    sample_rate: u32,
-    sample_size: u8,
-    num_samples_per_frame: u32,
-    layout: LoudspeakerLayout,
-    channels: usize,
-}
-
-impl EncodeSpec {
-    /// Bytes per stored sample.
-    fn bytes_per_sample(self) -> usize {
-        usize::from(self.sample_size).div_ceil(8)
-    }
-}
-
-/// The spec a descriptor set implies — derived, never supplied twice.
-///
-/// CONF-01 turns on this: the rate, sample size and frame size the harness
-/// hands the reference come from the Codec Config it just wrote, so the
-/// function carries no codec-specific constant and Phase 3 reuses it unchanged.
-fn spec_from(descriptors: &DescriptorSet) -> Result<EncodeSpec, String> {
-    let element = descriptors
-        .audio_elements
-        .first()
-        .ok_or_else(|| "the descriptor set has no Audio Element".to_owned())?;
-    let config = descriptors
-        .codec_config_by_id(element.codec_config_id)
-        .ok_or_else(|| {
-            format!(
-                "no Codec Config carries id {}, which Audio Element {} references",
-                element.codec_config_id, element.audio_element_id
-            )
-        })?;
-    let lpcm = config
-        .lpcm_config()
-        .ok_or_else(|| "the Codec Config is not LPCM".to_owned())?;
-    let layout = first_layout(element)?;
-    let plan = SubstreamPlan::for_layout(layout).map_err(|e| format!("{e:?}"))?;
-    Ok(EncodeSpec {
-        sample_rate: lpcm.sample_rate,
-        sample_size: lpcm.sample_size,
-        num_samples_per_frame: config.num_samples_per_frame,
-        layout,
-        channels: plan.channel_count(),
-    })
-}
-
-/// The `loudspeaker_layout` of an element's first channel layer.
-fn first_layout(element: &AudioElement) -> Result<LoudspeakerLayout, String> {
-    match &element.audio_element_type {
-        iamf::obu::AudioElementType::ChannelBased(config) => config
-            .scalable_channel_layout
-            .layers
-            .first()
-            .map(|layer| layer.loudspeaker_layout)
-            .ok_or_else(|| "the channel layout has no layers".to_owned()),
-        _ => Err("only channel-based elements are encoded by this harness".to_owned()),
-    }
-}
-
-/// Store one sample big- or little-endian at `sample_size` bits.
-///
-/// A byte copy driven by a flag, and no arithmetic on the sample value.
-fn store_sample(value: i32, sample_size: u8, big_endian: bool, into: &mut Vec<u8>) {
-    let width = usize::from(sample_size).div_ceil(8);
-    let be = value.to_be_bytes();
-    // The low `width` bytes of the big-endian representation, most significant
-    // first. For 24-bit that is `be[1..4]`.
-    let start = 4_usize.saturating_sub(width);
-    let slice = be.get(start..4).unwrap_or_default();
-    if big_endian {
-        into.extend_from_slice(slice);
-    } else {
-        into.extend(slice.iter().rev().copied());
-    }
-}
-
-/// Interleaved samples → interleaved stored bytes, in the Codec Config's
-/// declared endianness.
-fn store_interleaved(samples: &[i32], spec: EncodeSpec, big_endian: bool) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(samples.len().saturating_mul(spec.bytes_per_sample()));
-    for value in samples {
-        store_sample(*value, spec.sample_size, big_endian, &mut bytes);
-    }
-    bytes
-}
-
-/// Encode a whole IA Sequence through the **real** [`SequenceWriter`].
-///
-/// Deliberately not a test-only serialisation path: a harness that encoded its
-/// fixture some other way would prove that the other way works.
-fn encode_iamf(descriptors: &DescriptorSet, samples: &[i32]) -> Result<Vec<u8>, String> {
-    let spec = spec_from(descriptors)?;
-    let big_endian = descriptors
-        .codec_configs
-        .first()
-        .and_then(CodecConfig::lpcm_config)
-        .map(|c| matches!(c.sample_format_flags, SampleFormatFlags::BigEndian))
-        .unwrap_or(true);
-
-    let total_samples =
-        u64::try_from(samples.len().checked_div(spec.channels).unwrap_or(0)).unwrap_or(0);
-    let plan = plan_frames(total_samples, spec.num_samples_per_frame).map_err(|e| format!("{e:?}"))?;
-    let substreams = SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
-
-    let interleaved = store_interleaved(samples, spec, big_endian);
-    let frame_bytes = usize::try_from(spec.num_samples_per_frame)
-        .unwrap_or(0)
-        .saturating_mul(spec.channels)
-        .saturating_mul(spec.bytes_per_sample());
-
-    let mut writer = SequenceWriter::new(Vec::new());
-    writer
-        .push_descriptors(descriptors)
-        .map_err(|e| format!("push_descriptors: {e:?}"))?;
-
-    for index in 0..plan.frame_count {
-        let start = usize::try_from(index).unwrap_or(0).saturating_mul(frame_bytes);
-        let end = start.saturating_add(frame_bytes).min(interleaved.len());
-        let mut chunk = interleaved.get(start..end).unwrap_or_default().to_vec();
-        // The final frame is short and is zero-padded to a whole frame by the
-        // caller, which is why it carries the end trim. The writer never
-        // invents sample values — that would be signal processing.
-        chunk.resize(frame_bytes, 0);
-
-        let payloads = pack_channels_to_substreams(
-            &substreams,
-            &chunk,
-            spec.channels,
-            spec.bytes_per_sample(),
-        )
-        .map_err(|e| format!("pack_channels_to_substreams: {e:?}"))?;
-
-        let trimming = plan.trimming_for(index);
-        let frames: Vec<_> = payloads
-            .into_iter()
-            .enumerate()
-            .map(|(substream, payload)| {
-                let id = u32::try_from(substream).unwrap_or(0);
-                AudioFrame::new(id, payload).into_obu(trimming)
-            })
-            .collect();
-        writer
-            .push_temporal_unit(&TemporalUnit::of_frames(frames))
-            .map_err(|e| format!("push_temporal_unit: {e:?}"))?;
-    }
-
-    writer.finish().map_err(|e| format!("finish: {e:?}"))
-}
-
-// ---------------------------------------------------------------------------
-// The probe's signal
-// ---------------------------------------------------------------------------
-
-/// Half of 24-bit full scale (2^23), which is exactly −6 dBFS.
-///
-/// The cap, not a suggestion. See the module documentation on the limiter.
-const PEAK_24: i32 = 0x0040_0000;
-
-/// Half of full scale at `sample_size` bits — `2^(n-2)`, which is −6 dBFS at
-/// every depth.
-fn peak_for(sample_size: u8) -> i32 {
-    let shift = u32::from(sample_size).saturating_sub(2);
-    1_i32.checked_shl(shift).unwrap_or(PEAK_24)
-}
-
-/// A per-channel deterministic ramp, folded into `[-peak, +peak]`.
-///
-/// Channel `c` advances by `STEP` per sample from a base of `c * OFFSET`. Since
-/// `OFFSET` is neither zero nor a multiple of the fold span, two channels differ
-/// at **every** sample index — which is what makes a swapped channel
-/// arithmetically identifiable rather than merely "PCM differs" (D-19).
-fn ramp_sample(channel: usize, index: usize, peak: i32) -> i32 {
-    const STEP: i64 = 7919;
-    const OFFSET: i64 = 104_729;
-    let span = i64::from(peak).saturating_mul(2).saturating_add(1);
-    let base = i64::try_from(channel).unwrap_or(0).saturating_mul(OFFSET);
-    let walk = i64::try_from(index).unwrap_or(0).saturating_mul(STEP);
-    let folded = base.saturating_add(walk).checked_rem(span).unwrap_or(0);
-    i32::try_from(folded).unwrap_or(0).saturating_sub(peak)
-}
-
-/// `frames * channels` interleaved samples of the ramp.
-fn ramp_pcm(frames: usize, channels: usize, peak: i32) -> Vec<i32> {
-    let mut pcm = Vec::with_capacity(frames.saturating_mul(channels));
-    for index in 0..frames {
-        for channel in 0..channels {
-            pcm.push(ramp_sample(channel, index, peak));
-        }
-    }
-    pcm
-}
-
-// ---------------------------------------------------------------------------
-// The probe's descriptor set — the smallest 24-bit big-endian file there is
-// ---------------------------------------------------------------------------
-
-/// `num_samples_per_frame` for the probe.
-const PROBE_FRAME_SIZE: u32 = 128;
-/// A deliberate non-multiple of [`PROBE_FRAME_SIZE`]: 300 = 2×128 + 44, so the
-/// final frame carries `trim_at_end = 84` and `trim_at_start = 0`. The two
-/// differ, which is the only configuration that can catch a swapped END/START
-/// write order (OBU-05).
-const PROBE_SAMPLE_FRAMES: usize = 300;
-
-/// One Codec Config, one stereo Audio Element, one Mix Presentation with the
-/// mandatory Sound System A layout, at 48 kHz and the requested sample format.
-///
-/// Parameterised over depth and endianness because the probe's whole job is to
-/// establish **which combinations the pinned reference can evaluate at all**.
-#[allow(clippy::expect_used)]
-fn probe_descriptors(sample_size: u8, sample_format_flags: SampleFormatFlags) -> DescriptorSet {
-    let codec_config = CodecConfig::lpcm(
-        200,
-        PROBE_FRAME_SIZE,
-        LpcmDecoderConfig {
-            // Zero is BIG-endian (DESC-03) — the opposite of a WAV-shaped
-            // assumption, and the sense the probe exists to test.
-            sample_format_flags,
-            sample_size,
-            sample_rate: 48_000,
-        },
-    );
-    let element = AudioElement::channel_based(
-        300,
-        200,
-        vec![0],
-        ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
-            LoudspeakerLayout::Stereo,
-            1,
-            1,
-        )),
-    );
-    let (primary, additional) =
-        select_minimum_profile(&[&element]).expect("one stereo element fits Simple profile");
-
-    let mix_gain = MixGainParamDefinition::mode_1(100, 48_000);
-    let presentation = MixPresentation {
-        mix_presentation_id: 42,
-        annotations_language: vec![b"en-us".to_vec()],
-        localized_presentation_annotations: vec![b"probe_lpcm".to_vec()],
-        sub_mixes: vec![SubMix {
-            elements: vec![SubMixAudioElement {
-                audio_element_id: 300,
-                localized_element_annotations: vec![b"probe_element_0".to_vec()],
-                rendering_config: RenderingConfig::stereo(),
-                element_mix_gain: mix_gain.clone(),
-            }],
-            output_mix_gain: mix_gain,
-            // Sound System A is the target here AND the layout iamf-tools
-            // hard-checks on write ("Every sub-mix must have a stereo layout").
-            // For a stereo fixture one entry serves both roles; a 5.1 fixture
-            // needs two.
-            layouts: vec![LayoutWithLoudness {
-                layout: Layout::SoundSystem(SoundSystem::A0_2_0),
-                // Caller-supplied numbers, as the wire requires. -24 LUFS and
-                // -6 dBFS in Q7.8: -6144 / 256 and -1536 / 256.
-                loudness: Loudness::new(-6144, -1536),
-            }],
-        }],
-        trailing: Vec::new(),
-    };
-
-    DescriptorSet {
-        sequence_header: IaSequenceHeader::new(primary.to_wire(), additional.to_wire()),
-        codec_configs: vec![codec_config],
-        audio_elements: vec![element],
-        mix_presentations: vec![presentation],
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TASK 1 — the gating probe: research assumption A1
-// ---------------------------------------------------------------------------
-//
-// A1 was research's highest-risk `[ASSUMED]` claim: that the reference's
-// float→int output conversion is exact at 24 bits, so D-18's 24-bit
-// **big-endian** fixture round-trips sample-identically. The empirical proof on
-// record was run at 16 bit.
-//
-// It ran here, before the fixture was frozen, and **A1 is REFUTED** — though
-// not where it was expected. The output conversion is fine. The *input* is not:
-//
-//     libiamf@v1.1.0 code/src/iamf_dec/bitstream.c:206-210
-//     int reads24be(uint8_t *data, int offset) {
-//       uint32_t ret = readu16le(data, offset) << 8 | data[offset + 2];
-//                      ^^^^^^^^^ readu16be was meant
-//
-// Its unsigned sibling `readu24be`, two lines above, uses `readu16be` and is
-// correct. So 24-bit **big-endian** LPCM is decoded by the pinned reference
-// with its top two bytes transposed, and no other sample format is affected:
-// `reads16be` uses `readu16be`, `reads24le`/`reads16le` use `readu16le`, and
-// all three are right.
-//
-// The consequence for the fixture is recorded in `CONFORMANCE-GATE.md` and
-// enforced by the three probes below. What matters here is what did NOT happen:
-// the 24-bit big-endian combination was not quietly dropped, and no tolerance
-// window was introduced to make it pass.
-
-/// One round trip through `iamfdec`, decoded twice, with every precondition a
-/// comparison depends on asserted **before** any comparison is made.
+/// One round trip, with every precondition a comparison depends on asserted
+/// **before** any comparison is made.
 #[derive(Debug)]
 struct RoundTrip {
-    /// Sample frames handed to the encoder.
     encoded_frames: usize,
-    /// Sample frames the reference reported back.
     decoded_frames: usize,
     /// The limiter-disabled decode, interleaved.
     decoded: Vec<i32>,
-    /// Interleaved samples that differ between input and the limiter-disabled
+    /// Interleaved samples differing between input and the limiter-disabled
     /// decode.
     differing: usize,
-    /// Interleaved samples that differ between the two decodes. Must be 0: the
-    /// limiter's gain is exactly 1.0 below threshold, so a difference means the
-    /// fixture has drifted above −1 dBTP and `-disable_limiter` is masking it.
+    /// Interleaved samples differing between the two decodes.
     limiter_differing: usize,
 }
 
-/// Encode `pcm` through the real writer, decode it twice, and report.
+#[allow(clippy::expect_used)]
+/// Encode `fixture` through the real writer, decode it twice, and report.
 ///
 /// Assertion order is fixed and each has its own message: (1) the output exists
 /// and exceeds a bare WAV header, (2) the decoded sample count equals the
 /// encoded count, and only then (3) is any sample compared — by the caller,
-/// which decides what the count of differences means.
-///
-/// The second decode, with the limiter at its default, is research open
-/// question 3 resolved: run both, so a fixture that drifts above threshold
-/// fails loudly instead of being hidden by the flag.
-#[allow(clippy::expect_used)]
-fn round_trip(
-    decoder: &Path,
-    descriptors: &DescriptorSet,
-    pcm: &[i32],
-    layout: OutputLayout,
-    tag: &str,
-) -> RoundTrip {
-    let spec = spec_from(descriptors).expect("the probe's descriptor set is well formed");
+/// which decides what a count of differences means.
+fn round_trip(decoder: &Path, fixture: &Fixture, dir: &Path) -> RoundTrip {
+    let spec = fixture.spec().expect("the fixture's spec resolves");
+    let layout = OutputLayout::for_layout(spec.layout).expect("the layout maps to an -s flag");
+    let pcm = fixture.single_pcm();
+    let tag = fixture.name;
+
     let peak = peak_for(spec.sample_size);
     let observed_peak = pcm.iter().map(|v| v.saturating_abs()).max().unwrap_or(0);
     assert!(
@@ -735,24 +512,15 @@ fn round_trip(
          encoder. Do not raise the amplitude 'to make the signal more distinguishable'."
     );
 
-    let bytes = encode_iamf(descriptors, pcm).expect("the probe encodes");
-    let dir = scratch_dir(tag);
+    let bytes = fixture.encode().expect("the fixture encodes");
     let input = dir.join(format!("{tag}.iamf"));
-    std::fs::write(&input, &bytes).expect("the probe .iamf is writable");
+    std::fs::write(&input, &bytes).expect("the .iamf is writable");
 
     let encoded_frames = pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0);
 
     // ---- decode 1: limiter disabled — the sample-identity run ---------------
     let nolim = dir.join(format!("{tag}.nolimiter.wav"));
-    let run = run_iamfdec(
-        decoder,
-        &input,
-        &nolim,
-        spec.sample_rate,
-        spec.sample_size,
-        layout,
-        true,
-    );
+    let run = run_iamfdec(decoder, &input, &nolim, spec, layout, true);
     println!("{tag} command: {}", run.command);
     println!("{tag} exit: {:?} (recorded, NOT the signal)", run.exit_code);
     println!("{tag} stderr: {}", run.stderr.trim());
@@ -790,6 +558,13 @@ fn round_trip(
         "{tag}: the decoder reported {} channels, the fixture carries {}",
         wav.channels, spec.channels
     );
+    assert_eq!(
+        wav.sample_rate, spec.sample_rate,
+        "{tag}: the decoder reported {} Hz, the Codec Config declares {}. A rate mismatch means \
+         the speex resampler ran, and a resampled comparison fails for a reason unrelated to the \
+         bitstream (T-01-50).",
+        wav.sample_rate, spec.sample_rate
+    );
 
     let differing = pcm
         .iter()
@@ -799,15 +574,7 @@ fn round_trip(
 
     // ---- decode 2: limiter at its default — the drift alarm ----------------
     let lim = dir.join(format!("{tag}.limiter.wav"));
-    let run_lim = run_iamfdec(
-        decoder,
-        &input,
-        &lim,
-        spec.sample_rate,
-        spec.sample_size,
-        layout,
-        false,
-    );
+    let run_lim = run_iamfdec(decoder, &input, &lim, spec, layout, false);
     let lim_size = std::fs::metadata(&lim).map(|m| m.len()).unwrap_or(0);
     assert!(
         lim_size > BARE_WAV_HEADER_LEN,
@@ -836,24 +603,16 @@ fn round_trip(
     }
 }
 
-/// The probe signal for one format: [`PROBE_SAMPLE_FRAMES`] frames of the
-/// per-channel ramp, capped at −6 dBFS for that depth.
-fn probe_pcm(spec_channels: usize, sample_size: u8) -> Vec<i32> {
-    ramp_pcm(PROBE_SAMPLE_FRAMES, spec_channels, peak_for(sample_size))
-}
-
-/// The limiter changed nothing — which is what a fixture below −6 dBFS
-/// guarantees, since `compute_target_gain()` returns exactly 1.0 while no
-/// look-ahead peak exceeds the linear threshold of ≈0.8913.
+/// The limiter changed nothing — what a fixture below −6 dBFS guarantees, since
+/// `compute_target_gain()` returns exactly 1.0 while no look-ahead peak exceeds
+/// the linear threshold of ≈0.8913.
 ///
 /// Asserted **by the caller**, not inside [`round_trip`], for one reason: a
 /// round trip whose *decode* is wrong can produce samples the encoder never
 /// wrote, and those can exceed the threshold even though the input did not.
 /// Baking this into the helper would have made such a case report "the fixture
-/// is too loud", which is the wrong diagnosis and would have sent a reader to
-/// lower the amplitude instead of finding the real defect. Every fixture whose
-/// round trip is expected to be exact asserts it; the one probe that documents
-/// an upstream misread explains why it does not.
+/// is too loud" — the wrong diagnosis, and one that sends a reader to lower the
+/// amplitude instead of finding the real defect.
 fn assert_limiter_is_transparent(trip: &RoundTrip, tag: &str) {
     assert_eq!(
         trip.limiter_differing, 0,
@@ -862,6 +621,97 @@ fn assert_limiter_is_transparent(trip: &RoundTrip, tag: &str) {
          masking it. Lower the amplitude cap; do not remove this check.",
         trip.limiter_differing
     );
+}
+
+// ---------------------------------------------------------------------------
+// TASK 1 — the gating probe: research assumption A1
+// ---------------------------------------------------------------------------
+//
+// A1 was research's highest-risk `[ASSUMED]` claim: that the reference's
+// float→int output conversion is exact at 24 bits, so D-18's 24-bit
+// **big-endian** fixture round-trips sample-identically. The empirical proof on
+// record was run at 16 bit.
+//
+// It ran here, before the fixture was frozen, and **A1 is REFUTED** — though
+// not where it was expected. The output conversion is fine. The *input* is not:
+//
+//     libiamf@v1.1.0 code/src/iamf_dec/bitstream.c:206-210
+//     int reads24be(uint8_t *data, int offset) {
+//       uint32_t ret = readu16le(data, offset) << 8 | data[offset + 2];
+//                      ^^^^^^^^^ readu16be was meant
+//
+// Its unsigned sibling `readu24be`, two lines above, uses `readu16be` and is
+// correct. So 24-bit **big-endian** LPCM is decoded by the pinned reference
+// with its top two bytes transposed, and no other sample format is affected:
+// `reads16be` uses `readu16be`, `reads24le`/`reads16le` use `readu16le`, and
+// all three are right.
+//
+// The consequence for the fixture is recorded in `CONFORMANCE-GATE.md` as
+// Experiment 3 and waiver W-1, and enforced by the three probes below. What
+// matters here is what did NOT happen: the 24-bit big-endian combination was not
+// quietly dropped, and no tolerance window was introduced to make it pass.
+
+#[allow(clippy::expect_used, clippy::panic)]
+/// A stereo probe fixture at one sample format — the smallest file that answers
+/// the question.
+fn probe_fixture(name: &'static str, sample_size: u8, flags: SampleFormatFlags) -> Fixture {
+    let config = CodecConfig::lpcm(
+        200,
+        fixture::FRAME_SIZE,
+        LpcmDecoderConfig {
+            // Zero is BIG-endian (DESC-03) — the opposite of a WAV-shaped
+            // assumption, and the sense the probe exists to test.
+            sample_format_flags: flags,
+            sample_size,
+            sample_rate: fixture::SAMPLE_RATE,
+        },
+    );
+    let element = AudioElement::channel_based(
+        300,
+        200,
+        vec![0],
+        ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+            LoudspeakerLayout::Stereo,
+            1,
+            1,
+        )),
+    );
+    let (primary, additional) =
+        select_minimum_profile(&[&element]).expect("one stereo element fits Simple profile");
+    let mix_gain = MixGainParamDefinition::mode_1(100, fixture::SAMPLE_RATE);
+    let presentation = MixPresentation {
+        mix_presentation_id: 42,
+        annotations_language: vec![b"en-us".to_vec()],
+        localized_presentation_annotations: vec![b"probe_lpcm".to_vec()],
+        sub_mixes: vec![SubMix {
+            elements: vec![SubMixAudioElement {
+                audio_element_id: 300,
+                localized_element_annotations: vec![b"probe_element_0".to_vec()],
+                rendering_config: RenderingConfig::stereo(),
+                element_mix_gain: mix_gain.clone(),
+            }],
+            output_mix_gain: mix_gain,
+            // For a stereo fixture the one Sound System A layout is both the
+            // comparison target and the layout iamf-tools hard-checks on write.
+            // A 5.1 fixture needs two.
+            layouts: vec![LayoutWithLoudness {
+                layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                loudness: Loudness::new(-6144, -1536),
+            }],
+        }],
+        trailing: Vec::new(),
+    };
+
+    Fixture {
+        name,
+        descriptors: DescriptorSet {
+            sequence_header: IaSequenceHeader::new(primary.to_wire(), additional.to_wire()),
+            codec_configs: vec![config],
+            audio_elements: vec![element],
+            mix_presentations: vec![presentation],
+        },
+        pcm: vec![ramp_pcm(fixture::SAMPLE_FRAMES, 2, peak_for(sample_size))],
+    }
 }
 
 /// **A1, positive half.** 24-bit *little*-endian round-trips exactly, so the
@@ -875,21 +725,15 @@ fn probe_24bit_little_endian_round_trips_exactly() {
         skip_no_reference("probe_24bit_little_endian_round_trips_exactly");
         return;
     };
-    let descriptors = probe_descriptors(24, SampleFormatFlags::LittleEndian);
-    let pcm = probe_pcm(2, 24);
-    let trip = round_trip(
-        &decoder,
-        &descriptors,
-        &pcm,
-        OutputLayout::SoundSystemA,
-        "probe24le",
-    );
+    let probe = probe_fixture("probe24le", 24, SampleFormatFlags::LittleEndian);
+    let dir = scratch_dir("probe24le");
+    let trip = round_trip(&decoder, &probe, &dir);
     println!(
         "A1 RESULT (24-bit LE): {} frames in, {} out, {} of {} samples differ, limiter delta {}",
         trip.encoded_frames,
         trip.decoded_frames,
         trip.differing,
-        pcm.len(),
+        probe.single_pcm().len(),
         trip.limiter_differing
     );
     assert_eq!(
@@ -898,7 +742,7 @@ fn probe_24bit_little_endian_round_trips_exactly() {
         "{} of {} samples differ after a 24-bit little-endian round trip. The 24-bit depth itself \
          is supposed to be exact — if this fails, the defect is ours, not upstream's.",
         trip.differing,
-        pcm.len()
+        probe.single_pcm().len()
     );
     assert_limiter_is_transparent(&trip, "probe24le");
 }
@@ -914,21 +758,15 @@ fn probe_16bit_big_endian_round_trips_exactly() {
         skip_no_reference("probe_16bit_big_endian_round_trips_exactly");
         return;
     };
-    let descriptors = probe_descriptors(16, SampleFormatFlags::BigEndian);
-    let pcm = probe_pcm(2, 16);
-    let trip = round_trip(
-        &decoder,
-        &descriptors,
-        &pcm,
-        OutputLayout::SoundSystemA,
-        "probe16be",
-    );
+    let probe = probe_fixture("probe16be", 16, SampleFormatFlags::BigEndian);
+    let dir = scratch_dir("probe16be");
+    let trip = round_trip(&decoder, &probe, &dir);
     println!(
         "A1 RESULT (16-bit BE): {} frames in, {} out, {} of {} samples differ, limiter delta {}",
         trip.encoded_frames,
         trip.decoded_frames,
         trip.differing,
-        pcm.len(),
+        probe.single_pcm().len(),
         trip.limiter_differing
     );
     assert_eq!(
@@ -937,7 +775,7 @@ fn probe_16bit_big_endian_round_trips_exactly() {
         "{} of {} samples differ after a 16-bit big-endian round trip. reads16be uses readu16be \
          and is correct at the pinned SHA — if this fails, the defect is ours.",
         trip.differing,
-        pcm.len()
+        probe.single_pcm().len()
     );
     assert_limiter_is_transparent(&trip, "probe16be");
 }
@@ -966,30 +804,23 @@ fn upstream_reads24be(bytes: [u8; 3]) -> i32 {
 ///
 /// **This test failing is good news.** It means `reads24be` was fixed upstream
 /// (or the pin moved), which is exactly the "what would restore it" condition
-/// of the D-17 waiver in `CONFORMANCE-GATE.md`: go read that entry and move the
+/// of waiver W-1 in `CONFORMANCE-GATE.md`: go read that entry and move the
 /// sample-identity fixture back to 24-bit big-endian.
 ///
 /// It is not bug-compatibility. Nothing here makes a comparison pass; the
 /// waiver records the coverage that moved, and the byte-level correctness of our
-/// own 24-bit big-endian writer is asserted by hand-computed vectors
-/// ([`store_sample_writes_the_declared_byte_order`]), which no permissive reader
-/// is involved in.
+/// own 24-bit big-endian writer is asserted by hand-computed vectors in
+/// `tests/fixture.rs`, which no permissive reader is involved in.
 #[test]
 fn probe_24bit_big_endian_hits_the_upstream_reads24be_defect() {
     let Some(decoder) = reference_decoder() else {
         skip_no_reference("probe_24bit_big_endian_hits_the_upstream_reads24be_defect");
         return;
     };
-    let descriptors = probe_descriptors(24, SampleFormatFlags::BigEndian);
-    let spec = spec_from(&descriptors).expect("the probe's descriptor set is well formed");
-    let pcm = probe_pcm(spec.channels, 24);
-    let trip = round_trip(
-        &decoder,
-        &descriptors,
-        &pcm,
-        OutputLayout::SoundSystemA,
-        "probe24be",
-    );
+    let probe = probe_fixture("probe24be", 24, SampleFormatFlags::BigEndian);
+    let dir = scratch_dir("probe24be");
+    let pcm = probe.single_pcm().to_vec();
+    let trip = round_trip(&decoder, &probe, &dir);
     println!(
         "A1 RESULT (24-bit BE): {} frames in, {} out, {} of {} samples differ, limiter delta {}",
         trip.encoded_frames,
@@ -1008,9 +839,8 @@ fn probe_24bit_big_endian_hits_the_upstream_reads24be_defect() {
     // transposed read produces samples the encoder never wrote, some of which
     // exceed -1 dBTP, so the limiter genuinely engages on values that are
     // already wrong. Asserting transparency would report "the fixture is too
-    // loud" — the wrong diagnosis, and one that would send a reader to lower
-    // the amplitude instead of finding the misread. The input itself is at
-    // -6 dBFS, which `round_trip` asserted before encoding anything.
+    // loud" — the wrong diagnosis. The input itself is at -6 dBFS, which
+    // `round_trip` asserted before encoding anything.
     println!(
         "probe24be limiter delta {} (expected non-zero: the misread values exceed -1 dBTP)",
         trip.limiter_differing
@@ -1032,6 +862,11 @@ fn probe_24bit_big_endian_hits_the_upstream_reads24be_defect() {
         .filter(|(a, b)| a != b)
         .count();
     assert_eq!(
+        predicted.len(),
+        trip.decoded.len(),
+        "the prediction and the decode must cover the same samples"
+    );
+    assert_eq!(
         unexplained,
         0,
         "{unexplained} of {} decoded samples are NOT explained by libiamf@v1.1.0's reads24be \
@@ -1039,27 +874,22 @@ fn probe_24bit_big_endian_hits_the_upstream_reads24be_defect() {
          CONFORMANCE-GATE.md is therefore incomplete — do not proceed on it.",
         predicted.len()
     );
-    assert_eq!(
-        predicted.len(),
-        trip.decoded.len(),
-        "the prediction and the decode must cover the same samples"
-    );
 
     // And the defect is real, not a no-op: it must actually have changed the
-    // samples. If this ever reads 0, `reads24be` was fixed upstream and the
-    // D-17 waiver's restoration condition has been met.
+    // samples. If this ever reads 0, `reads24be` was fixed upstream and waiver
+    // W-1's restoration condition has been met.
     assert!(
         trip.differing > 0,
         "the 24-bit big-endian round trip is now EXACT. reads24be appears to have been fixed \
          upstream (or REFERENCES.md's libiamf pin moved). This is the restoration condition of \
-         the D-17 waiver in CONFORMANCE-GATE.md: remove the waiver and move the sample-identity \
+         waiver W-1 in CONFORMANCE-GATE.md: remove the waiver and move the sample-identity \
          fixture back to 24-bit big-endian, which is what D-18 originally specified."
     );
 }
 
 /// The defective read, checked against values computed by hand from the code —
-/// so the diagnosis above stands on its own even with no reference binary
-/// present (CONF-10).
+/// so the diagnosis above stands on its own with no reference binary present
+/// (CONF-10).
 #[test]
 fn the_upstream_reads24be_transposes_the_top_two_bytes() {
     // 0xC0 0x00 0x00 is -4194304 read correctly; the defect composes
@@ -1074,55 +904,6 @@ fn the_upstream_reads24be_transposes_the_top_two_bytes() {
     assert_eq!(upstream_reads24be([0x7F, 0x7F, 0x01]), 0x007F_7F01);
 }
 
-/// The ramp is per-channel distinguishable at every index, which is what D-19's
-/// diagnostic depends on: if two channels could ever carry the same value at
-/// the same index, a swap would be undetectable there.
-#[test]
-fn the_ramp_distinguishes_every_channel_at_every_index() {
-    let channels: usize = 6;
-    for index in 0..512 {
-        for a in 0..channels {
-            for b in a.saturating_add(1)..channels {
-                assert_ne!(
-                    ramp_sample(a, index, PEAK_24),
-                    ramp_sample(b, index, PEAK_24),
-                    "channels {a} and {b} collide at sample index {index}"
-                );
-            }
-        }
-    }
-}
-
-/// The cap is a property of the signal generator, not of one call site.
-#[test]
-fn the_ramp_never_exceeds_the_minus_six_dbfs_cap() {
-    for index in 0..4096 {
-        for channel in 0..6 {
-            let value = ramp_sample(channel, index, PEAK_24);
-            assert!(
-                value.saturating_abs() <= PEAK_24,
-                "ramp({channel}, {index}) = {value} exceeds the cap {PEAK_24}"
-            );
-        }
-    }
-}
-
-/// Big-endian and little-endian storage of the same value differ in byte order
-/// and nothing else — the property DESC-03 turns on.
-#[test]
-fn store_sample_writes_the_declared_byte_order() {
-    let mut be = Vec::new();
-    let mut le = Vec::new();
-    store_sample(0x0012_3456, 24, true, &mut be);
-    store_sample(0x0012_3456, 24, false, &mut le);
-    assert_eq!(be, vec![0x12, 0x34, 0x56]);
-    assert_eq!(le, vec![0x56, 0x34, 0x12]);
-
-    let mut negative = Vec::new();
-    store_sample(-1, 24, true, &mut negative);
-    assert_eq!(negative, vec![0xFF, 0xFF, 0xFF]);
-}
-
 /// The WAV reader sign-extends a 3-byte little-endian sample correctly, which
 /// is the one decode step that silently corrupts every negative sample if it is
 /// wrong.
@@ -1132,4 +913,1391 @@ fn the_wav_reader_sign_extends_24_bit_samples() {
     assert_eq!(decode_le_sample(&[0xFF, 0xFF, 0xFF]), -1);
     assert_eq!(decode_le_sample(&[0x00, 0x00, 0x80]), -0x0080_0000);
     assert_eq!(decode_le_sample(&[0x00, 0x00, 0x00]), 0);
+}
+
+/// The WAV writer and reader are inverses, which is what lets `encoder_main` be
+/// handed the same samples our encoder was.
+#[test]
+fn the_wav_writer_and_reader_round_trip() {
+    let dir = scratch_dir("wavrt");
+    for sample_size in [16_u8, 24] {
+        let spec = ElementSpec {
+            sample_rate: 48_000,
+            sample_size,
+            num_samples_per_frame: 128,
+            big_endian: false,
+            layout: LoudspeakerLayout::Ch5_1,
+            channels: 6,
+        };
+        let pcm = ramp_pcm(64, 6, peak_for(sample_size));
+        let path = dir.join(format!("rt{sample_size}.wav"));
+        write_wav(&path, &pcm, spec).expect("the WAV writes");
+        let wav = read_wav(&path).expect("the WAV reads back");
+        assert_eq!(wav.channels, 6);
+        assert_eq!(wav.sample_rate, 48_000);
+        assert_eq!(wav.bits_per_sample, u16::from(sample_size));
+        assert_eq!(wav.frames, 64);
+        assert_eq!(wav.samples, pcm, "{sample_size}-bit WAV round trip");
+    }
+}
+
+// ===========================================================================
+// CONF-01 — `assert_conformant`, the reusable harness
+// ===========================================================================
+
+/// Everything the gate observed about one fixture, so a caller can report as
+/// well as assert.
+#[derive(Debug, Default)]
+struct GateReport {
+    lines: Vec<String>,
+}
+
+impl GateReport {
+    fn note(&mut self, clause: &str, verdict: &str) {
+        self.lines.push(format!("{clause}: {verdict}"));
+    }
+
+    fn print(&self, tag: &str) {
+        for line in &self.lines {
+            println!("[{tag}] {line}");
+        }
+    }
+}
+
+/// **CONF-01.** Assert that `descriptors` + `pcm` produce a conformant IA
+/// Sequence, clause by clause.
+///
+/// A **function, not a test body**, and that is the whole requirement: Phase 3
+/// reuses it unchanged for FLAC and Opus. So it takes the configuration and the
+/// PCM as arguments and contains no codec-specific constant — the sample rate,
+/// sample size, frame size and output layout it hands the reference are all read
+/// back out of the Codec Config it just wrote. A single hard-coded `48000` here
+/// would make it an LPCM-shaped function pretending to be a general one, and the
+/// failure would not surface until Phase 3.
+///
+/// # Clause order is load-bearing
+///
+/// **Clause 0 runs first**: the reference-manifest assertion (D-13). A
+/// conformance suite that ran green against the wrong reference is worse than
+/// one that did not run, because it reports confidence it has not earned.
+///
+/// Then the offline clauses (CONF-02, CONF-03, CONF-04), which need no reference
+/// binary at all; then CONF-05 through `iamfdec`; then CONF-06 through
+/// `iamf-tools`' stricter parser. Each reference-dependent clause **skips with a
+/// printed reason** when its tool is absent, and the offline ones still run —
+/// that is CONF-10, and it is what keeps the four-target PR gate fast and
+/// cross-platform.
+///
+/// CONF-07 and CONF-08 are deliberately **not** here. CONF-07 needs a companion
+/// file produced by `encoder_main` from a description of the same configuration
+/// in `iamf-tools`' own proto dialect, which is a second input this signature
+/// does not take; it lives in [`assert_byte_diff_matches_ledger`]. CONF-08 is a
+/// claim about a different file entirely — the vendored `test_000003.iamf` — and
+/// belongs to `tests/sequence.rs`, which this file asserts still holds rather
+/// than re-implementing.
+///
+/// # Errors
+///
+/// Returns the first clause failure as a message naming the clause. Panicking
+/// assertions are used only for the invariants a caller could not act on.
+fn assert_conformant(descriptors: &DescriptorSet, pcm: &[i32]) -> Result<GateReport, String> {
+    let mut report = GateReport::default();
+
+    // ---- clause 0 — the reference is the pinned one (D-13) -----------------
+    assert_reference_manifest_matches()?;
+    report.note("clause 0 (D-13 manifest)", "reference pin confirmed");
+
+    let spec = spec_of_first(descriptors)?;
+    let tag = descriptors
+        .mix_presentations
+        .first()
+        .and_then(|p| p.localized_presentation_annotations.first())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .unwrap_or_else(|| "fixture".to_owned());
+    let fixture = Fixture {
+        // Leaked once per call and only in a test binary; the alternative is
+        // threading a lifetime through `Fixture` for a label.
+        name: Box::leak(tag.clone().into_boxed_str()),
+        descriptors: descriptors.clone(),
+        pcm: vec![pcm.to_vec()],
+    };
+    let bytes = fixture.encode()?;
+
+    // ---- CONF-02 — the signal is non-silent and per-channel-distinguishable -
+    assert_signal_is_distinguishable(pcm, spec)?;
+    report.note(
+        "CONF-02 (signal)",
+        &format!(
+            "{} channels, each distinguishable at every index, peak <= -6 dBFS",
+            spec.channels
+        ),
+    );
+
+    // ---- CONF-03 — the length forces a non-zero, differing end trim ---------
+    let trim = assert_trim_is_forced(pcm, spec)?;
+    report.note(
+        "CONF-03 (trim)",
+        &format!("trim_at_end = {trim}, trim_at_start = 0, and the two differ"),
+    );
+
+    // ---- CONF-04 — structure is observable in our own output ---------------
+    let structure = assert_structure_is_observable(&bytes)?;
+    report.note("CONF-04 (structure)", &structure);
+
+    // ---- CONF-05 — libiamf decodes it and the PCM is identical -------------
+    match reference_decoder() {
+        None => {
+            skip_no_reference("CONF-05");
+            report.note("CONF-05 (libiamf sample identity)", "SKIPPED — no iamfdec");
+        }
+        Some(decoder) => {
+            let dir = scratch_dir(fixture.name);
+            let trip = round_trip(&decoder, &fixture, &dir);
+            assert_limiter_is_transparent(&trip, fixture.name);
+            if trip.differing != 0 {
+                // D-19: report a candidate permutation, never apply one.
+                let diagnosis =
+                    describe_channel_mismatch(pcm, &trip.decoded, spec.layout)
+                        .unwrap_or_else(|| "PCM differs".to_owned());
+                return Err(format!(
+                    "CONF-05 FAILED for {}: {} of {} samples differ after a round trip through \
+                     the pinned libiamf.\n{diagnosis}",
+                    fixture.name,
+                    trip.differing,
+                    pcm.len()
+                ));
+            }
+            report.note(
+                "CONF-05 (libiamf sample identity)",
+                &format!(
+                    "{} sample frames, 0 of {} samples differ, limiter delta 0",
+                    trip.decoded_frames,
+                    pcm.len()
+                ),
+            );
+        }
+    }
+
+    // ---- CONF-06 — iamf-tools' stricter parser accepts the file ------------
+    if iamf_tools_available() {
+        let dir = scratch_dir(&format!("{}-conf06", fixture.name));
+        let observed = run_decoder_main(&bytes, &dir, expected_temporal_units(pcm, spec)?)?;
+        report.note("CONF-06 (iamf-tools parser)", &observed);
+    } else {
+        skip_no_container("CONF-06");
+        report.note("CONF-06 (iamf-tools parser)", "SKIPPED — no container");
+    }
+
+    Ok(report)
+}
+
+/// **Clause 0 (D-13).** The reference actually on disk is the one
+/// `REFERENCES.md` pins.
+///
+/// Delegated to `tests/reference_manifest.rs`'s own assertions by re-reading the
+/// same two files, rather than duplicating the scanner: this is the *ordering*
+/// requirement — that it runs before any other clause — not a second
+/// implementation of the check.
+fn assert_reference_manifest_matches() -> Result<(), String> {
+    if reference_decoder().is_none() {
+        // Nothing to drift against. `tests/reference_manifest.rs` prints the
+        // same skip; this clause is vacuously satisfied offline.
+        return Ok(());
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join(".reference-manifest.json"))
+        .map_err(|e| format!("clause 0: cannot read .reference-manifest.json: {e}"))?;
+    let references = std::fs::read_to_string(root.join("REFERENCES.md"))
+        .map_err(|e| format!("clause 0: cannot read REFERENCES.md: {e}"))?;
+
+    // The two files spell the projects differently — `REFERENCES.md` uses the
+    // repository name, the manifest uses a JSON key — so each side gets its own
+    // needle. `tests/reference_manifest.rs` makes the same distinction; getting
+    // it wrong here would turn clause 0 into an assertion that always fails,
+    // which is a different way of not running the gate.
+    for (project, reference_needle, manifest_key) in [
+        ("libiamf", "libiamf", "libiamf_sha"),
+        ("iamf-tools", "iamf-tools", "iamf_tools_sha"),
+    ] {
+        let built = sha_on_line_naming(&manifest, manifest_key);
+        let pinned = sha_on_line_naming(&references, reference_needle);
+        if built.is_none() || built != pinned {
+            return Err(format!(
+                "clause 0: manifest disagrees with REFERENCES.md for {project}: built {built:?}, \
+                 pinned {pinned:?}. A conformance suite that ran green against the wrong \
+                 reference is worse than one that did not run."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The first 40-hex-character token on the first line naming `needle`.
+fn sha_on_line_naming(haystack: &str, needle: &str) -> Option<String> {
+    let needle_lc = needle.to_ascii_lowercase();
+    haystack
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains(&needle_lc))
+        .find_map(|line| {
+            line.split(|c: char| !c.is_ascii_hexdigit())
+                .find(|run| {
+                    run.len() == 40
+                        && run
+                            .chars()
+                            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+                })
+                .map(str::to_owned)
+        })
+}
+
+/// **CONF-02.** The signal is non-silent and every channel's sample sequence
+/// differs from every other channel's — which is what makes a swap
+/// arithmetically identifiable rather than invisible.
+fn assert_signal_is_distinguishable(pcm: &[i32], spec: ElementSpec) -> Result<(), String> {
+    if pcm.iter().all(|value| *value == 0) {
+        return Err("CONF-02: the signal is silent, so nothing about it is observable".to_owned());
+    }
+    let channels = spec.channels.max(1);
+    let channel_of = |index: usize| -> Vec<i32> {
+        pcm.iter().skip(index).step_by(channels).copied().collect()
+    };
+    for a in 0..channels {
+        let left = channel_of(a);
+        if left.iter().all(|value| *value == 0) {
+            return Err(format!("CONF-02: channel {a} is silent"));
+        }
+        for b in a.saturating_add(1)..channels {
+            if left == channel_of(b) {
+                return Err(format!(
+                    "CONF-02: channels {a} and {b} carry identical samples, so a swap between \
+                     them would be undetectable — which is precisely the BCG packing failure the \
+                     5.1 fixture exists to catch"
+                ));
+            }
+        }
+    }
+    let peak = peak_for(spec.sample_size);
+    let observed = pcm.iter().map(|v| v.saturating_abs()).max().unwrap_or(0);
+    if observed > peak {
+        return Err(format!(
+            "CONF-02: the signal peaks at {observed}, above the -6 dBFS cap of {peak}"
+        ));
+    }
+    Ok(())
+}
+
+/// **CONF-03.** The total sample count is not a multiple of the frame size, so
+/// the final frame carries `0 < trim_at_end < num_samples_per_frame` while
+/// `trim_at_start` stays 0.
+///
+/// Computed with **checked integer arithmetic and no float**, from the encoded
+/// sample count. Returns the end trim.
+fn assert_trim_is_forced(pcm: &[i32], spec: ElementSpec) -> Result<u32, String> {
+    let frames = u64::try_from(pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0))
+        .map_err(|e| format!("CONF-03: sample count does not fit u64: {e}"))?;
+    let per_frame = u64::from(spec.num_samples_per_frame);
+    if per_frame == 0 {
+        return Err("CONF-03: num_samples_per_frame is 0".to_owned());
+    }
+    if frames.checked_rem(per_frame) == Some(0) {
+        return Err(format!(
+            "CONF-03: {frames} samples is an exact multiple of {per_frame}, so trim_at_end would \
+             be 0 and equal to trim_at_start. A swapped END/START write order is invisible \
+             whenever the two are equal (OBU-05)."
+        ));
+    }
+    let plan = plan_frames(frames, spec.num_samples_per_frame)
+        .map_err(|e| format!("CONF-03: plan_frames: {e:?}"))?;
+    if plan.trim_at_end == 0 || plan.trim_at_end >= spec.num_samples_per_frame {
+        return Err(format!(
+            "CONF-03: trim_at_end is {}, which is not strictly between 0 and {}",
+            plan.trim_at_end, spec.num_samples_per_frame
+        ));
+    }
+    let last = plan.frame_count.saturating_sub(1);
+    let trimming = plan
+        .trimming_for(last)
+        .ok_or_else(|| "CONF-03: the final frame carries no trimming".to_owned())?;
+    if trimming.at_start != 0 {
+        return Err(format!(
+            "CONF-03: trim_at_start is {}, but LPCM has no priming — the two trims must differ",
+            trimming.at_start
+        ));
+    }
+    if trimming.at_end == trimming.at_start {
+        return Err("CONF-03: the two trim values are equal, so a swapped write order is \
+                    invisible"
+            .to_owned());
+    }
+    Ok(plan.trim_at_end)
+}
+
+/// **CONF-04.** Structure is observable in our own output: at least six OBUs,
+/// the descriptors in the reference's write order, and the boundary walk landing
+/// exactly on `bytes.len()` (OBU-08).
+fn assert_structure_is_observable(bytes: &[u8]) -> Result<String, String> {
+    let boundaries =
+        find_obu_boundaries(bytes).map_err(|e| format!("CONF-04: the OBU chain does not walk: {e:?}"))?;
+    if boundaries.last().copied() != Some(bytes.len()) {
+        return Err(format!(
+            "CONF-04: the final OBU boundary is {:?}, not bytes.len() = {}. A boundary that \
+             stops short is how libiamf's own splitter reports an oversized final size — as a \
+             SHORTER FILE rather than a decode failure (OBU-08).",
+            boundaries.last(),
+            bytes.len()
+        ));
+    }
+    let count = boundaries.len().saturating_sub(1);
+    if count < 6 {
+        return Err(format!(
+            "CONF-04: {count} OBUs, fewer than the six ordering observability needs"
+        ));
+    }
+
+    let mut types = Vec::with_capacity(count);
+    for start in boundaries.iter().take(count) {
+        let rest = bytes.get(*start..).unwrap_or_default();
+        let mut cursor = iamf::bits::BitCursor::new(rest);
+        let (header, _size) = read_obu_header(&mut cursor)
+            .map_err(|e| format!("CONF-04: OBU at {start} has an unparsable header: {e:?}"))?;
+        types.push(header.obu_type);
+    }
+    if types.first() != Some(&ObuType::IaSequenceHeader) {
+        return Err(format!(
+            "CONF-04: the first OBU is {:?}, not the IA Sequence Header",
+            types.first()
+        ));
+    }
+    // Descriptors come first, in the reference's order: header, Codec Configs,
+    // Audio Elements, Mix Presentations. Nothing after the first Audio Frame may
+    // be a descriptor.
+    let first_frame = types
+        .iter()
+        .position(|obu_type| {
+            !matches!(
+                obu_type,
+                ObuType::IaSequenceHeader
+                    | ObuType::CodecConfig
+                    | ObuType::AudioElement
+                    | ObuType::MixPresentation
+            )
+        })
+        .unwrap_or(types.len());
+    let prologue = types.get(..first_frame).unwrap_or_default();
+    let ordered: Vec<u8> = prologue
+        .iter()
+        .map(|obu_type| match obu_type {
+            ObuType::IaSequenceHeader => 0_u8,
+            ObuType::CodecConfig => 1,
+            ObuType::AudioElement => 2,
+            _ => 3,
+        })
+        .collect();
+    if ordered.windows(2).any(|pair| pair.first() > pair.get(1)) {
+        return Err(format!(
+            "CONF-04: the descriptor prologue is out of order: {prologue:?}. The reference writes \
+             the IA Sequence Header, then Codec Configs ascending by id, then Audio Elements \
+             ascending by id, then Mix Presentations in LIST order (DESC-08)."
+        ));
+    }
+
+    let codec_configs = types
+        .iter()
+        .filter(|obu_type| **obu_type == ObuType::CodecConfig)
+        .count();
+    let elements = types
+        .iter()
+        .filter(|obu_type| **obu_type == ObuType::AudioElement)
+        .count();
+    Ok(format!(
+        "{count} OBUs, {codec_configs} Codec Config(s), {elements} Audio Element(s), prologue in \
+         write order, final boundary lands exactly on len() = {}",
+        bytes.len()
+    ))
+}
+
+/// How many temporal units a fixture carries — one per frame.
+fn expected_temporal_units(pcm: &[i32], spec: ElementSpec) -> Result<u64, String> {
+    let frames = u64::try_from(pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0))
+        .map_err(|e| format!("sample count does not fit u64: {e}"))?;
+    plan_frames(frames, spec.num_samples_per_frame)
+        .map(|plan| plan.frame_count)
+        .map_err(|e| format!("plan_frames: {e:?}"))
+}
+
+// ---------------------------------------------------------------------------
+// CONF-06 — `iamf-tools`' stricter parser, through `decoder_main`
+// ---------------------------------------------------------------------------
+
+/// Run `decoder_main` on `bytes` and assert on the observable Experiment 1
+/// recorded.
+///
+/// **`iamf-tools@v2.1.0` ships no `probe_main`.** Its `iamf/cli/BUILD` declares
+/// exactly two `cc_binary` targets, `decoder_main` and `encoder_main`, so CONF-06
+/// goes through `decoder_main`'s parse path — `ObuProcessor` /
+/// `DescriptorObuParser`, which *is* the strict parser. That is a route chosen
+/// because the alternative does not exist, and it should read as a deliberate
+/// decision rather than as a missing validator.
+///
+/// The signal is `Decoded <N> temporal units.` on stderr with N equal to the
+/// expected count, **plus an explicit grep for `Check failure stack trace`**
+/// because an absl abort produces no count line at all. Not the exit code:
+/// Experiment 1 recorded exit 0 from three of five corrupted inputs, one of them
+/// a file truncated mid-OBU that wrote an 80-byte WAV while decoding zero
+/// temporal units — which `test -s` also passes.
+///
+/// This is the only clause that can catch reserved-bit misuse or leb128
+/// strictness, because `libiamf` ignores both — though Experiment 1 showed
+/// `decoder_main` is blind to *that particular* reserved bit too, which is why
+/// CONF-07's byte diff exists as well.
+fn run_decoder_main(bytes: &[u8], dir: &Path, expected_units: u64) -> Result<String, String> {
+    let input = dir.join("conf06.iamf");
+    std::fs::write(&input, bytes).map_err(|e| format!("CONF-06: cannot write input: {e}"))?;
+    // A unique output filename per invocation (T-01-49): the scratch directory
+    // is already unique per call, so the name inside it is stable and safe.
+    let output = dir.join("conf06.decoder_main.wav");
+
+    let mount = format!("{}:/work", dir.display());
+    let args: Vec<String> = vec![
+        "run".to_owned(),
+        "--rm".to_owned(),
+        "-v".to_owned(),
+        mount,
+        "-w".to_owned(),
+        "/src".to_owned(),
+        iamf_tools_image(),
+        "bazel-bin/iamf/cli/decoder_main".to_owned(),
+        "--input_filename=/work/conf06.iamf".to_owned(),
+        "--output_filename=/work/conf06.decoder_main.wav".to_owned(),
+    ];
+    let run = run_tool("docker", &args, &output);
+    let streams = format!("{}\n{}", run.stdout, run.stderr);
+
+    if streams.contains("Check failure stack trace") {
+        return Err(format!(
+            "CONF-06 FAILED: decoder_main died on an absl CHECK abort, which produces no \
+             temporal-unit line at all.\ncommand: {}\nstderr: {}",
+            run.command, run.stderr
+        ));
+    }
+
+    let expected_line = format!("Decoded {expected_units} temporal units.");
+    if !streams.contains(&expected_line) {
+        let reported = streams
+            .lines()
+            .find(|line| line.contains("temporal units"))
+            .unwrap_or("<no temporal-unit line at all>");
+        return Err(format!(
+            "CONF-06 FAILED: expected {expected_line:?} on stderr; got {reported:?}. The exit \
+             code was {:?} and is NOT the signal — Experiment 1 recorded exit 0 from a file \
+             truncated mid-OBU that decoded ZERO temporal units and still wrote an 80-byte \
+             WAV.\ncommand: {}\nstderr: {}",
+            run.exit_code, run.command, run.stderr
+        ));
+    }
+    Ok(format!(
+        "decoder_main reported {expected_line:?} (exit {:?}, recorded but not the signal)",
+        run.exit_code
+    ))
+}
+
+// ===========================================================================
+// The gate clauses, as named tests
+// ===========================================================================
+
+/// **CONF-02, CONF-03, CONF-04, CONF-05, CONF-06 on the sample-identity
+/// fixture** — the file `libiamf`'s acceptance defines.
+#[test]
+fn the_sample_identity_fixture_is_conformant() {
+    let fixture = fixture::sample_identity();
+    match assert_conformant(&fixture.descriptors, fixture.single_pcm()) {
+        Ok(report) => report.print(fixture.name),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+/// **DESC-03 through the reference.** The endianness fixture — 16-bit
+/// big-endian, `sample_format_flags == 0` — round-trips sample-identically.
+///
+/// This clause is what waiver W-1 names as the weaker property asserted in place
+/// of a 24-bit big-endian round trip. It is not decorative: without it, DESC-03's
+/// endianness sense would rest on hand-computed byte vectors alone.
+#[test]
+fn the_endianness_fixture_is_conformant() {
+    let fixture = fixture::endianness();
+    match assert_conformant(&fixture.descriptors, fixture.single_pcm()) {
+        Ok(report) => report.print(fixture.name),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+/// **CONF-04 on the structure-only fixture.**
+///
+/// Its decoded PCM is a **mix** — `iamfdec` renders every element in the sub-mix
+/// into the target layout and sums them — so sample identity is not asserted
+/// here and never should be: predicting a mix requires rendering, which is out
+/// of scope. What is asserted is structure, which is exactly what Experiment 2's
+/// adopted fallback (b) moved onto this file.
+#[test]
+fn the_structure_only_fixture_shows_its_ordering() {
+    let fixture = fixture::structure_only();
+    let bytes = fixture.encode().expect("the structure fixture encodes");
+    let structure = assert_structure_is_observable(&bytes).expect("its structure is observable");
+    println!("[{}] CONF-04: {structure}", fixture.name);
+    assert!(
+        structure.contains("2 Audio Element(s)"),
+        "CONF-04 wants two Audio Elements so ordering is observable: {structure}"
+    );
+}
+
+/// **CONF-06 on the structure-only fixture**, separately: two Audio Elements is
+/// the shape Experiment 2 showed `decoder_main` accepts, and asserting it here
+/// is what keeps that finding from silently regressing.
+#[test]
+fn the_structure_only_fixture_passes_the_strict_parser() {
+    if !iamf_tools_available() {
+        skip_no_container("the_structure_only_fixture_passes_the_strict_parser");
+        return;
+    }
+    let fixture = fixture::structure_only();
+    let bytes = fixture.encode().expect("the structure fixture encodes");
+    let spec = fixture.spec().expect("its spec resolves");
+    let units = expected_temporal_units(fixture.single_pcm(), spec).expect("its unit count");
+    let dir = scratch_dir("structure-conf06");
+    match run_decoder_main(&bytes, &dir, units) {
+        Ok(observed) => println!("[{}] CONF-06: {observed}", fixture.name),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+/// **CONF-08.** Plan 01-07's whole-file reproduction of `test_000003.iamf` still
+/// holds, and `find_obu_boundaries` over that output lands its final boundary
+/// exactly on `bytes.len()`.
+///
+/// Asserted here as a **gate clause** rather than re-implemented: the
+/// reproduction itself lives in `tests/sequence.rs`, driven from the published
+/// textproto. This asserts the vendored file is present, unmodified and walks
+/// cleanly, so a clause that quietly stopped being exercised would be visible.
+/// No reference binary is needed.
+///
+/// **No waiver is available for CONF-08** — see `CONFORMANCE-GATE.md`: the
+/// configuration is published, so reproducing it is a mechanical translation
+/// rather than archaeology.
+#[test]
+fn conf_08_the_vendored_golden_still_walks_and_is_unmodified() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("reference")
+        .join("test_000003.iamf");
+    let bytes = std::fs::read(&path).expect("the vendored test_000003.iamf is present");
+    assert_eq!(
+        bytes.len(),
+        32_567,
+        "test_000003.iamf is 32567 bytes (0x7F37); a different length means the vendored file \
+         was replaced"
+    );
+    let boundaries = find_obu_boundaries(&bytes).expect("test_000003 walks");
+    assert_eq!(
+        boundaries.last().copied(),
+        Some(bytes.len()),
+        "the final OBU boundary must land exactly on bytes.len() (OBU-08)"
+    );
+    assert_eq!(
+        boundaries.len(),
+        68,
+        "67 OBU starts plus the final end offset; four descriptors and 63 Audio Frames"
+    );
+    // The descriptor prologue is 120 bytes, not the 118 PROJECT.md says. A
+    // harness written against 118 fails in a way that looks like an encoder bug.
+    assert_eq!(
+        boundaries.get(4).copied(),
+        Some(120),
+        "the first Audio Frame OBU begins at offset 120 (0x78)"
+    );
+}
+
+/// **CONF-09.** Every reference binary is discovered and invoked as a separate
+/// process, never linked and never built by a build script.
+///
+/// A source-level assertion, because this is a property of how the harness is
+/// *written*: a `build.rs` added later would not fail any behavioural test — it
+/// would make `cargo build` slower and drag CMake, abseil, protobuf and fdk-aac
+/// onto every consumer, including Parallax and docs.rs.
+#[test]
+fn conf_09_no_build_script_and_no_linked_reference() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        !root.join("build.rs").exists(),
+        "a build.rs appeared. Reference tools are invoked by Command and discovered through \
+         IAMF_REF_DECODER or a digest-pinned container image; a build script runs unconditionally \
+         and cannot be made conditional on 'the developer wants reference tests'."
+    );
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    assert!(
+        !manifest.contains("[build-dependencies]"),
+        "Cargo.toml grew a [build-dependencies] table"
+    );
+    for forbidden in ["bindgen", "cmake", "cc =", "pkg-config"] {
+        assert!(
+            !manifest.contains(forbidden),
+            "Cargo.toml names {forbidden:?}: the reference is a process, not a link-time \
+             dependency"
+        );
+    }
+}
+
+/// **CONF-10.** With no reference binary and no container, the harness still
+/// runs its offline clauses and reports the rest as skips.
+///
+/// Asserted by *calling the offline clauses directly*, so this stays meaningful
+/// on a machine where the reference happens to be present — a test that only
+/// checked "we are offline" would assert nothing on the developer machine where
+/// the tools exist.
+#[test]
+fn conf_10_the_offline_clauses_need_no_reference_at_all() {
+    for fixture in fixture::all() {
+        let spec = fixture.spec().expect("its spec resolves");
+        let bytes = fixture.encode().expect("it encodes");
+        assert_signal_is_distinguishable(fixture.single_pcm(), spec)
+            .unwrap_or_else(|e| panic!("{}: {e}", fixture.name));
+        assert_trim_is_forced(fixture.single_pcm(), spec)
+            .unwrap_or_else(|e| panic!("{}: {e}", fixture.name));
+        // Only the structure fixture is required to reach six OBUs; the others
+        // are asserted for the boundary walk, which is the part that holds for
+        // every file.
+        let boundaries = find_obu_boundaries(&bytes).expect("the OBU chain walks");
+        assert_eq!(boundaries.last().copied(), Some(bytes.len()));
+    }
+}
+
+// ===========================================================================
+// CONF-07 — the byte diff, as an EXECUTABLE ledger (D-12)
+// ===========================================================================
+//
+// `libiamf` is a permissive reader: Experiment A flipped a reserved bit and got
+// a byte-identical WAV back, and Experiment 1 showed `decoder_main` is blind to
+// that same bit. So CONF-05 and CONF-06 together still cannot see reserved-bit
+// misuse. The byte diff against `iamf-tools`' own encoder, given the same
+// configuration, is the clause that can — which is why "passing the libiamf gate
+// is necessary and nowhere near sufficient" is the first line of
+// CONFORMANCE-GATE.md.
+//
+// D-12 makes the writeup executable rather than prose: the diff is compared to a
+// committed table **exactly, in both directions**. A new difference fails. A
+// difference that has *disappeared* also fails, which is what stops success
+// criterion 3 passing on a stale document.
+
+/// One byte offset at which our output and `iamf-tools`' differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffRow {
+    offset: usize,
+    ours: u8,
+    theirs: u8,
+}
+
+/// One committed row of `DIFF-LEDGER.md`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LedgerRow {
+    offset: usize,
+    field: String,
+    ours: u8,
+    theirs: u8,
+    why: String,
+}
+
+/// Byte-by-byte differences between two files, in ascending offset order.
+///
+/// A length difference is reported as a row at the first offset past the shorter
+/// file, so "their file is longer" can never masquerade as "no differences".
+fn byte_diff(ours: &[u8], theirs: &[u8]) -> Vec<DiffRow> {
+    let mut rows: Vec<DiffRow> = ours
+        .iter()
+        .zip(theirs.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(offset, (a, b))| DiffRow {
+            offset,
+            ours: *a,
+            theirs: *b,
+        })
+        .collect();
+    let common = ours.len().min(theirs.len());
+    if ours.len() != theirs.len() {
+        rows.push(DiffRow {
+            offset: common,
+            ours: ours.get(common).copied().unwrap_or(0),
+            theirs: theirs.get(common).copied().unwrap_or(0),
+        });
+    }
+    rows.sort_by_key(|row| row.offset);
+    rows
+}
+
+/// Parse `DIFF-LEDGER.md`'s table.
+///
+/// The table is the enforcement, so the parser is strict: a row whose recorded
+/// `ours` and `theirs` are equal is a **ledger error** and fails, because a row
+/// that records no difference cannot be describing one.
+fn parse_ledger(text: &str) -> Result<Vec<LedgerRow>, String> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if cells.len() != 5 {
+            continue;
+        }
+        // Skip the header row and the separator row.
+        let Some(first) = cells.first() else { continue };
+        if first.eq_ignore_ascii_case("offset") || first.starts_with('-') || first.starts_with(':')
+        {
+            continue;
+        }
+        let offset = parse_offset(first)
+            .ok_or_else(|| format!("DIFF-LEDGER.md: {first:?} is not an offset"))?;
+        let ours = parse_byte(cells.get(2).copied().unwrap_or(""))
+            .ok_or_else(|| format!("DIFF-LEDGER.md: row {first} has an unreadable `ours`"))?;
+        let theirs = parse_byte(cells.get(3).copied().unwrap_or(""))
+            .ok_or_else(|| format!("DIFF-LEDGER.md: row {first} has an unreadable `theirs`"))?;
+        if ours == theirs {
+            return Err(format!(
+                "DIFF-LEDGER.md: the row at offset {offset} records ours == theirs == 0x{ours:02x}. \
+                 A row that records no difference is not describing one — this is a ledger error, \
+                 not a passing state."
+            ));
+        }
+        let why = cells.get(4).copied().unwrap_or("").to_owned();
+        if why.is_empty() {
+            return Err(format!(
+                "DIFF-LEDGER.md: the row at offset {offset} has an empty `why`. \"differs at \
+                 offset N\" is not an explanation and neither is a blank cell."
+            ));
+        }
+        rows.push(LedgerRow {
+            offset,
+            field: cells.get(1).copied().unwrap_or("").to_owned(),
+            ours,
+            theirs,
+            why,
+        });
+    }
+    rows.sort_by_key(|row| row.offset);
+    Ok(rows)
+}
+
+/// `0x1a`, `0X1A` or `26`.
+fn parse_offset(text: &str) -> Option<usize> {
+    let cleaned = text.trim().trim_matches('`').replace('_', "");
+    if let Some(hex) = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")) {
+        usize::from_str_radix(hex, 16).ok()
+    } else {
+        cleaned.parse().ok()
+    }
+}
+
+/// `0x1a`, `1a` or `26`.
+fn parse_byte(text: &str) -> Option<u8> {
+    let cleaned = text.trim().trim_matches('`').replace('_', "");
+    if let Some(hex) = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")) {
+        u8::from_str_radix(hex, 16).ok()
+    } else {
+        u8::from_str_radix(&cleaned, 16).ok().or_else(|| cleaned.parse().ok())
+    }
+}
+
+/// **D-12, both directions.** The computed diff set and the committed ledger set
+/// must be equal, keyed by offset in ascending order.
+///
+/// - A **new** difference fails: the encoder changed and nobody explained it.
+/// - A **vanished** difference fails too, which is the half that matters most:
+///   without it the ledger silently becomes a description of a file that no
+///   longer exists, and success criterion 3 passes on a stale document.
+/// - A row present in both but recording different bytes fails: the ledger is
+///   describing a difference other than the one that exists.
+///
+/// An **empty ledger is the passing state when the diff is empty** — and an
+/// empty diff against a non-empty ledger fails, which is what makes committing
+/// an empty table meaningfully different from committing no table.
+///
+/// Reordering `DIFF-LEDGER.md` changes nothing: both sides are compared as sets
+/// keyed by offset, sorted ascending.
+fn compare_to_ledger(diff: &[DiffRow], ledger: &[LedgerRow]) -> Result<(), String> {
+    let mut problems = Vec::new();
+
+    for row in diff {
+        match ledger.iter().find(|entry| entry.offset == row.offset) {
+            None => problems.push(format!(
+                "NEW difference at offset {} (0x{:x}): ours 0x{:02x}, theirs 0x{:02x} — not in \
+                 DIFF-LEDGER.md",
+                row.offset, row.offset, row.ours, row.theirs
+            )),
+            Some(entry) if entry.ours != row.ours || entry.theirs != row.theirs => {
+                problems.push(format!(
+                    "CHANGED difference at offset {} (0x{:x}): the ledger records ours \
+                     0x{:02x} / theirs 0x{:02x}, the diff shows ours 0x{:02x} / theirs 0x{:02x}",
+                    row.offset, row.offset, entry.ours, entry.theirs, row.ours, row.theirs
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+
+    for entry in ledger {
+        if !diff.iter().any(|row| row.offset == entry.offset) {
+            problems.push(format!(
+                "VANISHED difference at offset {} (0x{:x}): DIFF-LEDGER.md records it as \
+                 {:?} but the files now agree there. Update the ledger — a difference that \
+                 disappears must fail, or the document silently becomes a description of a file \
+                 that no longer exists.",
+                entry.offset, entry.offset, entry.field
+            ));
+        }
+    }
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "CONF-07 FAILED: the byte diff against iamf-tools' output does not match \
+         DIFF-LEDGER.md.\n  {}\n\nThe ledger is asserted by `cargo test`, not merely read \
+         (D-12). Explain each difference in the table — a field name and a reason such as a \
+         different but legal encoding choice. \"differs at offset N\" is not an explanation.",
+        problems.join("\n  ")
+    ))
+}
+
+/// The path to the committed ledger.
+fn ledger_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("DIFF-LEDGER.md")
+}
+
+// ---------------------------------------------------------------------------
+// Describing our configuration in `iamf-tools`' own dialect
+// ---------------------------------------------------------------------------
+
+/// The proto name of a profile, from its wire value.
+fn proto_profile(wire: u8) -> Result<&'static str, String> {
+    match wire {
+        0 => Ok("PROFILE_VERSION_SIMPLE"),
+        1 => Ok("PROFILE_VERSION_BASE"),
+        2 => Ok("PROFILE_VERSION_BASE_ENHANCED"),
+        other => Err(format!("no proto name for profile {other}")),
+    }
+}
+
+/// The proto name of a loudspeaker layout, and its channel labels in the
+/// decoder's documented output order.
+fn proto_layout(layout: LoudspeakerLayout) -> Result<(&'static str, &'static [&'static str]), String> {
+    match layout {
+        LoudspeakerLayout::Stereo => Ok((
+            "LOUDSPEAKER_LAYOUT_STEREO",
+            &["CHANNEL_LABEL_L_2", "CHANNEL_LABEL_R_2"],
+        )),
+        LoudspeakerLayout::Ch5_1 => Ok((
+            "LOUDSPEAKER_LAYOUT_5_1_CH",
+            &[
+                "CHANNEL_LABEL_L_5",
+                "CHANNEL_LABEL_R_5",
+                "CHANNEL_LABEL_CENTRE",
+                "CHANNEL_LABEL_LFE",
+                "CHANNEL_LABEL_LS_5",
+                "CHANNEL_LABEL_RS_5",
+            ],
+        )),
+        other => Err(format!("no proto layout modelled for {other:?}")),
+    }
+}
+
+/// The proto name of a sound system.
+fn proto_sound_system(system: SoundSystem) -> Result<&'static str, String> {
+    match system {
+        SoundSystem::A0_2_0 => Ok("SOUND_SYSTEM_A_0_2_0"),
+        SoundSystem::B0_5_0 => Ok("SOUND_SYSTEM_B_0_5_0"),
+        other => Err(format!("no proto name for {other:?}")),
+    }
+}
+
+/// Describe a one-element LPCM fixture in `iamf-tools`' `UserMetadata` dialect.
+///
+/// **Generated from the same `DescriptorSet` our encoder wrote, on purpose.** A
+/// committed textproto would be a second description of the configuration and
+/// the two would drift; then CONF-07 would be comparing two files built from
+/// different configurations and reporting the difference as an encoder defect.
+/// Generating it means the only thing that can differ is the *serialisation*,
+/// which is exactly what the clause is about.
+///
+/// `validate_user_loudness: true` makes the reference use the loudness numbers
+/// the fixture supplies rather than measuring its own, so a loudness difference
+/// in the diff would be a real encoding difference and not a measurement one.
+fn textproto_for(fixture: &Fixture, wav_filename: &str) -> Result<String, String> {
+    let descriptors = &fixture.descriptors;
+    let spec = fixture.spec()?;
+    let element = descriptors
+        .audio_elements
+        .first()
+        .ok_or_else(|| "the fixture has no Audio Element".to_owned())?;
+    let config = descriptors
+        .codec_configs
+        .first()
+        .ok_or_else(|| "the fixture has no Codec Config".to_owned())?;
+    let presentation = descriptors
+        .mix_presentations
+        .first()
+        .ok_or_else(|| "the fixture has no Mix Presentation".to_owned())?;
+    let sub_mix = presentation
+        .sub_mixes
+        .first()
+        .ok_or_else(|| "the fixture's Mix Presentation has no sub-mix".to_owned())?;
+    let sub_element = sub_mix
+        .elements
+        .first()
+        .ok_or_else(|| "the sub-mix has no element".to_owned())?;
+    let plan = iamf::packing::SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
+    let (proto_layout_name, labels) = proto_layout(spec.layout)?;
+    let trim = assert_trim_is_forced(fixture.single_pcm(), spec)?;
+
+    let endianness = if spec.big_endian {
+        "LPCM_BIG_ENDIAN"
+    } else {
+        "LPCM_LITTLE_ENDIAN"
+    };
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+
+    let mut out = String::new();
+    out.push_str(
+        "# GENERATED by tests/conformance.rs from the same DescriptorSet this crate encodes.\n\
+         # Do not commit a hand-written copy: two descriptions of one configuration drift, and\n\
+         # then CONF-07 compares two files built from different configurations and reports the\n\
+         # difference as an encoder defect.\n\
+         # proto-file: iamf/cli/proto/user_metadata.proto\n\
+         # proto-message: UserMetadata\n\n",
+    );
+    out.push_str(&format!(
+        "test_vector_metadata {{\n  \
+           human_readable_description: \"iamf-rs CONF-07 companion\"\n  \
+           file_name_prefix: \"{}\"\n  \
+           is_valid: true\n  \
+           is_valid_to_decode: true\n  \
+           validate_user_loudness: true\n  \
+           mp4_fixed_timestamp: \"2023-04-19 00:00:00\"\n  \
+           base_test: \"None\"\n\
+         }}\n\n",
+        fixture.name
+    ));
+    out.push_str(
+        "encoder_control_metadata {\n  add_build_information_tag: false\n  \
+         output_rendered_file_format: OUTPUT_FORMAT_WAV_BIT_DEPTH_AUTOMATIC\n}\n\n",
+    );
+    out.push_str(&format!(
+        "ia_sequence_header_metadata {{\n  primary_profile: {}\n  additional_profile: {}\n}}\n\n",
+        proto_profile(descriptors.sequence_header.primary_profile)?,
+        proto_profile(descriptors.sequence_header.additional_profile)?
+    ));
+    out.push_str(&format!(
+        "codec_config_metadata {{\n  codec_config_id: {}\n  codec_config {{\n    \
+           codec_id: CODEC_ID_LPCM\n    num_samples_per_frame: {}\n    audio_roll_distance: {}\n    \
+           decoder_config_lpcm {{\n      sample_format_flags: {endianness}\n      \
+           sample_size: {}\n      sample_rate: {}\n    }}\n  }}\n}}\n\n",
+        config.codec_config_id,
+        config.num_samples_per_frame,
+        config.audio_roll_distance,
+        spec.sample_size,
+        spec.sample_rate
+    ));
+
+    let substream_ids: Vec<String> = element
+        .audio_substream_ids
+        .iter()
+        .map(u32::to_string)
+        .collect();
+    out.push_str(&format!(
+        "audio_element_metadata {{\n  audio_element_id: {}\n  \
+           audio_element_type: AUDIO_ELEMENT_CHANNEL_BASED\n  reserved: 0\n  \
+           codec_config_id: {}\n  audio_substream_ids: [{}]\n  \
+           scalable_channel_layout_config {{\n    reserved: 0\n    \
+           channel_audio_layer_configs: [\n      {{\n        \
+             loudspeaker_layout: {proto_layout_name}\n        \
+             output_gain_is_present_flag: 0\n        recon_gain_is_present_flag: 0\n        \
+             reserved_a: 0\n        substream_count: {}\n        \
+             coupled_substream_count: {}\n      }}\n    ]\n  }}\n}}\n\n",
+        element.audio_element_id,
+        element.codec_config_id,
+        substream_ids.join(", "),
+        plan.substream_count(),
+        plan.coupled_substream_count()
+    ));
+
+    let mut layouts = String::new();
+    for layout in &sub_mix.layouts {
+        let Layout::SoundSystem(system) = layout.layout else {
+            return Err("only Sound System layouts are described here".to_owned());
+        };
+        layouts.push_str(&format!(
+            "    layouts {{\n      loudness_layout {{\n        \
+               layout_type: LAYOUT_TYPE_LOUDSPEAKERS_SS_CONVENTION\n        \
+               ss_layout {{\n          sound_system: {}\n          reserved: 0\n        }}\n      \
+               }}\n      loudness {{\n        info_type_bit_masks: []\n        \
+               integrated_loudness: {}\n        digital_peak: {}\n      }}\n    }}\n",
+            proto_sound_system(system)?,
+            layout.loudness.integrated,
+            layout.loudness.digital_peak
+        ));
+    }
+
+    let mix_gain = |gain: &MixGainParamDefinition| {
+        format!(
+            "param_definition {{\n          parameter_id: {}\n          parameter_rate: {}\n          \
+             param_definition_mode: 1\n          reserved: 0\n        }}\n        \
+             default_mix_gain: {}",
+            gain.definition.parameter_id, gain.definition.parameter_rate, gain.default_mix_gain
+        )
+    };
+
+    out.push_str(&format!(
+        "mix_presentation_metadata {{\n  mix_presentation_id: {}\n  \
+           annotations_language: [{}]\n  localized_presentation_annotations: [{}]\n  \
+           sub_mixes {{\n    audio_elements {{\n      audio_element_id: {}\n      \
+             localized_element_annotations: [{}]\n      rendering_config {{\n        \
+             headphones_rendering_mode: HEADPHONES_RENDERING_MODE_STEREO\n      }}\n      \
+             element_mix_gain {{\n        {}\n      }}\n    }}\n    \
+           output_mix_gain {{\n        {}\n    }}\n{layouts}  }}\n}}\n\n",
+        presentation.mix_presentation_id,
+        presentation
+            .annotations_language
+            .iter()
+            .map(|value| format!("\"{}\"", text(value)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        presentation
+            .localized_presentation_annotations
+            .iter()
+            .map(|value| format!("\"{}\"", text(value)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        sub_element.audio_element_id,
+        sub_element
+            .localized_element_annotations
+            .iter()
+            .map(|value| format!("\"{}\"", text(value)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        mix_gain(&sub_element.element_mix_gain),
+        mix_gain(&sub_mix.output_mix_gain)
+    ));
+
+    let channel_metadatas: Vec<String> = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| format!("    {{ channel_id: {index} channel_label: {label} }}"))
+        .collect();
+    out.push_str(&format!(
+        "audio_frame_metadata {{\n  wav_filename: \"{wav_filename}\"\n  \
+           samples_to_trim_at_end: {trim}\n  samples_to_trim_at_start: 0\n  \
+           audio_element_id: {}\n  channel_metadatas: [\n{}\n  ]\n}}\n\n",
+        element.audio_element_id,
+        channel_metadatas.join(",\n")
+    ));
+    out.push_str("temporal_delimiter_metadata {\n  enable_temporal_delimiters: false\n}\n");
+    Ok(out)
+}
+
+/// Produce the companion `.iamf` with `encoder_main`, from the same
+/// configuration and the same PCM.
+fn run_encoder_main(fixture: &Fixture, dir: &Path) -> Result<Vec<u8>, String> {
+    let spec = fixture.spec()?;
+    let wav_name = format!("{}.wav", fixture.name);
+    write_wav(&dir.join(&wav_name), fixture.single_pcm(), spec)?;
+    let textproto = textproto_for(fixture, &wav_name)?;
+    let proto_name = format!("{}.textproto", fixture.name);
+    std::fs::write(dir.join(&proto_name), &textproto)
+        .map_err(|e| format!("CONF-07: cannot write the textproto: {e}"))?;
+
+    let output = dir.join(format!("{}.iamf", fixture.name));
+    // T-01-48, made structural: the companion file must be produced by
+    // `encoder_main` and by nothing else. If it already exists, some caller has
+    // put our own output where theirs belongs and CONF-07 would compare a file
+    // with itself — a clause reporting perfect agreement while measuring
+    // nothing, which is worse than one that fails.
+    if output.exists() {
+        return Err(format!(
+            "CONF-07: {} already exists before encoder_main ran. The companion file must come              from the reference encoder and nowhere else.",
+            output.display()
+        ));
+    }
+    let mount = format!("{}:/work", dir.display());
+    let args: Vec<String> = vec![
+        "run".to_owned(),
+        "--rm".to_owned(),
+        "-v".to_owned(),
+        mount,
+        "-w".to_owned(),
+        "/src".to_owned(),
+        iamf_tools_image(),
+        "bazel-bin/iamf/cli/encoder_main".to_owned(),
+        format!("--user_metadata_filename=/work/{proto_name}"),
+        "--input_wav_directory=/work".to_owned(),
+        "--output_iamf_directory=/work".to_owned(),
+    ];
+    let run = run_tool("docker", &args, &output);
+
+    let bytes = std::fs::read(&output).map_err(|e| {
+        format!(
+            "CONF-07: encoder_main produced no {} ({e}). Its exit code was {:?} and is NOT the \
+             signal.\ncommand: {}\nstdout: {}\nstderr: {}",
+            output.display(),
+            run.exit_code,
+            run.command,
+            run.stdout,
+            run.stderr
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(format!(
+            "CONF-07: encoder_main produced an empty file.\ncommand: {}\nstderr: {}",
+            run.command, run.stderr
+        ));
+    }
+    // A second, independent sign that `encoder_main` itself ran: it also writes
+    // one rendered WAV per sub-mix layout. Checking for it means a stale or
+    // planted `.iamf` cannot pass as a fresh reference encode.
+    let rendered = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .contains("_rendered_id_")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if rendered == 0 {
+        return Err(format!(
+            "CONF-07: encoder_main wrote an .iamf but none of its per-layout rendered WAVs, so              it probably did not run at all.\ncommand: {}\nstderr: {}",
+            run.command, run.stderr
+        ));
+    }
+    Ok(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// CONF-07's tests
+// ---------------------------------------------------------------------------
+
+/// **CONF-07.** The byte diff against `iamf-tools`' own output, asserted against
+/// the committed ledger exactly and in both directions.
+#[test]
+fn conf_07_byte_diff_matches_the_committed_ledger() {
+    let ledger_text = std::fs::read_to_string(ledger_path())
+        .unwrap_or_else(|e| panic!("DIFF-LEDGER.md must exist and be readable: {e}"));
+    let ledger = parse_ledger(&ledger_text).unwrap_or_else(|e| panic!("{e}"));
+
+    if !iamf_tools_available() {
+        skip_no_container("conf_07_byte_diff_matches_the_committed_ledger");
+        println!(
+            "  (the committed ledger still parsed cleanly: {} row(s))",
+            ledger.len()
+        );
+        return;
+    }
+
+    let fixture = fixture::sample_identity();
+    let dir = scratch_dir("conf07");
+    let ours = fixture.encode().expect("our encoder produces the fixture");
+    let theirs = run_encoder_main(&fixture, &dir).unwrap_or_else(|e| panic!("{e}"));
+
+    let diff = byte_diff(&ours, &theirs);
+    println!(
+        "[{}] CONF-07: ours {} bytes, theirs {} bytes, {} differing offset(s), ledger {} row(s)",
+        fixture.name,
+        ours.len(),
+        theirs.len(),
+        diff.len(),
+        ledger.len()
+    );
+    for row in diff.iter().take(24) {
+        println!(
+            "  0x{:04x}  ours 0x{:02x}  theirs 0x{:02x}",
+            row.offset, row.ours, row.theirs
+        );
+    }
+    if diff.len() > 24 {
+        println!("  … and {} more", diff.len().saturating_sub(24));
+    }
+
+    compare_to_ledger(&diff, &ledger).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// **D-12, direction one.** A difference the ledger does not carry fails.
+///
+/// A unit test of the comparison, so it runs offline on all four targets: what
+/// makes the ledger executable is this function, and a container-gated proof of
+/// it would only be exercised on Linux.
+#[test]
+fn the_ledger_comparison_fails_on_a_new_difference() {
+    let ledger = vec![LedgerRow {
+        offset: 10,
+        field: "known".to_owned(),
+        ours: 0x01,
+        theirs: 0x02,
+        why: "a recorded, explained difference".to_owned(),
+    }];
+    let diff = vec![
+        DiffRow {
+            offset: 10,
+            ours: 0x01,
+            theirs: 0x02,
+        },
+        DiffRow {
+            offset: 99,
+            ours: 0xAA,
+            theirs: 0xBB,
+        },
+    ];
+    let verdict = compare_to_ledger(&diff, &ledger).expect_err("a new difference must fail");
+    assert!(verdict.contains("NEW difference at offset 99"), "{verdict}");
+}
+
+/// **D-12, direction two — the half that matters most.** A difference that has
+/// *disappeared* fails too, forcing the ledger to be updated.
+///
+/// Without it the document silently becomes a description of a file that no
+/// longer exists, and Phase 1's success criterion 3 passes on a stale writeup.
+#[test]
+fn the_ledger_comparison_fails_on_a_vanished_difference() {
+    let ledger = vec![
+        LedgerRow {
+            offset: 10,
+            field: "still there".to_owned(),
+            ours: 0x01,
+            theirs: 0x02,
+            why: "a recorded, explained difference".to_owned(),
+        },
+        LedgerRow {
+            offset: 20,
+            field: "gone".to_owned(),
+            ours: 0x03,
+            theirs: 0x04,
+            why: "explained when it existed".to_owned(),
+        },
+    ];
+    let diff = vec![DiffRow {
+        offset: 10,
+        ours: 0x01,
+        theirs: 0x02,
+    }];
+    let verdict = compare_to_ledger(&diff, &ledger).expect_err("a vanished difference must fail");
+    assert!(
+        verdict.contains("VANISHED difference at offset 20"),
+        "{verdict}"
+    );
+}
+
+/// An **empty** ledger is the passing state when the diff is empty — and an
+/// empty diff against a non-empty ledger is not.
+#[test]
+fn an_empty_ledger_passes_only_against_an_empty_diff() {
+    assert!(compare_to_ledger(&[], &[]).is_ok());
+    let ledger = vec![LedgerRow {
+        offset: 7,
+        field: "x".to_owned(),
+        ours: 1,
+        theirs: 2,
+        why: "y".to_owned(),
+    }];
+    assert!(
+        compare_to_ledger(&[], &ledger).is_err(),
+        "an empty diff against a non-empty ledger must fail — that is what makes committing an \
+         empty table meaningfully different from committing no table"
+    );
+}
+
+/// Reordering the ledger file changes nothing: both sides are compared as sets
+/// keyed by offset.
+#[test]
+fn the_ledger_comparison_is_order_insensitive() {
+    let rows = |mut order: Vec<usize>| -> Vec<LedgerRow> {
+        order.drain(..).map(|offset| LedgerRow {
+            offset,
+            field: format!("f{offset}"),
+            ours: 1,
+            theirs: 2,
+            why: "explained".to_owned(),
+        }).collect()
+    };
+    let diff = vec![
+        DiffRow { offset: 5, ours: 1, theirs: 2 },
+        DiffRow { offset: 9, ours: 1, theirs: 2 },
+    ];
+    assert!(compare_to_ledger(&diff, &rows(vec![5, 9])).is_ok());
+    assert!(compare_to_ledger(&diff, &rows(vec![9, 5])).is_ok());
+}
+
+/// A ledger row recording `ours == theirs` is a ledger error, not a passing
+/// state: it cannot be describing a difference.
+#[test]
+fn a_ledger_row_recording_no_difference_is_rejected() {
+    let text = "| offset | field | ours | theirs | why |\n\
+                |---|---|---|---|---|\n\
+                | 0x10 | some_field | 0x41 | 0x41 | claims to explain something |\n";
+    let verdict = parse_ledger(text).expect_err("ours == theirs must be rejected");
+    assert!(verdict.contains("records ours == theirs"), "{verdict}");
+}
+
+/// A ledger row with no explanation is rejected. "Mostly the same" is not a
+/// passing result and neither is a blank cell.
+#[test]
+fn a_ledger_row_without_an_explanation_is_rejected() {
+    let text = "| offset | field | ours | theirs | why |\n\
+                |---|---|---|---|---|\n\
+                | 0x10 | some_field | 0x41 | 0x42 |  |\n";
+    let verdict = parse_ledger(text).expect_err("an empty `why` must be rejected");
+    assert!(verdict.contains("empty `why`"), "{verdict}");
+}
+
+/// The committed ledger parses, and every row explains itself.
+#[test]
+fn the_committed_ledger_parses_and_every_row_explains_itself() {
+    let text = std::fs::read_to_string(ledger_path()).expect("DIFF-LEDGER.md exists");
+    assert!(
+        text.contains("exact")
+            && (text.contains("both directions") || text.contains("in both directions")),
+        "DIFF-LEDGER.md must state the exact-match-in-both-directions rule in its header"
+    );
+    let ledger = parse_ledger(&text).unwrap_or_else(|e| panic!("{e}"));
+    for row in &ledger {
+        assert!(
+            row.why.len() > 20,
+            "the ledger row at offset {} explains itself with {:?}, which is not an explanation",
+            row.offset,
+            row.why
+        );
+        assert!(
+            !row.field.is_empty(),
+            "the ledger row at offset {} names no field",
+            row.offset
+        );
+    }
+}
+
+/// A length difference is reported as a row rather than swallowed, so "their
+/// file is longer" can never look like "no differences".
+#[test]
+fn byte_diff_reports_a_length_difference() {
+    assert!(byte_diff(&[1, 2, 3], &[1, 2, 3]).is_empty());
+    let longer = byte_diff(&[1, 2, 3], &[1, 2, 3, 4]);
+    assert_eq!(longer.len(), 1);
+    assert_eq!(longer.first().map(|row| row.offset), Some(3));
+    let shorter = byte_diff(&[1, 2, 3, 4], &[1, 2, 3]);
+    assert_eq!(shorter.len(), 1);
+    assert_eq!(shorter.first().map(|row| row.offset), Some(3));
 }

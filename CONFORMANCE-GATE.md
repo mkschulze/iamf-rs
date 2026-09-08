@@ -468,14 +468,14 @@ capped at half full scale (−6 dBFS), and decodes it twice.
 |---|---|---:|---:|---:|
 | `probe_24bit_little_endian_round_trips_exactly` | 24-bit LE | 300 of 300 | **0 of 600** | 0 |
 | `probe_16bit_big_endian_round_trips_exactly` | 16-bit BE | 300 of 300 | **0 of 600** | 0 |
-| `probe_24bit_big_endian_hits_the_upstream_reads24be_defect` | 24-bit BE | 300 of 300 | **595 of 600** | 600 |
+| `probe_24bit_big_endian_hits_the_upstream_reads24be_defect` | 24-bit BE | 300 of 300 | **597 of 600** | 600 |
 
 Verbatim, from `cargo test --test conformance -- --nocapture --test-threads=1` with
 `IAMF_REF_DECODER` pointing at the pinned `iamfdec`:
 
 ```
 A1 RESULT (16-bit BE): 300 frames in, 300 out, 0 of 600 samples differ, limiter delta 0
-A1 RESULT (24-bit BE): 300 frames in, 300 out, 595 of 600 samples differ, limiter delta 600
+A1 RESULT (24-bit BE): 300 frames in, 300 out, 597 of 600 samples differ, limiter delta 600
 probe24be limiter delta 600 (expected non-zero: the misread values exceed -1 dBTP)
 A1 RESULT (24-bit LE): 300 frames in, 300 out, 0 of 600 samples differ, limiter delta 0
 ```
@@ -503,9 +503,13 @@ The exact command each probe runs, as printed:
    That proves our encoder wrote correct big-endian bytes and the reference misread
    them, which is the opposite conclusion from "our 24-bit big-endian writer is
    broken", and it is the conclusion a bare "the PCM differs" would not have
-   supported. Only 595 of 600 *differ* because a sample whose top two bytes are equal
+   supported. Only 597 of 600 *differ* because a sample whose top two bytes are equal
    is invariant under a transposition — which is also why a quiet or slowly-varying
-   fixture would have hidden this entirely.
+   fixture would have hidden this entirely. (An earlier run of this same probe read
+   595 rather than 597: the signal generator's step was widened after
+   `the_ramp_spans_its_range` found the original step too small to cross zero in 300
+   frames, so more samples now have differing top bytes. The count is re-measured, not
+   re-narrated.)
 4. **The limiter delta of 600 is a consequence, not a fixture defect.** The input
    peaks at −6 dBFS; the *misread* values do not, so the limiter engages on samples
    that are already wrong. `assert_limiter_is_transparent` is therefore asserted by
@@ -536,6 +540,62 @@ transposition. The defect probe asserts that the misread is *complete and exactl
 explained*; it never applies the transposition to make a comparison pass.
 
 
+## Phase 1 exit
+
+The phase exits through this table, not through "`libiamf` returned OK". Every
+verdict below was produced by `cargo test --test conformance -- --nocapture` on
+macOS x86_64 on 2026-09-08, with `IAMF_REF_DECODER` pointing at the pinned
+`iamfdec` and the digest-pinned `iamf-tools:v2.1.0` image available locally. The
+per-clause lines the harness prints are the same strings quoted here.
+
+| clause | what it asserts | verdict | evidence |
+|---|---|---|---|
+| **clause 0** (D-13) | the reference on disk is the one `REFERENCES.md` pins, asserted **before** any other clause | **PASS** | `clause 0 (D-13 manifest): reference pin confirmed`, both SHAs matched |
+| **CONF-02** | the signal is non-silent and every channel differs from every other at every index | **PASS** | `6 channels, each distinguishable at every index, peak <= -6 dBFS` |
+| **CONF-03** | the length forces `0 < trim_at_end < num_samples_per_frame` with `trim_at_start = 0`, computed in checked integers | **PASS** | `trim_at_end = 84, trim_at_start = 0, and the two differ` |
+| **CONF-04** | structure observable in our own output: OBU count, descriptor write order, boundary walk landing on `len()` | **PASS** | sample-identity: `16 OBUs … final boundary lands exactly on len() = 7073`; structure-only: `11 OBUs, 1 Codec Config(s), 2 Audio Element(s)` |
+| **CONF-05** | `libiamf` decodes it, the sample count matches, the PCM is **identical** | **PASS** | `300 sample frames, 0 of 1800 samples differ, limiter delta 0` — the 5.1 fixture, so BCG packing is proven correct as well |
+| **CONF-06** | `iamf-tools`' stricter parser accepts it | **PASS** | `decoder_main reported "Decoded 3 temporal units."` on all three fixtures |
+| **CONF-07** | the byte diff against `encoder_main` output equals `DIFF-LEDGER.md` exactly, both directions | **PASS, and the diff is EMPTY** | `ours 7073 bytes, theirs 7073 bytes, 0 differing offset(s), ledger 0 row(s)` |
+| **CONF-08** | plan 01-07's whole-file reproduction of `test_000003.iamf` still holds | **PASS** | 32567 bytes, 68 boundaries, first Audio Frame at 120; the reproduction itself is `tests/sequence.rs` |
+| **CONF-09** | reference tools invoked by `Command`, discovered by env var or pinned image, never by a build script | **PASS** | asserted at source level: no `build.rs`, no `[build-dependencies]`, no `bindgen`/`cmake`/`cc`/`pkg-config` |
+| **CONF-10** | green offline with no reference binary and no container | **PASS** | `env -u IAMF_REF_DECODER cargo test --locked` green; every reference-gated clause prints a skip reason |
+
+### The result CONF-07 actually produced
+
+**Our output is byte-identical to `iamf-tools@v2.1.0`'s `encoder_main` output**
+for the same configuration and the same PCM — 7073 bytes each, zero differing
+offsets, SHA-256 `3e53f10babd78b721d524c0e41fbb0806a5ad37d2f5b4dd247a4336e0be1282c`.
+
+That is the real exit criterion PROJECT.md names — "either identical or fully
+explained in writing" — met by identity rather than by explanation, and it is a
+materially stronger result than passing `libiamf`, which Experiment A showed
+accepts a file with a flipped reserved bit without a murmur.
+
+It was checked for the obvious false pass. `run_encoder_main` refuses to run if
+the companion path already exists, and requires `encoder_main`'s per-layout
+rendered WAVs to be present afterwards, so a stale or planted `.iamf` cannot pass
+as a fresh reference encode. The scratch directory holds
+`phase1_sample_identity_rendered_id_42_sub_mix_0_layout_0.wav` and `…layout_1.wav`
+— two layouts, which is the 5.1 fixture's Sound System B and its mandatory
+Sound System A.
+
+### Waivers in force at exit
+
+**One: W-1**, below — CONF-05 for the 24-bit **big-endian** sample format
+specifically, because `libiamf@v1.1.0`'s `reads24be` misreads it. CONF-05 itself
+is not waived; it passes on the 24-bit little-endian sample-identity fixture and
+again on the 16-bit big-endian endianness fixture. The waiver names all five
+D-17 fields and its restoration condition is **executable**: the day the round
+trip becomes exact, `probe_24bit_big_endian_hits_the_upstream_reads24be_defect`
+fails and points back at the entry.
+
+**No other clause carries a waiver.** Note in particular that CONF-08's
+pre-authorised waiver was retired by research — the configuration is published —
+and that DEC-04's settlement of the `iamf-tools` pin removed most of the
+CONF-06/07 risk, both of which are now demonstrated rather than merely expected.
+
+
 ## Waivers
 
 ### W-1 — CONF-05 for the 24-bit **big-endian** sample format (opened 2026-09-08, plan 01-08)
@@ -551,14 +611,15 @@ explained*; it never applies the transposition to make a comparison pass.
    the real `SequenceWriter` with a −6 dBFS per-channel ramp and 300 sample frames,
    decoded by the pinned `iamfdec` with `-r 48000 -s0 -d 24 -disable_limiter`. The
    decode succeeded: 300 of 300 sample frames, correct channel count, structurally
-   sound. 595 of 600 samples came back wrong. See Experiment 3 for the full run.
+   sound. 597 of 600 samples came back wrong. See Experiment 3 for the full run.
 
 3. **Why it cannot be met.** `libiamf@v1.1.0`'s `reads24be`
    (`code/src/iamf_dec/bitstream.c:206-210`) calls `readu16le` where `readu16be` was
    meant, transposing the top two bytes of every 24-bit big-endian sample. This is a
    defect in the pinned reference, not in this crate: every one of the 600 decoded
-   samples equals what that code computes from the bytes we wrote, which is asserted
-   by `probe_24bit_big_endian_hits_the_upstream_reads24be_defect`. No conformant
+   samples equals what that code computes from the bytes we wrote — all 600, not just
+   the 597 that differ — which is asserted by
+   `probe_24bit_big_endian_hits_the_upstream_reads24be_defect`. No conformant
    encoder can produce a 24-bit big-endian file that this decoder reads correctly, so
    the clause is unevaluable rather than failing.
 

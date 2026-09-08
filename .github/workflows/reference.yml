@@ -107,6 +107,27 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The seven-clause gate itself, now that BOTH oracles are available.
+      #
+      # The `cargo test` step above ran before the image was built, so every
+      # container-gated clause in tests/conformance.rs printed a skip there —
+      # correctly, that is CONF-10 working. This step is where CONF-06 and
+      # CONF-07 actually execute:
+      #
+      #   * CONF-06 runs decoder_main over each fixture and asserts on the
+      #     observable Experiment 1 recorded, `Decoded <N> temporal units.`,
+      #     plus an explicit grep for `Check failure stack trace` because an
+      #     absl abort emits no count line at all.
+      #   * CONF-07 has encoder_main produce a companion .iamf from the same
+      #     configuration and asserts the byte diff against DIFF-LEDGER.md
+      #     exactly, in both directions — a new difference fails AND a vanished
+      #     one fails.
+      #
+      # `--nocapture` so the per-clause verdicts land in the log; those lines are
+      # what a reader checks the CONFORMANCE-GATE.md exit table against.
+      - name: The seven-clause gate, both oracles available (CONF-01..CONF-10)
+        run: cargo test --locked --test conformance -- --nocapture --test-threads=1
+
       # CONF-06 goes through decoder_main because iamf-tools@v2.1.0 ships no
       # probe_main — iamf/cli/BUILD declares exactly two cc_binary targets
       # (research correction 8). CONFORMANCE-GATE.md records the observable this
@@ -127,7 +148,7 @@ jobs:
       # Do not substitute "non-zero exit" here. Of five deliberately corrupted
       # inputs, three returned 0 — a reference tool failing while returning 0 is a
       # measured behaviour in this project, not a worry.
-      - name: CONF-06 — iamf-tools' parser accepts a vendored reference file
+      - name: CONF-06 (independent shell check) — the parser accepts a vendored reference file
         env:
           EXPECTED_TEMPORAL_UNITS: '63'
         run: |
