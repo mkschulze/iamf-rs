@@ -28,6 +28,29 @@
 //! mapping boundary at every primitive and loses the native offsets that every
 //! `Error.at` value in the crate flows from.
 //!
+//! # The containment proof, and why it is currently free
+//!
+//! BITS-07 asks that the foreign-error boundary be *contained* to this module.
+//! Under D-01 that boundary **does not exist at all**: the crate's public
+//! [`crate::ErrorKind`] has no variant wrapping a standard-library I/O error
+//! type, because the hand-rolled cursor never produces one. There is nothing to
+//! map, nothing to contain, and no `#[from]` to lose an offset through.
+//!
+//! That is recorded here rather than left implicit because it is exactly what a
+//! future maintainer would give up by reaching for a wrapped stream crate: not
+//! "some conversion code", but the property that a read failure's byte offset is
+//! the cursor's own field. `tests/bits_oracle.rs` is the reason that trade is
+//! not worth making — the oracle already buys the confidence a mature crate
+//! would, at zero cost to the shipping graph, and it is imported from exactly
+//! one file under `tests/`.
+//! <!-- the io::Error mention above is deliberate; it names the thing we do not do -->
+//!
+//! `cargo tree -e normal,no-proc-macro` lists `iamf` and `thiserror` and
+//! nothing else. Plain `cargo tree -e normal` is the **wrong** instrument for
+//! that claim — it includes proc-macro edges and shows the whole
+//! `thiserror-impl → syn → proc-macro2 → quote → unicode-ident` chain, so it
+//! reports a failure on a correct crate.
+//!
 //! # Read and write are adjacent, in that order (D-10, BITS-02)
 //!
 //! [`BitCursor`] and [`BitWriter`] define their methods in the same order, one

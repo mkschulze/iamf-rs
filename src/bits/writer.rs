@@ -167,6 +167,10 @@ impl BitWriter {
         u64::try_from(self.out.len()).unwrap_or(u64::MAX)
     }
 
+    // ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.cc WriteBitBuffer::WriteUnsignedLiteralInternal
+    // NOTE: the reference inlines the per-bit step inside its literal writer;
+    // this crate factors it out. The citation points at the function that
+    // CONTAINS the logic, not at a same-named one.
     /// Place one bit, MSB-first within the byte under construction.
     ///
     /// Private, and the single place a bit reaches the output — the mirror of

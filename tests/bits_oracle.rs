@@ -26,13 +26,13 @@ use proptest::prelude::*;
 /// Our writer padded to a byte boundary with zero bits, which is what the
 /// oracle's `byte_align()` does, so the two buffers are comparable including
 /// their final partial byte.
-fn ours_padded(write: impl FnOnce(&mut BitWriter)) -> Vec<u8> {
+fn ours_padded(write: impl FnOnce(&mut BitWriter) -> iamf::Result<()>) -> iamf::Result<Vec<u8>> {
     let mut w = BitWriter::new();
-    write(&mut w);
+    write(&mut w)?;
     while !w.is_byte_aligned() {
-        w.write_bool(false).expect("padding a partial byte");
+        w.write_bool(false)?;
     }
-    w.finish().expect("padded to a byte boundary")
+    w.finish()
 }
 
 /// `value` reduced to the low `bits` bits, so a generated `u64` is always a
@@ -50,7 +50,7 @@ fn mask_to_width(value: u64, bits: u32) -> u64 {
 fn signed_case() -> impl Strategy<Value = (u32, i64)> {
     (2_u32..=16).prop_flat_map(|bits| {
         let half = 1_i64.checked_shl(bits.saturating_sub(1)).unwrap_or(1);
-        (Just(bits), -half..half)
+        (Just(bits), half.saturating_neg()..half)
     })
 }
 
@@ -73,9 +73,7 @@ proptest! {
     fn unsigned_writes_match_the_oracle_byte_for_byte(bits in 1_u32..=64, raw in any::<u64>()) {
         let value = mask_to_width(raw, bits);
 
-        let ours = ours_padded(|w| {
-            w.write_unsigned(value, bits).expect("value fits the width");
-        });
+        let ours = ours_padded(|w| w.write_unsigned(value, bits)).expect("value fits the width");
 
         let mut oracle = OracleWriter::endian(Vec::new(), BigEndian);
         oracle.write_var(bits, value).expect("oracle write");
@@ -110,9 +108,7 @@ proptest! {
     /// one that rules out every byte-oriented approach.
     #[test]
     fn signed_widths_round_trip_and_match_the_oracle((bits, value) in signed_case()) {
-        let ours = ours_padded(|w| {
-            w.write_signed(value, bits).expect("value fits the width");
-        });
+        let ours = ours_padded(|w| w.write_signed(value, bits)).expect("value fits the width");
 
         let mut oracle = OracleWriter::endian(Vec::new(), BigEndian);
         oracle.write_signed_var(bits, value).expect("oracle write");
@@ -131,9 +127,7 @@ proptest! {
     /// table the encoder itself uses.
     #[test]
     fn uleb128_round_trips_at_the_minimal_length(value in any::<u32>()) {
-        let bytes = ours_padded(|w| {
-            w.write_uleb128_minimal(value).expect("every u32 encodes");
-        });
+        let bytes = ours_padded(|w| w.write_uleb128_minimal(value)).expect("every u32 encodes");
 
         prop_assert_eq!(bytes.len(), expected_minimal_len(value));
         prop_assert_eq!(
@@ -162,9 +156,7 @@ fn uleb128_group_boundaries_round_trip() {
     ];
 
     for value in cases {
-        let bytes = ours_padded(|w| {
-            w.write_uleb128_minimal(value).expect("encodes");
-        });
+        let bytes = ours_padded(|w| w.write_uleb128_minimal(value)).expect("encodes");
         assert_eq!(
             bytes.len(),
             expected_minimal_len(value),

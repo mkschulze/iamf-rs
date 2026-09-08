@@ -12,11 +12,15 @@
 //! Roughly thirty lines, no dependency, runs offline on all four targets, and
 //! it polices every later plan in this phase and every later phase.
 //!
-//! The citation is looked for on the first preceding line that is not blank,
-//! not an attribute and not a doc comment — so the house layout is:
+//! The citation is looked for in the plain-comment block immediately above the
+//! function, skipping blank lines, attributes and doc comments and stopping at
+//! the first line of code — so a citation on the previous function is never
+//! credited to this one. The house layout is:
 //!
 //! ```text
 //! // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h Class::Method
+//! // NOTE: optional rider, e.g. that the reference's own comment is wrong
+//! //       here and the code is authoritative. May wrap over several lines.
 //! /// What this function does.
 //! #[must_use]
 //! pub fn read_something(..)
@@ -106,8 +110,20 @@ fn function_name_needing_a_citation(line: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// Whether the first preceding line that is neither blank, nor an attribute,
-/// nor a doc comment is a `// ref:` line.
+/// Whether the plain-comment block immediately above the function contains a
+/// `// ref:` line.
+///
+/// Scans backwards over blank lines, attributes and doc comments, then over the
+/// consecutive `//` lines that form the citation block, and stops at the first
+/// line of actual code — so a citation belonging to the *previous* function is
+/// never credited to this one.
+///
+/// The block may hold more than the citation itself. The convention puts a
+/// `// NOTE:` rider *after* the `// ref:` line, wrapped over as many lines as
+/// it needs, for the case where a reference comment misleads: `libiamf`'s LPCM
+/// endianness comment says `0x01 - big endian` while the line below it does
+/// `param->big_endian = !ior_8(r)`. The note is part of the citation, not a
+/// replacement for it, which is why the whole block is searched.
 fn has_citation_above(lines: &[&str], index: usize) -> bool {
     let mut cursor = index;
     while cursor > 0 {
@@ -118,7 +134,14 @@ fn has_citation_above(lines: &[&str], index: usize) -> bool {
         if candidate.is_empty() || candidate.starts_with('#') || candidate.starts_with("///") {
             continue;
         }
-        return candidate.starts_with("// ref:");
+        if candidate.starts_with("// ref:") {
+            return true;
+        }
+        if candidate.starts_with("//") {
+            continue;
+        }
+        // Code. The comment block above this function is exhausted.
+        return false;
     }
     false
 }
@@ -158,6 +181,8 @@ fn in_test_module(lines: &[&str], index: usize) -> bool {
 fn the_walker_reports_a_missing_citation_by_name() {
     let sample = vec![
         "// ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h R::ReadX",
+        "// NOTE: the reference's comment here is inverted; the code below the",
+        "// comment is authoritative. This rider wraps over two lines.",
         "/// Cited.",
         "pub fn read_cited(&mut self) -> Result<u8> {",
         "}",
@@ -166,19 +191,23 @@ fn the_walker_reports_a_missing_citation_by_name() {
         "pub fn write_uncited(&mut self) -> Result<()> {",
         "}",
     ];
+    let line = |n: usize| sample.get(n).copied().unwrap_or_default();
 
     assert_eq!(
-        function_name_needing_a_citation(sample[2]).as_deref(),
+        function_name_needing_a_citation(line(4)).as_deref(),
         Some("read_cited")
     );
-    assert!(has_citation_above(&sample, 2), "the cited one passes");
+    assert!(
+        has_citation_above(&sample, 4),
+        "a citation followed by a NOTE rider still counts"
+    );
 
     assert_eq!(
-        function_name_needing_a_citation(sample[6]).as_deref(),
+        function_name_needing_a_citation(line(8)).as_deref(),
         Some("write_uncited")
     );
     assert!(
-        !has_citation_above(&sample, 6),
+        !has_citation_above(&sample, 8),
         "the uncited one is caught, and it is named in the failure"
     );
 }

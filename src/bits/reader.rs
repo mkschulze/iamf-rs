@@ -226,6 +226,11 @@ impl<'a> BitCursor<'a> {
         Ok(BitCursor::new(span))
     }
 
+    // ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.cc ReadBitBuffer::ReadUnsignedLiteralInternal
+    // NOTE: the reference inlines the per-bit step inside its literal reader;
+    // this crate factors it out. The citation therefore points at the function
+    // that CONTAINS the logic, not at a same-named one, so a reviewer diffing
+    // the two knows where to look.
     /// Consume one bit, MSB-first within the current byte.
     ///
     /// Private, and the single place a bit is taken from the input: every
