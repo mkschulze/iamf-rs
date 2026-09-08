@@ -18,19 +18,29 @@ use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
-use iamf::model::{DescriptorSet, by_id, write_descriptors};
+use iamf::model::by_id;
 use iamf::obu::{
     AnchorElement, AnchoredLoudness, AudioElement, AudioElementType, ChannelAudioLayerConfig,
     CodecConfig, DecoderConfig, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness,
-    LoudnessExtension, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, Obu, ObuHeader,
-    ObuType, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix,
-    SubMixAudioElement, read_audio_element, read_codec_config, read_ia_sequence_header,
+    LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader, ObuType, SampleFormatFlags,
+    ScalableChannelLayoutConfig, read_audio_element, read_codec_config, read_ia_sequence_header,
     read_mix_presentation, read_obu_with, write_audio_element, write_codec_config,
     write_ia_sequence_header, write_mix_presentation, write_obu_with,
 };
 
-/// The vendored reference file the whole suite is measured against.
-const TEST_000003: &[u8] = include_bytes!("fixtures/reference/test_000003.iamf");
+/// The published `test_000003` configuration, shared with `tests/sequence.rs`.
+///
+/// One transcription of the textproto, used by both the 120-byte prologue proof
+/// here and the whole-file proof there — a second copy is a second thing to
+/// keep in step with the reference.
+#[path = "support/test_000003.rs"]
+mod support;
+
+use support::{
+    TEST_000003, descriptor_bytes, published_audio_element, published_codec_config,
+    published_descriptor_set, published_mix_gain, published_mix_presentation,
+    published_sequence_header,
+};
 
 /// Serialise one whole OBU (header + payload) and hand back its bytes.
 ///
@@ -46,32 +56,6 @@ fn obu_bytes<T>(
     let written = write_obu_with(&mut w, obu, write_payload);
     assert!(written.is_ok(), "the vector serialises: {written:?}");
     w.finish().unwrap_or_default()
-}
-
-/// The `test_000003` IA Sequence Header, as its textproto publishes it:
-/// `primary_profile: PROFILE_VERSION_SIMPLE`, `additional_profile:
-/// PROFILE_VERSION_SIMPLE`.
-fn published_sequence_header() -> Obu<IaSequenceHeader> {
-    Obu::new(
-        ObuHeader::new(ObuType::IaSequenceHeader),
-        IaSequenceHeader::new(0, 0),
-    )
-}
-
-/// The `test_000003` Codec Config, as its textproto publishes it.
-fn published_codec_config() -> Obu<CodecConfig> {
-    Obu::new(
-        ObuHeader::new(ObuType::CodecConfig),
-        CodecConfig::lpcm(
-            200,
-            128,
-            LpcmDecoderConfig {
-                sample_format_flags: SampleFormatFlags::LittleEndian,
-                sample_size: 16,
-                sample_rate: 16000,
-            },
-        ),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -332,24 +316,6 @@ fn the_first_26_bytes_of_test_000003_are_reproduced_from_its_published_configura
 // Audio Element — offsets 0x1A..0x28
 // ---------------------------------------------------------------------------
 
-/// The `test_000003` Audio Element, as its textproto publishes it: channel
-/// based, one substream (id 0), one stereo layer, both gate flags clear.
-fn published_audio_element() -> Obu<AudioElement> {
-    Obu::new(
-        ObuHeader::new(ObuType::AudioElement),
-        AudioElement::channel_based(
-            300,
-            200,
-            vec![0],
-            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
-                LoudspeakerLayout::Stereo,
-                1,
-                1,
-            )),
-        ),
-    )
-}
-
 /// An Audio Element OBU whose `audio_element_type` is `value`, with four bytes
 /// of payload after the common fields that this crate cannot interpret.
 fn reserved_element_obu(value: u8) -> Vec<u8> {
@@ -562,58 +528,6 @@ fn a_substream_count_past_the_end_of_the_input_is_refused_without_allocating() {
 // ---------------------------------------------------------------------------
 // Mix Presentation — offsets 0x28..0x78
 // ---------------------------------------------------------------------------
-
-/// A mode-1 Mix Gain definition with `parameter_id` 100 at 16 kHz, exactly as
-/// `test_000003` publishes both of its mandatory definitions.
-fn published_mix_gain() -> MixGainParamDefinition {
-    MixGainParamDefinition::mode_1(100, 16000)
-}
-
-/// The `test_000003` Mix Presentation, as its textproto publishes it.
-fn published_mix_presentation() -> Obu<MixPresentation> {
-    Obu::new(
-        ObuHeader::new(ObuType::MixPresentation),
-        MixPresentation {
-            mix_presentation_id: 42,
-            annotations_language: vec![b"en-us".to_vec()],
-            localized_presentation_annotations: vec![b"test_mix_pres".to_vec()],
-            sub_mixes: vec![SubMix {
-                elements: vec![SubMixAudioElement {
-                    audio_element_id: 300,
-                    localized_element_annotations: vec![
-                        b"test_sub_mix_0_audio_element_0".to_vec(),
-                    ],
-                    rendering_config: RenderingConfig::stereo(),
-                    element_mix_gain: published_mix_gain(),
-                }],
-                output_mix_gain: published_mix_gain(),
-                layouts: vec![LayoutWithLoudness {
-                    layout: Layout::SoundSystem(SoundSystem::A0_2_0),
-                    loudness: Loudness::new(-13733, -12879),
-                }],
-            }],
-            trailing: Vec::new(),
-        },
-    )
-}
-
-/// The whole `test_000003` descriptor prologue as a model.
-fn published_descriptor_set() -> DescriptorSet {
-    DescriptorSet {
-        sequence_header: published_sequence_header().payload,
-        codec_configs: vec![published_codec_config().payload],
-        audio_elements: vec![published_audio_element().payload],
-        mix_presentations: vec![published_mix_presentation().payload],
-    }
-}
-
-/// Serialise a whole descriptor set.
-fn descriptor_bytes(set: &DescriptorSet) -> Vec<u8> {
-    let mut w = BitWriter::new();
-    let written = write_descriptors(&mut w, set);
-    assert!(written.is_ok(), "the descriptor set serialises: {written:?}");
-    w.finish().unwrap_or_default()
-}
 
 #[test]
 fn mix_presentation_reproduces_offsets_0x28_through_0x77() {

@@ -52,5 +52,6 @@ pub mod error;
 pub mod model;
 pub mod obu;
 pub mod packing;
+pub mod sequence;
 
 pub use crate::error::{Error, ErrorKind, Finding, Location, Result};

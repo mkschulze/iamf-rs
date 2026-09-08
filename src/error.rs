@@ -109,6 +109,18 @@ pub enum ErrorKind {
     SubblockDurationMismatch,
     #[error("channel count exceeds what the profile permits")]
     ChannelCountExceedsProfile,
+    #[error("audio element count exceeds what the profile permits")]
+    ElementCountExceedsProfile,
+    #[error("a temporal unit was pushed before the descriptors were written")]
+    DescriptorsNotWritten,
+    #[error("the descriptors have already been written to this sequence")]
+    DescriptorsAlreadyWritten,
+    #[error("the sequence has been finished and accepts no further OBUs")]
+    SequenceFinished,
+    #[error("no parameter definition in the descriptors governs this parameter_id")]
+    NoGoverningParamDefinition,
+    #[error("the output sink refused a write")]
+    SinkWrite,
 }
 
 /// An error, with the position it happened at attached exactly once.

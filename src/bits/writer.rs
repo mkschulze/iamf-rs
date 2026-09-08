@@ -193,6 +193,40 @@ impl BitWriter {
         }
     }
 
+    /// Reset to empty **keeping the allocated capacity**, so one writer can be
+    /// reused as a scratch buffer across many OBUs.
+    ///
+    /// This exists for [`crate::sequence::SequenceWriter`] (SEQ-02): an hour of
+    /// 7.1.4 24-bit audio is on the order of a hundred thousand temporal units,
+    /// and a fresh `BitWriter` per OBU is the difference between a flat
+    /// allocation profile and one that churns once per frame. Nothing about the
+    /// bit state survives — a pending partial byte is discarded, not carried.
+    pub fn clear(&mut self) {
+        self.out.clear();
+        self.partial = 0;
+        self.bit_off = 0;
+    }
+
+    /// Borrow the complete bytes written so far, without consuming the writer.
+    ///
+    /// The non-consuming mirror of [`finish`](Self::finish), and it enforces
+    /// the same alignment rule for the same reason: handing out a buffer with a
+    /// pending partial byte would let a caller emit a file one byte shorter
+    /// than the bits it wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotByteAligned`] if a partial byte is pending.
+    pub fn as_bytes(&self) -> Result<&[u8]> {
+        if self.bit_off != 0 {
+            return Err(Error::new(
+                ErrorKind::NotByteAligned,
+                Location::OutputOffset(self.output_offset()),
+            ));
+        }
+        Ok(&self.out)
+    }
+
     /// Consume the writer and yield its bytes.
     ///
     /// Errors with [`ErrorKind::NotByteAligned`] if a partial byte is pending:
