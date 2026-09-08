@@ -29,7 +29,7 @@ is pinned:
 | `iamf-tools` tree | `848c6ff4968ff8cc6f728259892ab4f90cb83256` (tag v2.1.0) | as above |
 | Bazelisk | release `v1.29.0`, and the binary's own sha256: `5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992` (linux-amd64), `e20e8b0f4f240091b7a55bf17b9398bd4f40ee70ae0208dff95dd4c445fb4010` (linux-arm64) | fetched from the release's published `.sha256` assets, 2026-09-08 |
 | Bazel | **7.4.1**, from `iamf-tools`' own committed `.bazelversion` at the pinned SHA | read from the pinned tree, 2026-09-08 |
-| Built image | **not yet recorded — see below** | — |
+| Built image | manifest list `sha256:4a011a6d2b9e8eef955a0a49afbd09dafbc917cb125cf77a591eaf997a820b80` · image manifest `sha256:0589f66bc58dd1ccb3ce65db9fd5841df6e3923fde00355720c1e3f35c7e8387` · config `sha256:73a5d40d618bc9f0eec40549125cd18202abc826457a7adc689392a1ece63e0b` | built locally 2026-09-08, `linux/amd64`, 700 586 211 bytes |
 
 Bazel is deliberately *not* pinned in the Dockerfile. The tree carries its own
 `.bazelversion` and Bazelisk honours it; writing `7.4.1` in a second place would
@@ -37,25 +37,48 @@ give the pin two owners, and two copies of a pin drift. Note that this also
 resolves the second half of research assumption A2 from code rather than by
 assumption: whichever Bazelisk version is used, the Bazel it fetches is 7.4.1.
 
-### The built image's digest is NOT yet recorded — and that is a real gap
+### The built image's digest — recorded 2026-09-08, and what it does and does not pin
 
 D-13 requires the image be pinned by digest, and **the base image digest alone
 does not pin the result**: `apt-get update && install` and Bazel's own dependency
 fetch both reach the network, so two builds of this Dockerfile on different days
 are not guaranteed to be the same image.
 
-The digest belongs in the table above and is not there because **the image has
-never been built**. The Docker daemon was not running on the machine where this
-was authored (`Cannot connect to the Docker daemon at
-unix:///Users/cell/.docker/run/docker.sock`), and `bazel`/`bazelisk` are absent
-by design. `.github/workflows/reference.yml` builds the image on `ubuntu-latest`
-and prints its digest for exactly this purpose; the first successful run of that
-workflow is where this row gets filled in. The gap is recorded in
-`.planning/WINDOWS.md` so it surfaces at ship time.
+The row is now filled. The image was built on the authoring machine once the
+Docker daemon was started:
 
-Until that row is filled, the `iamf-tools` half of the pin is a **source-and-base
-pin, not a result pin**, and any CONF-06 or CONF-07 verdict produced before then
-should be read with that in mind.
+```sh
+docker build -f tools/iamf-tools.Dockerfile -t iamf-tools:v2.1.0 tools/
+```
+
+Bazel ran 1 273 actions in 275.5 s and reported `Build completed successfully`.
+The Dockerfile's own build-time assertion —
+`test -x bazel-bin/iamf/cli/encoder_main && test -x bazel-bin/iamf/cli/decoder_main`
+— passed, so the image is not merely built but demonstrably carries both binaries.
+**This closes research assumption A2** (that the declared `apt` package set is
+sufficient): it is now verified by execution rather than assumed.
+
+**What the digest pins, and what it does not.** It pins *this* build byte-for-byte:
+anyone can `docker pull`/compare against it and know they have the same oracle.
+It does **not** make the Dockerfile reproducible — rebuilding it tomorrow may well
+produce a different digest, for the network reasons above. That is the expected
+behaviour of a result pin, not a defect: the recorded digest is the identity of the
+artifact the conformance verdicts were produced against, which is exactly what
+D-13's runtime manifest assertion (`tests/reference_manifest.rs`) needs in order to
+detect drift.
+
+`.github/workflows/reference.yml` also builds the image on `ubuntu-latest` and
+prints its digest. A CI digest that differs from the one above is expected — a
+different day and a different host — and is informative rather than alarming; what
+would be alarming is a *conformance verdict* changing between the two.
+
+**One environment note, not a Dockerfile defect.** On this machine `docker build`
+first failed with
+`error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH`.
+`~/.docker/config.json` sets `credsStore: desktop`, and Docker Desktop installs that
+helper at `/Applications/Docker.app/Contents/Resources/bin` — which is not on a
+non-interactive shell's default `PATH`. The image is public, so no credentials are
+actually needed; prepending that directory to `PATH` is sufficient.
 
 ## The version-number caveat — read this before hunting for a v1.1.x tag
 

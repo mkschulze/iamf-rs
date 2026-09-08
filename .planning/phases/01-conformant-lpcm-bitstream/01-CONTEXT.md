@@ -205,7 +205,22 @@ Parallax-facing API surface (Phase 4).
     CONF-05's sample-identity catches it.
   — **Reversibility:** costly — the golden hash, the annotated structural dump and the diff ledger
   are all derived from this exact configuration; changing it invalidates all three.
-  — **Research item for plan 01-02:** confirm `iamf-tools`' strict parser accepts a Codec Config
+  — **AMENDED 2026-09-08 (user decision), after the research item below was executed.**
+  The two-Codec-Config design does not survive contact: `encoder_main` accepts it and
+  `libiamf`'s `iamfdec` decodes it **byte-identically** to the golden, but `iamf-tools`'
+  `decoder_main` — the binary CONF-06 must run through, since v2.1.0 ships no `probe_main` —
+  **aborts on an absl `CHECK`**. Causality isolated by control: the same textproto with the
+  second `codec_config_metadata` block deleted decodes to `63 temporal units`; with it, the
+  decoder dies. Fallback **(b)** adopted: sample-identity (CONF-02/03/05) stays on the
+  **single-element 5.1 fixture**, so D-19's no-permutation-constant premise is untouched, and
+  CONF-04's ordering observability moves to a **second, structure-only fixture with two Audio
+  Elements** (77 of the 226 reference files have ≥2, so the route is well precedented).
+  Fallback (a) — the `arbitrary_obu` injection — was rejected on its own recorded caveat:
+  `INSERTION_HOOK_AFTER_CODEC_CONFIGS` makes ordering positional rather than ID-sorted, so
+  DESC-08's ascending-ID property would no longer be what is observed. Accepted cost: two
+  elements push the minimum profile Simple → **Base**, which PROF-02 must exercise anyway.
+  Full evidence in `CONFORMANCE-GATE.md` § Experiment 2. **Plan 01-08 inherits two fixtures.**
+  — **Research item for plan 01-02 — EXECUTED 2026-09-08, see the amendment above:** confirm `iamf-tools`' strict parser accepts a Codec Config
   that no Audio Element references. If it does not, fall back to differing the two configs and
   having the element use whichever is legal.
 

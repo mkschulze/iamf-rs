@@ -113,16 +113,57 @@ jobs:
       # step asserts on; do not substitute "non-zero exit" for it without
       # re-running the experiment, because a reference tool failing while
       # returning 0 is a demonstrated behaviour in this project, not a worry.
+      # THE OBSERVABLE (Experiment 1, executed 2026-09-08 — see CONFORMANCE-GATE.md):
+      #   stderr must carry `Decoded <N> temporal units.` with N == the expected
+      #   temporal-unit count.
+      #
+      # This replaces `test -s <output>.wav`, which was the weakest defensible
+      # claim and is now a DEMONSTRATED false pass: a file truncated mid-OBU makes
+      # decoder_main exit 0 and write an 80-byte WAV (44-byte header + 36 bytes)
+      # while decoding ZERO temporal units. `test -s` passes that file. So does
+      # any exit-code check. The temporal-unit count is the only one of the three
+      # observations that separates it from success.
+      #
+      # Do not substitute "non-zero exit" here. Of five deliberately corrupted
+      # inputs, three returned 0 — a reference tool failing while returning 0 is a
+      # measured behaviour in this project, not a worry.
       - name: CONF-06 — iamf-tools' parser accepts a vendored reference file
+        env:
+          EXPECTED_TEMPORAL_UNITS: '63'
         run: |
           set -euo pipefail
           mkdir -p target/reference-out
           docker run --rm -v "$PWD:/work" -w /src iamf-tools:v2.1.0 \
             bazel-bin/iamf/cli/decoder_main \
               --input_filename=/work/tests/fixtures/reference/test_000003.iamf \
-              --output_filename=/work/target/reference-out/test_000003.wav
+              --output_filename=/work/target/reference-out/test_000003.wav \
+            > target/reference-out/decoder_main.stdout \
+            2> target/reference-out/decoder_main.stderr || true
+
+          # An absl CHECK abort (the observed response to a bad sample_rate or a
+          # wrong obu_size) prints this and produces no output file at all.
+          if grep -q 'Check failure stack trace' target/reference-out/decoder_main.stderr; then
+            echo "CONF-06 FAILED: decoder_main aborted on an absl CHECK." >&2
+            tail -20 target/reference-out/decoder_main.stderr >&2
+            exit 1
+          fi
+
+          DECODED=$(sed -n 's/.*Decoded \([0-9]\{1,\}\) temporal units\..*/\1/p' \
+            target/reference-out/decoder_main.stderr | tail -1)
+
+          if [ -z "$DECODED" ]; then
+            echo "CONF-06 FAILED: decoder_main never reported a temporal-unit count." >&2
+            tail -20 target/reference-out/decoder_main.stderr >&2
+            exit 1
+          fi
+
+          if [ "$DECODED" != "$EXPECTED_TEMPORAL_UNITS" ]; then
+            echo "CONF-06 FAILED: decoded $DECODED temporal units, expected $EXPECTED_TEMPORAL_UNITS." >&2
+            exit 1
+          fi
+
           test -s target/reference-out/test_000003.wav
-          echo "decoder_main produced $(stat -c%s target/reference-out/test_000003.wav) bytes"
+          echo "CONF-06 ok — decoded $DECODED temporal units, $(stat -c%s target/reference-out/test_000003.wav) bytes"
 
       - name: Upload the reference artefacts
         if: always()

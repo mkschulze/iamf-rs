@@ -78,15 +78,23 @@ Related, and not a waiver: `iamf-tools@v2.1.0` ships no `probe_main`. Its
 therefore enforced *through* `decoder_main`'s parse path, which goes via
 `ObuProcessor`/`DescriptorObuParser` and so exercises the strict parser.
 
-**What the CONF-06 signal actually is has NOT been established.** An earlier
-revision of this section asserted "a non-zero exit or an error on stderr is the
-CONF-06 signal". That was an inference, and Experiment A below refutes the
-general form of it by execution: `libiamf`'s `iamfdec` returns **exit 0 on every
-one of five inputs**, including two that decode to zero samples. Whether
-`decoder_main` behaves differently is Experiment 1, and Experiment 1 has not run
-(the container could not be built on the authoring machine). Until it does,
-CONF-06 has a route but no asserted observable, and a harness written against
-the exit code would be a gate that passes on a failed parse.
+**The CONF-06 signal is `Decoded <N> temporal units.` on stderr, N matched against
+the expected temporal-unit count.** Established by Experiment 1, executed
+2026-09-08.
+
+An earlier revision of this section asserted "a non-zero exit or an error on
+stderr is the CONF-06 signal". That was an inference, and it is wrong twice over.
+Experiment A refuted the general form: `libiamf`'s `iamfdec` returns **exit 0 on
+every one of five inputs**, including two that decode to zero samples. Experiment 1
+then showed `decoder_main` is no better — of the same five inputs it returns **0 on
+three**, one of which is a file truncated mid-OBU that yields an 80-byte WAV and
+**zero** decoded temporal units.
+
+That truncated case is why `test -s <output>.wav` is also insufficient: 80 bytes is
+a 44-byte WAV header plus 36 bytes of nothing, and `test -s` passes it. The
+temporal-unit count is the only one of the three recorded observations — exit code,
+stderr, output file — that separates a truncated parse from a successful one.
+`.github/workflows/reference.yml` asserts on it.
 
 ## Recorded experiments
 
@@ -156,26 +164,49 @@ done
 
 ---
 
-### Experiment 1 — how does `decoder_main` signal a parse failure? (NOT RUN)
+### Experiment 1 — how does `decoder_main` signal a parse failure? (EXECUTED 2026-09-08)
 
-Research open question 1, and the thing CONF-06's value rests on.
+Research open question 1, and the thing CONF-06's value rests on. It could not run
+when this plan was written — the Docker daemon was down on the authoring machine —
+and ran unchanged once the daemon was started. The image built in 275.5 s
+(1 273 Bazel actions, build-time assertion passed), which also closed research
+assumption A2.
 
-**Why it did not run.** The `iamf-tools` oracle only exists inside the
-digest-pinned container (D-11: Bazel + abseil + protobuf + fdk-aac is not a
-build to run natively). On the authoring machine the `docker` CLI is present at
-`/usr/local/bin/docker` but the **daemon is not running** —
-`Cannot connect to the Docker daemon at unix:///Users/cell/.docker/run/docker.sock` —
-and Docker Desktop could not be started from this session. `bazel`/`bazelisk`
-are absent by design. So the image could be *authored* and pinned, and it is
-(`tools/iamf-tools.Dockerfile`), but it could not be *built* or *run*.
+**Results.** Five inputs from `tools/experiments/corrupt-fixture.py`, three
+observations recorded separately per case as this section requires:
 
-**This is unverified, not blocked.** `.github/workflows/reference.yml` builds the
-image on `ubuntu-latest`, so the first run of that workflow is where this
-executes. It is recorded in `.planning/WINDOWS.md` so it surfaces at ship time
-rather than being rediscovered.
+| case | exit | WAV | sha256 (first 16) | stderr |
+|---|---|---|---|---|
+| `valid` (control) | 0 | 64 080 B | `01edcf2f45132977` | `Decoded 63 temporal units.` |
+| `bitflip_reserved` | 0 | 64 080 B | `01edcf2f45132977` — **identical to control** | `Decoded 63 temporal units.` |
+| `bitflip_sample_rate` | 139 | absent | — | `*** Check failure stack trace: ***` |
+| `obusize` | 139 | absent | — | `*** Check failure stack trace: ***` |
+| `truncated` | **0** | **80 B** | `42e6693d278a1e39` | **`Decoded 0 temporal units.`** |
 
-**The exact procedure, ready to run.** Nothing here needs deciding; it needs a
-daemon.
+**The conclusion this experiment owed the project — the name of the observable:**
+
+> CONF-06 asserts that stderr carries `Decoded <N> temporal units.` with N equal to
+> the expected temporal-unit count. Not the exit code. Not `test -s`.
+
+Three of five corrupted inputs return exit 0, so an exit-code gate passes on three
+failures. The truncated file additionally defeats `test -s`: 80 bytes is a WAV
+header plus 36 bytes, written while decoding nothing at all.
+
+**Two secondary findings, both worth keeping.**
+
+1. **The reserved-bit flip is invisible to `decoder_main` as well** — byte-identical
+   WAV, same sha256 as the control. Reserved-bit misuse is therefore invisible to
+   *both* oracles. This is not a weakness in CONF-06; it is the reason CONF-07's
+   byte-diff exists, now demonstrated rather than assumed. It does contradict
+   PROJECT.md's claim that "`iamf-tools` errors on reserved-bit misuse" — for this
+   field, at v2.1.0, it does not.
+2. **The two malformed-header cases die on an absl `CHECK` abort**, not a graceful
+   rejection. Loud and usable as a signal, but `decoder_main` has no clean error
+   path for a bad `sample_rate` or a wrong `obu_size`. `reference.yml` greps for
+   `Check failure stack trace` explicitly, because an abort produces no
+   temporal-unit line to match against.
+
+**The exact procedure, as run:**
 
 ```sh
 docker build -f tools/iamf-tools.Dockerfile -t iamf-tools:v2.1.0 tools/
@@ -192,15 +223,21 @@ for f in valid bitflip_reserved bitflip_sample_rate obusize truncated; do
 done
 ```
 
-**Record three observations per case, separately:** the exit code, the verbatim
-stderr, and whether an output file appeared and how large it is. **Do not assume
-the exit code is the signal** — Experiment A above is the counter-example, in
-this repository, on the sibling tool.
+The `echo` above is a convenience; the results table was produced by capturing
+stdout and stderr separately per case, because the exit code, the verbatim stderr
+and the output file's size are three independent observations and conflating them
+is how the wrong one gets chosen as the signal.
 
-**The conclusion this experiment owes the project:** the name of the observable
-`.github/workflows/reference.yml`'s CONF-06 step asserts on. That step currently
-asserts only `test -s <output>.wav`, which is the weakest defensible claim and
-is deliberately marked as such until this runs.
+Note for anyone re-running this: on macOS `docker build` may first fail with
+`exec: "docker-credential-desktop": executable file not found in $PATH`. That is a
+`credsStore` lookup, not a build failure — the image is public. Prepend
+`/Applications/Docker.app/Contents/Resources/bin` to `PATH`.
+
+**The conclusion this experiment owed the project has been delivered:** the
+observable is `Decoded <N> temporal units.`, and
+`.github/workflows/reference.yml`'s CONF-06 step now asserts on it — including an
+explicit grep for `Check failure stack trace`, since an absl abort produces no
+temporal-unit line at all.
 
 **Recorded alongside, per research correction 8:** CONF-06 goes through
 `decoder_main` because `iamf-tools@v2.1.0` ships **no `probe_main`** and no other
@@ -214,17 +251,48 @@ read as a deliberate decision rather than as a missing validator.
 
 ---
 
-### Experiment 2 — does `encoder_main` accept an unreferenced Codec Config? (NOT RUN)
+### Experiment 2 — does `encoder_main` accept an unreferenced Codec Config? (EXECUTED 2026-09-08)
 
 Research assumption A3, and D-18's stated research item for this plan. D-18's
 Phase 1 fixture is **two Codec Configs and one 5.1 Audio Element**, so the
 second Codec Config is referenced by nothing. The parser side is verified legal
-from source; the encoder side is not, and that is what this settles.
+from source; the encoder side was not, and that is what this settled.
 
-**Why it did not run.** Same cause as Experiment 1: the Docker daemon was not
-running on the authoring machine.
+**It settled more than it was asked.** The question was framed as "does the
+encoder refuse?", and the pre-recorded fallbacks below assume that failure mode.
+The encoder does **not** refuse. The break is one layer further down, in the
+binary CONF-06 must actually run through.
 
-**The exact procedure, ready to run.** The input is already prepared and
+| tool | verdict on the two-Codec-Config file |
+|---|---|
+| `iamf-tools` `encoder_main` | **accepts** — exit 0, `Success. Test case expected to pass.`, `status= OK`; the sequencer log shows two `after Codec Config` lines (bit_offset 208, then 352), so both are written |
+| `libiamf` `iamfdec` (the Core Value oracle) | **accepts** — 8 000 samples, WAV **byte-identical** to the golden's decode (sha256 `ff8c679813805b3b…`, `cmp -l` reports 0 differing bytes) |
+| `iamf-tools` `decoder_main` | **aborts** — `*** Check failure stack trace: ***`, no output file |
+
+Output was 32 585 bytes against the golden's 32 567: exactly the 18-byte second
+Codec Config OBU inserted (`00 10 c901 6970636d 8001 0000 0110 0000 3e80` — type 0,
+size 16, id 201, `ipcm`), everything else byte-identical.
+
+**Causality isolated, not inferred.** The same textproto with the second
+`codec_config_metadata` block deleted, through the same encoder and the same
+decoder:
+
+- one Codec Config → `Decoded 63 temporal units.`, 64 080-byte WAV
+- two Codec Configs → `*** Check failure stack trace: ***`, no output
+
+Nothing else differs. The unreferenced Codec Config is the cause.
+
+**Interpretation.** The file is conformant by every available measure except one.
+`DescriptorObuParser` permits unreferenced Codec Configs by source,
+`WriteDescriptorObus` writes them, `encoder_main` produces them, and the decoder
+whose acceptance *is* the Core Value reads them byte-identically. Only
+`decoder_main` aborts, on a hard `CHECK` rather than a diagnostic — which reads as
+an upstream robustness bug rather than a spec violation. That interpretation does
+not rescue the fixture: CONF-06 must run through `decoder_main` (research
+correction 8 — v2.1.0 ships no `probe_main`), so the clause cannot pass regardless
+of who is at fault.
+
+**The exact procedure, as run.** The input is already prepared and
 committed — `tools/experiments/two-codec-configs.textproto` is
 `iamf-tools@v2.1.0 iamf/cli/testdata/test_000003.textproto` (the **current**
 proto dialect, not `libiamf@v1.1.0`'s deprecated-field copy) with one added
@@ -264,8 +332,8 @@ different number of samples per frame yet."*). LPCM has no remaining free field.
   arbitrary second Audio Element.
 - **Encoder side — unknown.** That is this experiment.
 
-**If `encoder_main` refuses, the fallback is already chosen and must be recorded
-here when adopted**, in this order:
+**The fallback was pre-chosen in this order, and must be recorded here when
+adopted:**
 
 - **(a)** Inject the second Codec Config via `arbitrary_obu_metadata` with
   `INSERTION_HOOK_AFTER_CODEC_CONFIGS` — the mechanism `test_000119` uses, so it
@@ -279,6 +347,32 @@ here when adopted**, in this order:
   there, and keep sample-identity on the single-element 5.1 file. 77 reference
   files have ≥ 2 Audio Elements so the route is well-precedented. Note that two
   elements push the minimum profile from Simple to **Base**.
+
+#### ADOPTED: fallback (b) — user decision, 2026-09-08
+
+D-18 is amended. The Phase 1 fixture becomes **two fixtures**:
+
+| fixture | shape | what it carries |
+|---|---|---|
+| sample-identity | one 5.1 Audio Element, one Codec Config | CONF-02, CONF-03, CONF-05 — the decoder's output IS our input, so D-19's "no permutation constant anywhere" premise is untouched |
+| structure-only | two Audio Elements | CONF-04 — OBU count, descriptor ordering, and the `find_obu_boundaries` walk landing exactly on `bytes.len()` |
+
+**Why (b) and not (a).** (a) was ordered first, but its own recorded caveat is
+disqualifying: forcing the OBU after all normal ones makes ordering positional,
+so DESC-08's ascending-ID property stops being the thing under test. A clause that
+passes while measuring something other than what it claims is worse than a clause
+that fails, because nothing downstream ever learns the difference.
+
+**Accepted cost.** Two Audio Elements push the minimum profile from Simple to
+**Base**. PROF-02 (minimum-profile selection) has to exercise that path anyway, so
+this is added coverage rather than lost coverage — the fixture now proves the
+selector picks Base when Base is what the configuration fits.
+
+**Consequence for plan 01-08.** It inherits two fixtures, not one, and the
+seven-clause gate is split across them. The coupling that made "one fixture, seven
+clauses" valuable is genuinely weakened; what preserves the gate's meaning is that
+the *sample-identity* half — the half `libiamf`'s acceptance defines — stays whole
+and un-permuted.
 
 ## Waivers
 
