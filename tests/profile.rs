@@ -13,15 +13,18 @@
 //! **Both counts are per Mix Presentation**, not per sequence. Every test below
 //! passes the Audio Elements of one Mix Presentation.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use iamf::error::ErrorKind;
 use iamf::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig, LoudspeakerLayout};
 use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
 };
-use iamf::model::{Profile, select_minimum_profile};
+use iamf::model::{Profile, Q7_8, lufs_to_q7_8, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, AudioElementType, ChannelAudioLayerConfig, IaSequenceHeader,
+    AudioElement, AudioElementType, ChannelAudioLayerConfig, IaSequenceHeader, Loudness,
     ScalableChannelLayoutConfig,
 };
 
@@ -303,4 +306,160 @@ fn a_layout_with_no_fixed_channel_count_is_a_typed_error_not_a_guess() {
     let elements = vec![element(0, LoudspeakerLayout::Reserved(11))];
     let err = select(&elements).expect_err("a reserved layout has no channel count");
     assert_eq!(err.kind(), &ErrorKind::UnsupportedLayout);
+}
+
+// ---------------------------------------------------------------------------
+// PROF-03 — the Q7.8 loudness helper, and the D-21 escape census
+// ---------------------------------------------------------------------------
+
+/// `lufs_to_q7_8`, or the raw `i16` a failure should not have produced.
+fn q7_8(lufs: f64) -> Result<i16, ErrorKind> {
+    lufs_to_q7_8(lufs)
+        .map(Q7_8::to_i16)
+        .map_err(|e| e.kind().clone())
+}
+
+#[test]
+fn the_two_published_loudness_values_of_test_000003_round_trip() {
+    // integrated_loudness: -13733, and -13733 / 256 == -53.64453125 exactly.
+    assert_eq!(q7_8(-53.644_531_25), Ok(-13733));
+    // digital_peak: -12879, and -12879 / 256 == -50.30859375 exactly.
+    assert_eq!(q7_8(-50.308_593_75), Ok(-12879));
+}
+
+#[test]
+fn whole_numbers_scale_by_two_hundred_and_fifty_six() {
+    assert_eq!(q7_8(0.0), Ok(0));
+    assert_eq!(q7_8(1.0), Ok(256));
+    assert_eq!(q7_8(-1.0), Ok(-256));
+}
+
+#[test]
+fn ties_round_to_even_in_both_directions() {
+    // The half-LSB inputs, expressed as the fractions they are so the intent
+    // survives: -13733.5 / 256 and -13732.5 / 256.
+    assert_eq!(q7_8(-13733.5 / 256.0), Ok(-13734), "-13733.5 -> even");
+    assert_eq!(q7_8(-13732.5 / 256.0), Ok(-13732), "-13732.5 -> even");
+    // And on the positive side, so "ties to even" is not confused with
+    // "ties away from zero" by coincidence of sign.
+    assert_eq!(q7_8(13733.5 / 256.0), Ok(13734));
+    assert_eq!(q7_8(13732.5 / 256.0), Ok(13732));
+}
+
+#[test]
+fn truncation_toward_zero_would_bias_every_negative_value_upward() {
+    // The specific defect PROF-03 names. `as i16` on -13733.5 yields -13733,
+    // one LSB *louder* than the input — and every loudness value in a real
+    // file is negative, so the error is systematic rather than a wobble.
+    assert_ne!(q7_8(-13733.5 / 256.0), Ok(-13733));
+    assert_eq!(q7_8(-13733.5 / 256.0), Ok(-13734));
+}
+
+#[test]
+fn nan_and_both_infinities_are_typed_errors() {
+    assert_eq!(q7_8(f64::NAN), Err(ErrorKind::LoudnessOutOfRange));
+    assert_eq!(q7_8(f64::INFINITY), Err(ErrorKind::LoudnessOutOfRange));
+    assert_eq!(q7_8(f64::NEG_INFINITY), Err(ErrorKind::LoudnessOutOfRange));
+}
+
+#[test]
+fn values_outside_the_q7_8_range_are_errors_not_saturations() {
+    // i16::MAX / 256 == 127.99609375; i16::MIN / 256 == -128.0.
+    assert_eq!(q7_8(127.996_093_75), Ok(i16::MAX));
+    assert_eq!(q7_8(-128.0), Ok(i16::MIN));
+
+    assert_eq!(q7_8(128.0), Err(ErrorKind::LoudnessOutOfRange));
+    assert_eq!(q7_8(-128.005), Err(ErrorKind::LoudnessOutOfRange));
+    assert_eq!(q7_8(1.0e30), Err(ErrorKind::LoudnessOutOfRange));
+    assert_eq!(q7_8(-1.0e30), Err(ErrorKind::LoudnessOutOfRange));
+}
+
+#[test]
+fn the_quantised_pair_reaches_the_loudness_block_without_a_float() {
+    // The join between the float→fixed path and the wire model. Any call site
+    // scaling by 256 and casting for itself would be a second rounding rule.
+    let integrated = lufs_to_q7_8(-53.644_531_25).unwrap_or(Q7_8::from_raw(0));
+    let digital_peak = lufs_to_q7_8(-50.308_593_75).unwrap_or(Q7_8::from_raw(0));
+    let loudness = Loudness::from_q7_8(integrated, digital_peak);
+
+    assert_eq!(loudness, Loudness::new(-13733, -12879));
+    assert_eq!(loudness.info_type(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// D-21 — the census. Its correct answer is exactly one.
+// ---------------------------------------------------------------------------
+
+/// Every `.rs` file under `src/`.
+fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(rust_files_under(&path));
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn exactly_one_float_lint_escape_exists_in_src_and_it_is_in_loudness_rs() {
+    let mut escapes: Vec<String> = Vec::new();
+
+    for file in rust_files_under(Path::new("src")) {
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            // Comment lines are filtered so that a doc comment *describing* the
+            // attribute — of which this crate has several, deliberately —
+            // cannot self-invalidate the count.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("disallowed_types") {
+                escapes.push(format!("{}:{}", file.display(), index.saturating_add(1)));
+            }
+        }
+    }
+
+    assert_eq!(
+        escapes.len(),
+        1,
+        "D-21 makes the no-DSP guard a census whose correct answer is exactly \
+         one: 0 means PROF-03's escape was lost, 2 or more means the scope \
+         boundary was breached. Found: {escapes:?}"
+    );
+    assert!(
+        escapes.first().is_some_and(|e| e.contains("loudness.rs")),
+        "the one escape belongs to PROF-03's helper: {escapes:?}"
+    );
+}
+
+#[test]
+fn no_file_under_src_but_loudness_rs_mentions_a_64_bit_float() {
+    let offenders: Vec<String> = rust_files_under(Path::new("src"))
+        .into_iter()
+        .filter(|file| fs::read_to_string(file).is_ok_and(|text| text.contains("f64")))
+        .map(|file| file.display().to_string())
+        .collect();
+
+    assert_eq!(
+        offenders.len(),
+        1,
+        "a float reached the encode path outside the one sanctioned function: \
+         {offenders:?}"
+    );
+    assert!(
+        offenders
+            .first()
+            .is_some_and(|f| f.ends_with("loudness.rs")),
+        "{offenders:?}"
+    );
 }

@@ -23,7 +23,10 @@
 use crate::bits::{BitCursor, BitWriter};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::layout::SoundSystem;
-use crate::obu::param_definition::{ParamDefinition, read_param_definition, write_param_definition};
+use crate::model::loudness::Q7_8;
+use crate::obu::param_definition::{
+    ParamDefinition, read_param_definition, write_param_definition,
+};
 
 /// `headphones_rendering_mode` — a 2-bit field in the rendering config.
 // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.h RenderingConfig::HeadphonesRenderingMode
@@ -165,6 +168,21 @@ impl Loudness {
             anchored: None,
             extension: None,
         }
+    }
+
+    /// The same, from values that have been through PROF-03's range check.
+    ///
+    /// This is the join between the float→fixed path and the wire model. A
+    /// caller measuring loudness converts once, at one named place
+    /// ([`crate::model::lufs_to_q7_8`]), and hands the results here — rather
+    /// than each call site scaling by 256 and casting for itself, which is how
+    /// a rounding rule ends up applied three different ways in one crate.
+    ///
+    /// This module never sees a float; the conversion is confined to
+    /// `src/model/loudness.rs`, which is what the D-21 census asserts.
+    #[must_use]
+    pub const fn from_q7_8(integrated: Q7_8, digital_peak: Q7_8) -> Self {
+        Self::new(integrated.to_i16(), digital_peak.to_i16())
     }
 
     /// `info_type`, computed from the optional members it gates.
@@ -712,7 +730,10 @@ fn write_loudness(w: &mut BitWriter, v: &Loudness) -> Result<()> {
     }
     if let Some(anchored) = v.anchored.as_ref() {
         let count = u8::try_from(anchored.anchor_elements.len()).map_err(|_| {
-            Error::new(ErrorKind::ObuTooLarge, Location::Field("num_anchored_loudness"))
+            Error::new(
+                ErrorKind::ObuTooLarge,
+                Location::Field("num_anchored_loudness"),
+            )
         })?;
         w.write_unsigned(u64::from(count), 8)?;
         for anchor in &anchored.anchor_elements {

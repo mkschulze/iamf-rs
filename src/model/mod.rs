@@ -17,8 +17,10 @@
 //! breaks the four-target byte-identity guarantee.
 
 pub mod layout;
+pub mod loudness;
 pub mod profile;
 
+pub use loudness::{Q7_8, lufs_to_q7_8};
 pub use profile::{Profile, select_minimum_profile};
 
 use crate::bits::BitWriter;
