@@ -1,0 +1,67 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-08T12:54:16.222Z",
+  "phase": "01",
+  "phase_name": "Conformant LPCM Bitstream",
+  "phase_dir": ".planning/phases/01-conformant-lpcm-bitstream",
+  "plan": 8,
+  "task": 3,
+  "total_tasks": 7,
+  "status": "paused",
+  "context_summary": "All 8 plans are executed and summarized. Work is paused inside execute-phase's TAIL GATES, not inside plan execution. No plan work remains.",
+  "completed_tasks": [
+    {"id": 1, "name": "All 8 plans executed (01-01..01-08), each with a SUMMARY.md", "status": "done", "commit": "5f6d5f5"},
+    {"id": 2, "name": "Gate: blocking anti-pattern check (no .continue-here.md existed)", "status": "done"},
+    {"id": 3, "name": "Gate: aggregate_results — wave table, plan details, issues, security-gate check", "status": "done"},
+    {"id": 4, "name": "Gate: execute:post TDD review-checkpoint — tripped, investigated, waived by user", "status": "done", "commit": "ca59aa5"}
+  ],
+  "remaining_tasks": [
+    {"id": 5, "name": "Gate: code_review_gate — gsd-code-reviewer must be RE-RUN; the subagent was still running at pause and 01-REVIEW.md was never written", "status": "not_started"},
+    {"id": 6, "name": "Gate: verify_phase_goal — spawn gsd-verifier, produce 01-VERIFICATION.md", "status": "not_started"},
+    {"id": 7, "name": "Gate: update_roadmap + close_phase_todos + delegate_post_completion", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "tdd.review-checkpoint reports plan 01-05 missing RED and GREEN commits. It is a FALSE POSITIVE: the commits exist scoped (1-5) instead of (01-05), and the checker matches a zero-padded literal. GSD defect class #4003.",
+      "type": "technical",
+      "workaround": "Waived by the user on 2026-09-08. Full evidence in .planning/phases/01-conformant-lpcm-bitstream/01-TDD-GATE-WAIVER.md (commit ca59aa5). The gate WILL trip again on every future run of this phase. Do NOT rewrite 01-05's commit scopes to satisfy it."
+    },
+    {
+      "description": "The code-review subagent was mid-run when the session paused. Its output file was never produced.",
+      "type": "technical",
+      "workaround": "Re-run /gsd-code-review 1. Scope and depth are already computed — see next_action."
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Decide whether to run /gsd-secure-phase 1",
+      "context": "The security capability is ACTIVE at verify:post (workflow.security_enforcement) but no 01-SECURITY.md exists for this phase. aggregate_results flagged it for next-steps routing.",
+      "blocking": false
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Resume execute-phase at aggregate_results rather than exiting as 'nothing to do'",
+      "rationale": "All 8 plans were summarized but no 01-VERIFICATION.md existed and the roadmap phase was unmarked. That is the #2868 interrupted-tail state, not a finished phase. aggregate_results is the correct entry point because it owns the security gate and reads only on-disk artifacts.",
+      "phase": "01"
+    },
+    {
+      "decision": "Waive the TDD gate rather than rewrite plan 01-05's commit scopes",
+      "rationale": "Three complete RED-then-GREEN cycles exist and are reachable from main. The TDD discipline was followed; only the commit-scope spelling deviated. Rewriting correct history to satisfy a buggy padded-literal regex would destroy the evidence the gate is meant to protect.",
+      "phase": "01"
+    },
+    {
+      "decision": "Excluded 78 vendored reference fixtures, 3 golden artifacts and Cargo.lock from the code-review required_reading",
+      "rationale": "They are third-party binary/data fixtures and a generated lockfile, not authored source. Reading them would burn the reviewer's budget for no signal. They remain in the computed 145-file scope; only the reading list was narrowed, and the exclusion is stated in the reviewer prompt.",
+      "phase": "01"
+    }
+  ],
+  "uncommitted_files": [
+    " M .planning/STATE.md",
+    " M .planning/state.json"
+  ],
+  "uncommitted_note": "Both are the side effect of `gsd-tools query state.begin-phase --phase 01`, run at the start of this session. No source code is uncommitted.",
+  "next_action": "Re-run the code review gate: /gsd-code-review 1 . Pre-computed inputs — file scope 145 files (SUMMARY.md tier + git-diff cross-check, DIFF_BASE=a67d64aed6c5dce2d0beee0e6be54640605513bd^), resolved depth 'standard' (auto-downgraded from configured 'deep' because scope > 50 files), reviewer model 'inherit' (omit the model parameter). Then verify_phase_goal, then update_roadmap.",
+  "context_notes": "This session did NOT execute any plan work. It resumed a phase whose 8 plans were already done and drove the tail gates. Two of four gates are cleared. The single genuinely surprising finding was that the end-of-phase TDD checker carries the #4003 padded-literal bug that the workflow spec itself fixes in two other places (safe_resume_gate and the in-plan TDD gate). That asymmetry is worth reporting upstream to GSD."
+}
