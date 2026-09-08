@@ -52,11 +52,11 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Time-varying OBUs
 
-- [ ] **TIME-01**: Audio Frame (type 5, and 6–23) with implicit substream IDs (`id <= 17` → type `6 + id`)
-- [ ] **TIME-02**: BCG channel→substream packing in the correct order — coupled stereo pairs first, then mono; distinct from presentation channel order
-- [ ] **TIME-03**: Trimming applied to the final frame
-- [ ] **TIME-04**: Temporal Delimiter (type 4)
-- [ ] **TIME-05**: Parameter Block (type 3) parsed with its `ParamDefinition` supplied as an explicit context argument, never as hidden parser state
+- [x] **TIME-01**: Audio Frame (type 5, and 6–23) with implicit substream IDs (`id <= 17` → type `6 + id`)
+- [x] **TIME-02**: BCG channel→substream packing in the correct order — coupled stereo pairs first, then mono; distinct from presentation channel order
+- [x] **TIME-03**: Trimming applied to the final frame
+- [x] **TIME-04**: Temporal Delimiter (type 4)
+- [x] **TIME-05**: Parameter Block (type 3) parsed with its `ParamDefinition` supplied as an explicit context argument, never as hidden parser state
 
 ### Sequence and container
 
@@ -215,11 +215,11 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | DESC-07 | Phase 1 | Complete |
 | DESC-08 | Phase 1 | Complete |
 | DESC-09 | Phase 1 | Complete |
-| TIME-01 | Phase 1 | Pending |
-| TIME-02 | Phase 1 | Pending |
-| TIME-03 | Phase 1 | Pending |
-| TIME-04 | Phase 1 | Pending |
-| TIME-05 | Phase 1 | Pending |
+| TIME-01 | Phase 1 | Complete |
+| TIME-02 | Phase 1 | Complete |
+| TIME-03 | Phase 1 | Complete |
+| TIME-04 | Phase 1 | Complete |
+| TIME-05 | Phase 1 | Complete |
 | SEQ-01 | Phase 1 | Pending |
 | SEQ-02 | Phase 1 | Pending |
 | SEQ-03 | Phase 1 | Pending |

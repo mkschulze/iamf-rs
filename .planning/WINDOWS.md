@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 5
 waived_count: 0
 fixed_count: 3
-total_count: 6
-last_updated: 2026-09-08T04:58:28.773Z
+total_count: 8
+last_updated: 2026-09-08T05:31:46.934Z
 ---
 
 # Broken Windows Ledger
@@ -21,6 +21,8 @@ last_updated: 2026-09-08T04:58:28.773Z
 | 4 | 01 | unrun-verify | CONFORMANCE-GATE.md |  | Experiment 2 (does encoder_main accept a Codec Config no Audio Element references, research assumption A3 / D-18's research item) did NOT run — no container runtime. D-18's two-Codec-Config Phase 1 fixture design is unconfirmed on the encoder side; the input textproto is prepared at tools/experiments/two-codec-configs.textproto and the fallbacks are recorded. | fixed |  | 2026-09-08T02:43:43.010Z | 2026-09-08T03:44:41.193Z |
 | 5 | 01 | deviation | src/bits/mod.rs |  | BITS-01's REQUIREMENTS.md text still says BitReader<'a>/BitWriter 'wrapping bitstream-io'. D-01 amended that to a hand-rolled BitCursor with bitstream-io demoted to a dev-only differential oracle, and 01-03 implemented the amendment. The requirement text was NOT amended; the divergence is recorded in the module doc comment only. | open |  | 2026-09-08T03:37:28.013Z |  |
 | 6 | 01 | deviation | src/obu/param_definition.rs |  | param_definition_mode made a derived accessor instead of the plan's stored bool (flag/field disagreement would otherwise be constructible) | open |  | 2026-09-08T04:58:28.773Z |  |
+| 7 | 01 | deviation | src/obu/parameter_block.rs |  | Unknown mix-gain animation_type (>=2) is UnsupportedParameterData rather than preserved verbatim: the wire carries no length for it, matching iamf-tools' UnimplementedError | open |  | 2026-09-08T05:31:46.755Z |  |
+| 8 | 01 | deviation | src/packing.rs |  | Loudspeaker layouts beyond mono/stereo/binaural/5.1 return UnsupportedLayout; their packing order is not modelled in Phase 1 | open |  | 2026-09-08T05:31:46.934Z |  |
 
 ````json
 [
@@ -94,6 +96,30 @@ last_updated: 2026-09-08T04:58:28.773Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-08T04:58:28.773Z",
+    "resolved_at": null
+  },
+  {
+    "id": 7,
+    "kind": "deviation",
+    "phase": "01",
+    "file": "src/obu/parameter_block.rs",
+    "line": null,
+    "description": "Unknown mix-gain animation_type (>=2) is UnsupportedParameterData rather than preserved verbatim: the wire carries no length for it, matching iamf-tools' UnimplementedError",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T05:31:46.755Z",
+    "resolved_at": null
+  },
+  {
+    "id": 8,
+    "kind": "deviation",
+    "phase": "01",
+    "file": "src/packing.rs",
+    "line": null,
+    "description": "Loudspeaker layouts beyond mono/stereo/binaural/5.1 return UnsupportedLayout; their packing order is not modelled in Phase 1",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T05:31:46.934Z",
     "resolved_at": null
   }
 ]

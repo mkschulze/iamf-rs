@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Completed 01-05-PLAN.md
-last_updated: "2026-09-08T04:58:48.333Z"
+stopped_at: Completed 01-06-PLAN.md
+last_updated: "2026-09-08T05:31:33.849Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 01 execution started
-state_head: bbeabd2cb59721665deb4f4da67e3d6c75da04d0
+state_head: 5ced301a8496bc2122e0d565dd54f82fdadba86d
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-09-08 — Phase 01 execution started
 
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P03 | 47min | 3 tasks | 12 files |
 | Phase 01 P04 | 42min | 4 tasks | 9 files |
 | Phase 01 P05 | 29min | 4 tasks | 11 files |
+| Phase 01 P06 | 26min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,9 @@ Recent decisions affecting current work:
 - [Phase 01]: param_definition_mode is a derived accessor over Option<DurationFields>, not a stored bool — a stored copy makes the flag/field disagreement constructible
 - [Phase 01]: recon_gain_is_present stays a stored field: it is the one gate flag whose gated data lives in a different OBU, so Pattern 2 has no local source to derive it from
 - [Phase 01]: SoundSystem variants named A0_2_0..Ss13_6_9_0, not the reference's A_0_2_0 — non_camel_case_types rejects a cased character adjacent to an underscore and -D warnings is a verify gate
+- [Phase 01]: AudioFrame carries neither trimming nor trailing — the OBU header owns the trim counts and the frame claims the whole payload remainder
+- [Phase 01]: read_parameter_block takes the ParamDefinition AND its ParamDefinitionType as explicit arguments; the shared wire prefix carries no type
+- [Phase 01]: Layouts research did not close return UnsupportedLayout rather than an invented packing order
 
 ### Pending Todos
 
@@ -130,6 +134,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-08T04:58:36.994Z
-Stopped at: Completed 01-05-PLAN.md
+Last session: 2026-09-08T05:31:33.816Z
+Stopped at: Completed 01-06-PLAN.md
 Resume file: None
