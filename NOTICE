@@ -1,0 +1,51 @@
+iamf-rs
+Copyright 2026 the iamf-rs authors
+
+This product includes software developed by the Alliance for Open Media.
+
+--------------------------------------------------------------------------------
+Reference implementations (GUARD-07, Apache-2.0 section 4(d))
+--------------------------------------------------------------------------------
+
+This crate is a clean-room-adjacent reimplementation: field layouts, constant
+values, validation rules and bit-level framing were read from the two Alliance
+for Open Media reference implementations below and re-expressed in Rust. Both
+are BSD-3-Clause-Clear + AOM Patent License 1.0, which permits this. Functions
+that mirror a specific reference function carry a `// ref:` citation naming the
+file and symbol they were derived from.
+
+The exact revisions are pinned in REFERENCES.md and must be kept in step with
+this file.
+
+  AOMediaCodec/iamf-tools
+  https://github.com/AOMediaCodec/iamf-tools
+  Tag v2.1.0, commit 848c6ff4968ff8cc6f728259892ab4f90cb83256
+  Copyright (c) 2023, Alliance for Open Media. All rights reserved.
+  Licensed under BSD-3-Clause-Clear and the Alliance for Open Media Patent
+  License 1.0. See that repository's LICENSE and PATENTS files.
+
+  AOMediaCodec/libiamf
+  https://github.com/AOMediaCodec/libiamf
+  Tag v1.1.0, commit f06e919e2ad5502a2adc4bdd4e146f2e7e7ffb63
+  Copyright (c) 2024, Alliance for Open Media. All rights reserved.
+  Licensed under BSD-3-Clause-Clear and the Alliance for Open Media Patent
+  License 1.0. See that repository's LICENSE and PATENTS files.
+
+--------------------------------------------------------------------------------
+Alliance for Open Media Patent License 1.0
+--------------------------------------------------------------------------------
+
+A verbatim copy sits at the repository root as PATENTS. Section 1.2.1(a) makes
+reproducing that license in the root directory of the source code a condition of
+the inbound patent grant, and iamf-rs is an Encoder (section 2.4) and therefore
+an Implementation (section 2.6). It sits alongside, not instead of, this
+project's outbound MIT OR Apache-2.0 licence.
+
+--------------------------------------------------------------------------------
+Vendored test fixtures
+--------------------------------------------------------------------------------
+
+None yet. Plan 01-02 adds conformance fixtures derived from the reference trees
+above; each entry belongs here with its source repository, revision, per-file
+path and copyright line. Extend this section in place — do not restructure the
+file, because the sections above are load-bearing for the licence audit.

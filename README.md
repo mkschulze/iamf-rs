@@ -6,7 +6,29 @@ parser, descriptor model, and an encoder producing conformant `.iamf` files.
 Not a renderer. This crate receives rendered PCM plus metadata and produces bytes; it never pans,
 places a source, or treats a speaker layout as anything but a label.
 
-Targets **IAMF v1.1.0**.
+Targets **IAMF v1.1.0** (`iamf::SPEC_VERSION`).
+
+## Reference implementations
+
+The correctness claim is not "our tests pass" — it is that a file this crate
+writes is read back by the reference decoder `libiamf` with the PCM
+sample-identical, and is accepted by `iamf-tools`' stricter parser.
+
+Both references are pinned by commit, never by tag alone and never to `main`.
+The SHAs, the four checks that establish they are IAMF v1.1.0-exact trees, and
+the read-versus-invoke licence boundary that governs which reference source may
+be opened at all are in **[REFERENCES.md](REFERENCES.md)**.
+
+Nothing in a normal `cargo build` or `cargo test` needs a reference binary —
+the suite is green offline on all four supported targets, deliberately.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The pull-request checklist is short and
+the first item is the one that matters: `gpac`, `libspatialaudio` and FFmpeg /
+`libavformat` are LGPL and their source may not be read or ported. Invoking a
+compiled binary from a test is fine; opening the source is not, and
+contamination is irreversible.
 
 ## Licence
 
@@ -24,3 +46,19 @@ ported from the permissively-licensed reference implementations.
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the
 work by you, as defined in the Apache-2.0 licence, shall be dual licensed as above, without any
 additional terms or conditions.
+
+### The `PATENTS` file
+
+[`PATENTS`](PATENTS) holds the Alliance for Open Media Patent License 1.0
+verbatim. It sits **alongside** the dual `MIT OR Apache-2.0` licence above, not
+instead of it, and it is not this project's outbound licence.
+
+It is there because §1.2.1(a) of that licence makes reproducing it "in the root
+directory of the source code" a **condition of the inbound grant**: `iamf-rs`
+produces an IAMF bitstream, which makes it an Encoder (§2.4) and therefore an
+Implementation (§2.6). Omitting the file would cost us the patent licence we
+rely on. Apache-2.0 §3's patent grant and AOM §1.1 are independent of each
+other.
+
+Keep `PATENTS` in the published archive if `publish = false` is ever lifted —
+§1.2.1(a) speaks about the root directory of the source code as distributed.

@@ -1,0 +1,142 @@
+# CI — GUARD-09's four-target matrix, GUARD-12's toolchain pin, GUARD-01's
+# licence gate, and the guardrail proof.
+#
+# D-16 requires EVERYTHING on all four targets on every PR — not a reduced
+# golden-hash-only job on the non-Linux runners. A matrix that only builds
+# everywhere and only tests in one place does not support a byte-identity claim.
+#
+# The golden-fixture comparison this matrix exists to run lands in plan 01-08.
+# Until then the matrix proves the crate builds, lints and tests identically on
+# four targets, which is the property plan 01-08 will extend rather than
+# introduce.
+#
+# ---------------------------------------------------------------------------
+# Runner availability fallback (D-16's known operational risk)
+# ---------------------------------------------------------------------------
+# `macos-13` is GitHub's last x86_64 macOS image and is on the retirement path:
+# `macos-14` and `macos-15` are arm64. When it goes, do this, in order, and do
+# not silently shrink the matrix:
+#
+#   1. Build for x86_64-apple-darwin on an arm64 runner and execute the test
+#      binaries under Rosetta 2. This preserves the actual x86_64 code path,
+#      which is the thing the byte-identity claim is about — cross-compiling
+#      and not running would reduce this entry to a compile check.
+#
+#   2. If Rosetta 2 is unavailable on hosted runners, drop to three targets AND
+#      record the reduction and its reason as a waiver in CONFORMANCE-GATE.md.
+#      A matrix that quietly went from four entries to three is indistinguishable
+#      from a matrix nobody maintains.
+#
+# This block is written down now, before the retirement, so it is a decision
+# rather than a red gate discovered on a Monday.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  matrix:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No toolchain-installer action, deliberately. Every such action wants the
+      # channel as an input, which restates the pin that `rust-toolchain.toml`
+      # already owns — and two copies of a pin drift. The runners ship rustup,
+      # which reads `rust-toolchain.toml` and installs the pinned channel, its
+      # components and its targets on the first cargo invocation. One source of
+      # truth (GUARD-12).
+      - name: Show the toolchain rustup resolved
+        shell: bash
+        run: |
+          rustup show
+          rustc --version --verbose
+          cargo --version
+
+      - name: Assert the running toolchain is the pinned one (GUARD-12)
+        shell: bash
+        run: |
+          pinned=$(grep -E '^[[:space:]]*channel[[:space:]]*=' rust-toolchain.toml \
+                   | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          actual=$(rustc --version | awk '{print $2}')
+          if [ "$pinned" != "$actual" ]; then
+            echo "toolchain drift: rust-toolchain.toml pins $pinned but rustc reports $actual" >&2
+            exit 1
+          fi
+          echo "toolchain $actual matches rust-toolchain.toml"
+
+      - name: Build
+        run: cargo build --locked --all-targets --target ${{ matrix.target }}
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      # D-02: "dependency-free" means zero LINKED dependencies. Plain
+      # `cargo tree -e normal` includes proc-macro edges and would show the whole
+      # derive chain, so it is the wrong instrument.
+      - name: Assert the linked dependency graph is iamf + thiserror only (D-02)
+        shell: bash
+        run: |
+          graph=$(cargo tree -e normal,no-proc-macro --prefix none \
+                  | awk 'NF {print $1}' | sort -u)
+          echo "$graph"
+          expected=$(printf 'iamf\nthiserror\n')
+          if [ "$graph" != "$expected" ]; then
+            echo "linked dependency graph changed — see D-02 in REFERENCES.md" >&2
+            exit 1
+          fi
+
+  # GUARD-01 and the guardrail proof. Linux only: both are host-independent
+  # policy checks, and running them four times would only prove that four
+  # runners can read the same TOML file.
+  guardrails:
+    name: licence gate + guardrail proof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain rustup resolved
+        run: rustup show
+
+      # Pinned to the exact version the policy was authored and verified
+      # against. cargo-deny's `[licenses]` schema has changed incompatibly
+      # before — the `deny`, `copyleft`, `allow-osi-fsf-free`, `default` and
+      # `version` keys were removed and now error — so an unpinned tool is a
+      # future red gate with a confusing message.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: cargo deny check
+        run: cargo deny --all-features check
+
+      # A guardrail that is configured and a guardrail that fires are different
+      # things. This step introduces six deliberate violations and asserts each
+      # gate rejects them by name, so a silently disabled lint turns the build
+      # red and says which one.
+      - name: Prove every guardrail still bites
+        run: bash tools/prove-guards.sh
