@@ -78,19 +78,19 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Guardrails
 
-- [ ] **GUARD-01**: `deny.toml` copied **verbatim** from Parallax, and proven to fail by deliberately adding an LGPL crate
-- [ ] **GUARD-02**: `clippy.toml` `disallowed-types` banning `HashMap`/`HashSet` outright, with a `reason` string
-- [ ] **GUARD-03**: Hardening lints enabled, including `clippy::indexing_slicing` and `clippy::arithmetic_side_effects`
-- [ ] **GUARD-04**: No `unwrap()` or `expect()` outside tests
-- [ ] **GUARD-05**: `SPEC_VERSION` constant named in the code
-- [ ] **GUARD-06**: `REFERENCES.md` pinning exact `iamf-tools` and `libiamf` SHAs, with CI checking out those SHAs and never `main`
-- [ ] **GUARD-07**: `NOTICE` file carrying attribution for ported BSD-licensed reference code
-- [ ] **GUARD-08**: `CONTRIBUTING.md` carrying an explicit "did not consult `gpac` or `libspatialaudio`" checkbox
-- [ ] **GUARD-09**: Cross-target byte-identity as a committed golden fixture reproduced on macOS arm64, macOS x86_64, Windows MSVC and Linux x64
+- [x] **GUARD-01**: `deny.toml` copied **verbatim** from Parallax, and proven to fail by deliberately adding an LGPL crate
+- [x] **GUARD-02**: `clippy.toml` `disallowed-types` banning `HashMap`/`HashSet` outright, with a `reason` string
+- [x] **GUARD-03**: Hardening lints enabled, including `clippy::indexing_slicing` and `clippy::arithmetic_side_effects`
+- [x] **GUARD-04**: No `unwrap()` or `expect()` outside tests
+- [x] **GUARD-05**: `SPEC_VERSION` constant named in the code
+- [x] **GUARD-06**: `REFERENCES.md` pinning exact `iamf-tools` and `libiamf` SHAs, with CI checking out those SHAs and never `main`
+- [x] **GUARD-07**: `NOTICE` file carrying attribution for ported BSD-licensed reference code
+- [x] **GUARD-08**: `CONTRIBUTING.md` carrying an explicit "did not consult `gpac` or `libspatialaudio`" checkbox
+- [x] **GUARD-09**: Cross-target byte-identity as a committed golden fixture reproduced on macOS arm64, macOS x86_64, Windows MSVC and Linux x64
 - [ ] **GUARD-10**: Same-process double-encode test — the only cheap check that catches per-process hash seeding
-- [ ] **GUARD-11**: A no-DSP guard (grep or lint) enforcing the scope boundary
-- [ ] **GUARD-12**: `rust-toolchain.toml` pinning Rust 1.85 / edition 2024, so the byte-identity matrix compiles identically everywhere
-- [ ] **GUARD-13**: `thiserror` error type, `#[non_exhaustive]`, with a byte `offset` on every variant
+- [x] **GUARD-11**: A no-DSP guard (grep or lint) enforcing the scope boundary
+- [x] **GUARD-12**: `rust-toolchain.toml` pinning Rust 1.85 / edition 2024, so the byte-identity matrix compiles identically everywhere
+- [x] **GUARD-13**: `thiserror` error type, `#[non_exhaustive]`, with a byte `offset` on every variant
 
 ### Parser and round-trip
 
@@ -130,8 +130,8 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Decisions to settle
 
-- [ ] **DEC-01**: `SPEC_VERSION = "1.1.0"` pinned in code, with the profile enum's legal range and the expanded-layout set following from it *(decided 2026-09-08)*
-- [ ] **DEC-02**: Crate published under `MIT OR Apache-2.0` — `Cargo.toml` `license` field, `LICENSE-MIT` + `LICENSE-APACHE`, README licence section, and the `NOTICE` file Apache-2.0 §4(d) wants *(decided 2026-09-08; licence files landed, `Cargo.toml` follows in Phase 1)*
+- [x] **DEC-01**: `SPEC_VERSION = "1.1.0"` pinned in code, with the profile enum's legal range and the expanded-layout set following from it *(decided 2026-09-08)*
+- [x] **DEC-02**: Crate published under `MIT OR Apache-2.0` — `Cargo.toml` `license` field, `LICENSE-MIT` + `LICENSE-APACHE`, README licence section, and the `NOTICE` file Apache-2.0 §4(d) wants *(decided 2026-09-08; licence files landed, `Cargo.toml` follows in Phase 1)*
 - [ ] **DEC-03**: Parameter data taken as **pre-decimated blocks**; no time model, no interpolation, no float arithmetic on the encode path *(decided 2026-09-08)*
 - [ ] **DEC-04**: `iamf-tools` tags `v2.0.0` and `v2.1.0` fetched to check whether either is a v1.1.0-exact tree, before the type model is written
 - [ ] **DEC-05**: `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` read for payload-level rejection rules before the LPCM path is written
@@ -229,19 +229,19 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | CONF-09 | Phase 1 | Pending |
 | CONF-10 | Phase 1 | Pending |
 | CONF-11 | Phase 1 | Pending |
-| GUARD-01 | Phase 1 | Pending |
-| GUARD-02 | Phase 1 | Pending |
-| GUARD-03 | Phase 1 | Pending |
-| GUARD-04 | Phase 1 | Pending |
-| GUARD-05 | Phase 1 | Pending |
-| GUARD-06 | Phase 1 | Pending |
-| GUARD-07 | Phase 1 | Pending |
-| GUARD-08 | Phase 1 | Pending |
-| GUARD-09 | Phase 1 | Pending |
+| GUARD-01 | Phase 1 | Complete |
+| GUARD-02 | Phase 1 | Complete |
+| GUARD-03 | Phase 1 | Complete |
+| GUARD-04 | Phase 1 | Complete |
+| GUARD-05 | Phase 1 | Complete |
+| GUARD-06 | Phase 1 | Complete |
+| GUARD-07 | Phase 1 | Complete |
+| GUARD-08 | Phase 1 | Complete |
+| GUARD-09 | Phase 1 | Complete |
 | GUARD-10 | Phase 1 | Pending |
-| GUARD-11 | Phase 1 | Pending |
-| GUARD-12 | Phase 1 | Pending |
-| GUARD-13 | Phase 1 | Pending |
+| GUARD-11 | Phase 1 | Complete |
+| GUARD-12 | Phase 1 | Complete |
+| GUARD-13 | Phase 1 | Complete |
 | PARSE-01 | Phase 2 | Pending |
 | PARSE-02 | Phase 2 | Pending |
 | PARSE-03 | Phase 2 | Pending |
@@ -266,13 +266,14 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | API-03 | Phase 4 | Pending |
 | API-04 | Phase 4 | Pending |
 | API-05 | Phase 4 | Pending |
-| DEC-01 | Phase 1 | Pending |
-| DEC-02 | Phase 1 | Pending |
+| DEC-01 | Phase 1 | Complete |
+| DEC-02 | Phase 1 | Complete |
 | DEC-03 | Phase 4 | Pending |
 | DEC-04 | Phase 1 | Pending |
 | DEC-05 | Phase 1 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 88 total
 - Mapped to phases: 88 ✓
 - Unmapped: 0 ✓

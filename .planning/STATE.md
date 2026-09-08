@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1
-current_phase: 1
+current_phase: 01
 current_phase_name: Conformant LPCM Bitstream
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-09-08T01:26:36.214Z"
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-09-08T02:04:05.155Z"
 last_activity: 2026-09-08
-last_activity_desc: DEC-01/02/03 settled by the user; Phase 4 entry condition satisfied
-state_head: 14b408e240a412dc6c7ff62ae2c7a0b81f103428
+last_activity_desc: Phase 01 execution started
+state_head: a34430aed19326045de9e51b909dceded4f8438f
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
+  completed_plans: 1
 ---
 
 # Project State
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-08)
 
 **Core value:** A `.iamf` file this crate writes is read back by the reference decoder `libiamf` with the PCM sample-identical — and accepted by `iamf-tools`' stricter parser, because `libiamf` alone is a permissive oracle.
-**Current focus:** Phase 1 — Conformant LPCM Bitstream
+**Current focus:** Phase 01 — Conformant LPCM Bitstream
 
 ## Current Position
 
-Phase: 1 (Conformant LPCM Bitstream) — READY TO EXECUTE
-Plan: 0 of 8 in current phase
+Phase: 01 (Conformant LPCM Bitstream) — EXECUTING
+Plan: 2 of 8
 Status: Ready to execute
-Last activity: 2026-09-08 — DEC-01/02/03 settled by the user; Phase 4 entry condition satisfied
+Last activity: 2026-09-08 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,6 +54,11 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 23min | 4 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -67,6 +72,9 @@ Recent decisions affecting current work:
 - [Roadmap]: Phase 1 exits through a seven-clause gate (CONF-02..CONF-08), not through "`libiamf` returned OK" — `libiamf` is a permissive reader.
 - [Roadmap]: Bazel fixture generation and the pinned `libiamf` CI job start on Phase 1 day one, in parallel and off the code critical path.
 - [Research]: `Vec` in bitstream order plus `by_id()` for descriptors — `BTreeMap` trades a determinism bug for a round-trip bug.
+- [Phase 01]: Error surface locked as D-08/D-09: struct Error { kind, at } with Location = InputOffset|OutputOffset|Field|Unlocated; validate() returns Vec<Finding>. size_of::<Error>() is exactly 32, enforced by a const assertion proven to bite.
+- [Phase 01]: cargo tree -e normal is the wrong instrument for D-02's zero-linked-dependencies claim (it includes proc-macro edges). Use cargo tree -e normal,no-proc-macro; CI asserts it.
+- [Phase 01]: Toolchain pinned to exactly 1.85.0 (the MSRV floor), not the machine's 1.92.0 — so the advertised MSRV is the one we compile with. Every 01-03 dev-dependency must resolve under 1.85; proptest 1.11.0 sits exactly there.
 
 ### Pending Todos
 
@@ -84,6 +92,7 @@ None yet.
   remains due diligence on the inbound grant.
 - ISO-BMFF (v2) is the licence contamination milestone and was not researched at all. `gpac` is
   LGPL-2.1 and forbidden.
+- Phase 1 work is on branch gsd/phase-01-conformant-lpcm-bitstream, not main: git.branching_strategy is "none" but main is the repo's protected default branch and the executor may not commit to it. Either fast-forward main, or set git.allow_default_branch_commits: true in .planning/config.json before plan 01-02.
 
 ### Resolved
 
@@ -101,6 +110,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-07T23:53:37.652Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-conformant-lpcm-bitstream/01-CONTEXT.md
+Last session: 2026-09-08T02:03:51.527Z
+Stopped at: Completed 01-01-PLAN.md
+Resume file: None
