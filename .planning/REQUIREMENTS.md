@@ -21,9 +21,9 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### OBU header and common structure
 
-- [ ] **OBU-01**: Header byte 0 encoded MSB-first as `[obu_type:5][obu_redundant_copy:1][type_specific_flag:1][obu_extension_flag:1]`
-- [ ] **OBU-02**: `obu_size` written as uleb128 counting every byte after the size field itself — trim fields and extension header included, byte 0 and the size bytes excluded
-- [ ] **OBU-03**: Bit 6 modelled as an enum carried by the payload variant, not a shared `bool`, with exactly **two** cases — trimming status for Audio Frames (types 5 and 6..=23), and reserved-SHALL-be-0 for every other type
+- [x] **OBU-01**: Header byte 0 encoded MSB-first as `[obu_type:5][obu_redundant_copy:1][type_specific_flag:1][obu_extension_flag:1]`
+- [x] **OBU-02**: `obu_size` written as uleb128 counting every byte after the size field itself — trim fields and extension header included, byte 0 and the size bytes excluded
+- [x] **OBU-03**: Bit 6 modelled as an enum carried by the payload variant, not a shared `bool`, with exactly **two** cases — trimming status for Audio Frames (types 5 and 6..=23), and reserved-SHALL-be-0 for every other type
 
   *Amended 2026-09-08 (plan 01-04).* The original wording gave bit 6 four meanings, adding an inverted key-frame flag for the Temporal Delimiter and an optional-fields flag for Mix Presentation. **That describes `iamf-tools@main`, a draft-v2.0.0 tree — not the v2.1.0 tag this project pins.**
 
@@ -32,11 +32,11 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
   - *Decoder-side consequence, and the reason this is dangerous rather than merely wrong.* `libiamf@v1.1.0`'s `IAMF_OBU_split` (`code/src/iamf_dec/IAMF_OBU.c:64-120`) reads the two trim fields whenever bit 6 is set, **for any OBU type**; its own development tip guards that with an audio-frame check, but the tree we pin does not. So the four-variant model shifts a descriptor OBU's entire payload by two bytes on the exact decoder whose acceptance is the Core Value — silently, with no error and no crash, and invisibly to any test that only round-trips against itself.
 
   **OBU-04 is unaffected.** The `obu_redundant_copy` legality table is correct as written and was verified at the same tag (`obu_header.cc:43-57`). Implemented as `TypeSpecific { Trimming(Option<Trimming>), Reserved }` in `src/obu/header.rs`; a verify gate greps `src/` for the draft-v2.0.0 names and must find none.
-- [ ] **OBU-04**: `obu_redundant_copy` rejected on audio frames, temporal delimiters and parameter blocks; legal only on descriptors (0, 1, 2, 31)
-- [ ] **OBU-05**: Trimming fields written END first, then START
-- [ ] **OBU-06**: Extension header (`extension_header_size` uleb128 plus that many bytes) read and written
-- [ ] **OBU-07**: Every OBU struct carries `trailing: Vec<u8>` from its first commit, drained centrally by the shared read wrapper
-- [ ] **OBU-08**: `find_obu_boundaries(&[u8])` helper whose last boundary must land exactly on `bytes.len()`, written before the first encoder test
+- [x] **OBU-04**: `obu_redundant_copy` rejected on audio frames, temporal delimiters and parameter blocks; legal only on descriptors (0, 1, 2, 31)
+- [x] **OBU-05**: Trimming fields written END first, then START
+- [x] **OBU-06**: Extension header (`extension_header_size` uleb128 plus that many bytes) read and written
+- [x] **OBU-07**: Every OBU struct carries `trailing: Vec<u8>` from its first commit, drained centrally by the shared read wrapper
+- [x] **OBU-08**: `find_obu_boundaries(&[u8])` helper whose last boundary must land exactly on `bytes.len()`, written before the first encoder test
 
 ### Descriptor OBUs
 
@@ -81,7 +81,7 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [ ] **CONF-07**: Byte-diff against an `iamf-tools`-produced file for an identical configuration is either identical or has every difference enumerated in writing
 - [ ] **CONF-08**: Byte-comparison reproducing the shipped golden `libiamf/tests/test_000003.iamf`
 - [x] **CONF-09**: Reference binaries invoked by `Command` in tests, discovered via `IAMF_REF_DECODER`, with `tools/build-reference.sh` at pinned commits — in one Linux CI job, never a `build.rs`
-- [ ] **CONF-10**: Golden fixtures are the always-on layer, so `cargo test` is green offline on all four targets
+- [x] **CONF-10**: Golden fixtures are the always-on layer, so `cargo test` is green offline on all four targets
 - [x] **CONF-11**: One-time Bazel build of `iamf-tools` generating and committing `tests/fixtures/*.iamf` — `iamf-tools` ships 338 `.textproto` files and exactly one `.iamf`
 
 ### Guardrails
@@ -198,14 +198,14 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | BITS-05 | Phase 1 | Complete |
 | BITS-06 | Phase 1 | Complete |
 | BITS-07 | Phase 1 | Complete |
-| OBU-01 | Phase 1 | Pending |
-| OBU-02 | Phase 1 | Pending |
-| OBU-03 | Phase 1 | Pending |
-| OBU-04 | Phase 1 | Pending |
-| OBU-05 | Phase 1 | Pending |
-| OBU-06 | Phase 1 | Pending |
-| OBU-07 | Phase 1 | Pending |
-| OBU-08 | Phase 1 | Pending |
+| OBU-01 | Phase 1 | Complete |
+| OBU-02 | Phase 1 | Complete |
+| OBU-03 | Phase 1 | Complete |
+| OBU-04 | Phase 1 | Complete |
+| OBU-05 | Phase 1 | Complete |
+| OBU-06 | Phase 1 | Complete |
+| OBU-07 | Phase 1 | Complete |
+| OBU-08 | Phase 1 | Complete |
 | DESC-01 | Phase 1 | Pending |
 | DESC-02 | Phase 1 | Pending |
 | DESC-03 | Phase 1 | Pending |
@@ -235,7 +235,7 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | CONF-07 | Phase 1 | Pending |
 | CONF-08 | Phase 1 | Pending |
 | CONF-09 | Phase 1 | Complete |
-| CONF-10 | Phase 1 | Pending |
+| CONF-10 | Phase 1 | Complete |
 | CONF-11 | Phase 1 | Complete |
 | GUARD-01 | Phase 1 | Complete |
 | GUARD-02 | Phase 1 | Complete |
