@@ -428,6 +428,10 @@ pub fn write_audio_element(w: &mut BitWriter, v: &AudioElement) -> Result<()> {
     w.write_bytes(&v.trailing)
 }
 
+// ref: iamf-tools@v2.1.0 iamf/common/read_bit_buffer.h ReadBitBuffer::ReadULeb128
+// NOTE: the reference has no such helper — it repeats the count-then-loop
+// shape at each site. The citation points at the primitive this factors over,
+// because the thing a reviewer must check here is the bound, not the read.
 /// Read a uleb128 count, bounds-check it against the input, then read that many
 /// items.
 ///
@@ -456,6 +460,7 @@ where
     Ok(out)
 }
 
+// ref: iamf-tools@v2.1.0 iamf/common/write_bit_buffer.h WriteBitBuffer::WriteUleb128
 /// Write a derived count as a uleb128, refusing one that cannot be represented.
 fn write_count(w: &mut BitWriter, count: usize, field: &'static str) -> Result<()> {
     let count = u32::try_from(count)
