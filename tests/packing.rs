@@ -180,7 +180,7 @@ fn a_coupled_substream_payload_is_sample_interleaved_not_planar() {
     };
     // Four samples, one byte per sample, so the payload reads as its own map.
     let pcm = interleaved_5p1(4, 1);
-    assert_eq!(pcm, vec![0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5].repeat(4));
+    assert_eq!(pcm, [0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5].repeat(4));
 
     let packed = match pack_channels_to_substreams(&plan, &pcm, 6, 1) {
         Ok(packed) => packed,
@@ -230,7 +230,7 @@ fn a_channel_count_disagreeing_with_the_layout_is_a_typed_error() {
     // A buffer that is not a whole number of interleaved frames is the same
     // defect seen from the other side.
     assert_eq!(
-        pack_channels_to_substreams(&plan, &pcm[1..], 6, 2)
+        pack_channels_to_substreams(&plan, pcm.get(1..).unwrap_or_default(), 6, 2)
             .err()
             .map(|e| e.kind().clone()),
         Some(ErrorKind::ChannelCountMismatch)

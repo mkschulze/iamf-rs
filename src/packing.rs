@@ -148,11 +148,56 @@ impl SubstreamPlan {
     /// produce exactly the silent, clean-decode-wrong-channels failure this
     /// module exists to prevent, and a typed error is visible where a guess is
     /// not.
-    pub fn for_layout(_layout: LoudspeakerLayout) -> Result<Self> {
-        // STUB(GREEN): the ordering rule lands with the wire behaviour.
-        Ok(Self {
-            substreams: Vec::new(),
-        })
+    pub fn for_layout(layout: LoudspeakerLayout) -> Result<Self> {
+        // Each entry is the source channel(s) for one substream, in the
+        // bitstream order the ordering rule fixes: coupled first, then mono;
+        // and within the monos, centre before LFE.
+        let groups: &[SubstreamChannels] = match layout {
+            // Sound System A order is `L, R`; one coupled pair, no monos.
+            // Matches test_000003's Audio Element (substream_count 1,
+            // coupled_substream_count 1).
+            LoudspeakerLayout::Stereo | LoudspeakerLayout::Binaural => {
+                &[SubstreamChannels::Coupled(0, 1)]
+            }
+            // A single centre channel; nothing to couple it with.
+            LoudspeakerLayout::Mono => &[SubstreamChannels::Mono(0)],
+            // Sound System B order is `L, R, C, LFE, Ls, Rs`. Coupled front
+            // pair first, then the coupled surround pair, then centre, then
+            // LFE — which is why the source indices are 0,1 / 4,5 / 2 / 3 and
+            // NOT 0,1 / 2,3 / 4 / 5. Packing order and presentation order are
+            // different orders; that difference is the whole of TIME-02.
+            LoudspeakerLayout::Ch5_1 => &[
+                SubstreamChannels::Coupled(0, 1),
+                SubstreamChannels::Coupled(4, 5),
+                SubstreamChannels::Mono(2),
+                SubstreamChannels::Mono(3),
+            ],
+            // Everything else: a typed error, not a guess. See the doc comment.
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::UnsupportedLayout,
+                    Location::Field("loudspeaker_layout"),
+                ));
+            }
+        };
+
+        let mut substreams = Vec::with_capacity(groups.len());
+        for (index, channels) in groups.iter().enumerate() {
+            let id = u32::try_from(index).map_err(|_| {
+                Error::new(
+                    ErrorKind::UnsupportedLayout,
+                    Location::Field("substream_index"),
+                )
+            })?;
+            substreams.push(SubstreamSpec {
+                // TIME-01: substream `n` is written as OBU type `6 + n`, with
+                // no explicit id in the payload. The type comes from
+                // `audio_frame.rs`'s encoder so the two cannot disagree.
+                obu_type: obu_type_for(id),
+                channels: *channels,
+            });
+        }
+        Ok(Self { substreams })
     }
 
     /// The substreams, in bitstream order.
@@ -200,16 +245,73 @@ impl SubstreamPlan {
 /// No arithmetic is performed on any sample value: bytes are copied from one
 /// slice to another and nothing else.
 pub fn pack_channels_to_substreams(
-    _plan: &SubstreamPlan,
-    _interleaved: &[u8],
-    _channel_count: usize,
-    _bytes_per_sample: usize,
+    plan: &SubstreamPlan,
+    interleaved: &[u8],
+    channel_count: usize,
+    bytes_per_sample: usize,
 ) -> Result<Vec<Vec<u8>>> {
-    // STUB(GREEN): regroups nothing.
-    let _ = (
-        ObuType::AudioFrame,
-        obu_type_for(0),
-        Error::new(ErrorKind::UnsupportedLayout, Location::Unlocated),
-    );
-    Ok(Vec::new())
+    let mismatch = || {
+        Error::new(
+            ErrorKind::ChannelCountMismatch,
+            Location::Field("interleaved"),
+        )
+    };
+
+    if channel_count != plan.channel_count() || channel_count == 0 || bytes_per_sample == 0 {
+        return Err(mismatch());
+    }
+    // One interleaved sample frame, in bytes. Checked, because both factors
+    // are caller-supplied.
+    let frame_bytes = channel_count
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(mismatch)?;
+    // `frame_bytes` is non-zero (both factors were checked above), but the
+    // division is still `checked_rem`/`checked_div` rather than `%` and `/`:
+    // GUARD-03 denies bare arithmetic precisely because "non-zero by argument"
+    // stops being true when the argument is edited.
+    if interleaved.len().checked_rem(frame_bytes) != Some(0) {
+        // A partial trailing frame would be packed short or long and the
+        // decoder would mis-frame it, so it is refused here rather than
+        // silently truncated.
+        return Err(mismatch());
+    }
+    let samples = interleaved
+        .len()
+        .checked_div(frame_bytes)
+        .ok_or_else(mismatch)?;
+
+    let mut packed = Vec::with_capacity(plan.substreams.len());
+    for spec in &plan.substreams {
+        let sources: &[usize] = match spec.channels {
+            SubstreamChannels::Coupled(first, second) => &[first, second],
+            SubstreamChannels::Mono(only) => &[only],
+        };
+        let payload_len = samples
+            .checked_mul(sources.len())
+            .and_then(|total| total.checked_mul(bytes_per_sample))
+            .ok_or_else(mismatch)?;
+        let mut payload = Vec::with_capacity(payload_len);
+
+        for sample in 0..samples {
+            let frame_start = sample.checked_mul(frame_bytes).ok_or_else(mismatch)?;
+            // Sample-interleaved inside a coupled substream: for each sample
+            // index, the first channel then the second. Not planar.
+            for source in sources {
+                if *source >= channel_count {
+                    return Err(mismatch());
+                }
+                let start = source
+                    .checked_mul(bytes_per_sample)
+                    .and_then(|offset| offset.checked_add(frame_start))
+                    .ok_or_else(mismatch)?;
+                let end = start.checked_add(bytes_per_sample).ok_or_else(mismatch)?;
+                // A copy of opaque bytes. No arithmetic is performed on the
+                // sample value itself — see the module comment.
+                let bytes = interleaved.get(start..end).ok_or_else(mismatch)?;
+                payload.extend_from_slice(bytes);
+            }
+        }
+        packed.push(payload);
+    }
+    Ok(packed)
 }
