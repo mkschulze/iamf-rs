@@ -592,6 +592,100 @@ fn a_mix_gain_definition_rejects_raw_parameter_data_before_writing() {
     assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
 }
 
+fn step_subblock(duration: Option<u32>) -> ParameterSubblock {
+    ParameterSubblock {
+        subblock_duration: duration,
+        data: ParameterData::MixGain(MixGainParameterData::Step {
+            start_point_value: 0,
+        }),
+    }
+}
+
+#[test]
+fn an_implied_parameter_subblock_count_mismatch_is_rejected_before_writing() {
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let block = ParameterBlock {
+        parameter_id: 5,
+        duration_fields: Some(BlockDurationFields {
+            duration: 4,
+            constant_subblock_duration: 2,
+        }),
+        subblocks: vec![step_subblock(None)],
+    };
+    let mut w = BitWriter::new();
+
+    let err = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block)
+        .expect_err("ceil(4 / 2) requires two subblocks");
+
+    assert_eq!(err.kind(), &ErrorKind::SubblockDurationMismatch);
+    assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
+}
+
+#[test]
+fn explicit_parameter_subblock_durations_are_required_and_must_sum_to_duration() {
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let missing = ParameterBlock {
+        parameter_id: 5,
+        duration_fields: Some(BlockDurationFields {
+            duration: 3,
+            constant_subblock_duration: 0,
+        }),
+        subblocks: vec![step_subblock(None)],
+    };
+    let wrong_sum = ParameterBlock {
+        subblocks: vec![step_subblock(Some(2))],
+        ..missing.clone()
+    };
+
+    let mut missing_writer = BitWriter::new();
+    let missing_err = write_parameter_block(
+        &mut missing_writer,
+        &definition,
+        ParamDefinitionType::MixGain,
+        &missing,
+    )
+    .expect_err("mode 1 with no constant duration carries each duration");
+    assert_eq!(
+        missing_err.kind(),
+        &ErrorKind::SubblockDurationMismatch
+    );
+    assert_eq!(missing_writer.finish().unwrap_or_default(), Vec::<u8>::new());
+
+    let mut sum_writer = BitWriter::new();
+    let sum_err = write_parameter_block(
+        &mut sum_writer,
+        &definition,
+        ParamDefinitionType::MixGain,
+        &wrong_sum,
+    )
+    .expect_err("the explicit durations must total three");
+    assert_eq!(sum_err.kind(), &ErrorKind::SubblockDurationMismatch);
+    assert_eq!(sum_writer.finish().unwrap_or_default(), Vec::<u8>::new());
+}
+
+#[test]
+fn parameter_subblock_durations_are_forbidden_when_the_duration_is_implied() {
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let block = ParameterBlock {
+        parameter_id: 5,
+        duration_fields: Some(BlockDurationFields {
+            duration: 2,
+            constant_subblock_duration: 2,
+        }),
+        subblocks: vec![step_subblock(Some(2))],
+    };
+    let mut w = BitWriter::new();
+
+    let err = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block)
+        .expect_err("an implied duration has no per-subblock field on the wire");
+
+    assert_eq!(
+        err.kind(),
+        &ErrorKind::SubblockDurationMismatch
+    );
+    assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
+}
+
 #[test]
 fn an_unknown_animation_type_is_the_same_typed_error_the_reference_returns() {
     // `iamf-tools` returns UnimplementedError("Unknown animation type= ") for

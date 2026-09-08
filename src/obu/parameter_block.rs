@@ -306,7 +306,11 @@ pub fn read_parameter_block(
         let num_subblocks = if constant_subblock_duration == 0 {
             r.read_uleb128()?
         } else {
-            subblocks_implied_by(duration, constant_subblock_duration, start)?
+            subblocks_implied_by(
+                duration,
+                constant_subblock_duration,
+                Location::InputOffset(start),
+            )?
         };
         (
             Some(BlockDurationFields {
@@ -326,7 +330,11 @@ pub fn read_parameter_block(
             u32::try_from(fields.subblock_durations.len())
                 .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?
         } else {
-            subblocks_implied_by(fields.duration, fields.constant_subblock_duration, start)?
+            subblocks_implied_by(
+                fields.duration,
+                fields.constant_subblock_duration,
+                Location::InputOffset(start),
+            )?
         };
         (None, count)
     };
@@ -402,21 +410,7 @@ pub fn write_parameter_block(
     kind: ParamDefinitionType,
     block: &ParameterBlock,
 ) -> Result<()> {
-    if block.parameter_id != def.parameter_id {
-        return Err(Error::new(
-            ErrorKind::ParameterIdMismatch,
-            Location::Field("parameter_id"),
-        ));
-    }
-    if block.duration_fields.is_some() != def.param_definition_mode() {
-        return Err(Error::new(
-            ErrorKind::ParameterModeMismatch,
-            Location::Field("param_definition_mode"),
-        ));
-    }
-    for subblock in &block.subblocks {
-        validate_parameter_data_kind(&subblock.data, kind)?;
-    }
+    validate_parameter_block(def, kind, block)?;
 
     w.write_uleb128_minimal(block.parameter_id)?;
     if let Some(fields) = block.duration_fields {
@@ -436,6 +430,98 @@ pub fn write_parameter_block(
             w.write_uleb128_minimal(duration)?;
         }
         write_parameter_data(w, &subblock.data)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_parameter_block(
+    def: &ParamDefinition,
+    kind: ParamDefinitionType,
+    block: &ParameterBlock,
+) -> Result<()> {
+    if block.parameter_id != def.parameter_id {
+        return Err(Error::new(
+            ErrorKind::ParameterIdMismatch,
+            Location::Field("parameter_id"),
+        ));
+    }
+    if block.duration_fields.is_some() != def.param_definition_mode() {
+        return Err(Error::new(
+            ErrorKind::ParameterModeMismatch,
+            Location::Field("param_definition_mode"),
+        ));
+    }
+    for subblock in &block.subblocks {
+        validate_parameter_data_kind(&subblock.data, kind)?;
+    }
+
+    let (expected_count, carries_subblock_duration, declared_duration) =
+        if let Some(fields) = block.duration_fields {
+            let count = if fields.constant_subblock_duration == 0 {
+                u32::try_from(block.subblocks.len()).map_err(|_| {
+                    Error::new(ErrorKind::ObuTooLarge, Location::Field("num_subblocks"))
+                })?
+            } else {
+                subblocks_implied_by(
+                    fields.duration,
+                    fields.constant_subblock_duration,
+                    Location::Field("subblocks"),
+                )?
+            };
+            let carries = fields.constant_subblock_duration == 0;
+            (count, carries, carries.then_some(fields.duration))
+        } else {
+            let fields = def.duration_fields.as_ref().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::ParameterModeMismatch,
+                    Location::Field("duration_fields"),
+                )
+            })?;
+            let count = if fields.constant_subblock_duration == 0 {
+                u32::try_from(fields.subblock_durations.len()).map_err(|_| {
+                    Error::new(ErrorKind::ObuTooLarge, Location::Field("subblocks"))
+                })?
+            } else {
+                subblocks_implied_by(
+                    fields.duration,
+                    fields.constant_subblock_duration,
+                    Location::Field("subblocks"),
+                )?
+            };
+            (count, false, None)
+        };
+
+    let actual_count = u32::try_from(block.subblocks.len())
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::Field("subblocks")))?;
+    if actual_count != expected_count {
+        return Err(Error::new(
+            ErrorKind::SubblockDurationMismatch,
+            Location::Field("subblocks"),
+        ));
+    }
+
+    let mut duration_sum = 0_u64;
+    for subblock in &block.subblocks {
+        if subblock.subblock_duration.is_some() != carries_subblock_duration {
+            return Err(Error::new(
+                ErrorKind::SubblockDurationMismatch,
+                Location::Field("subblock_duration"),
+            ));
+        }
+        if let Some(duration) = subblock.subblock_duration {
+            duration_sum = duration_sum.checked_add(u64::from(duration)).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::SubblockDurationMismatch,
+                    Location::Field("subblock_duration"),
+                )
+            })?;
+        }
+    }
+    if declared_duration.is_some_and(|duration| duration_sum != u64::from(duration)) {
+        return Err(Error::new(
+            ErrorKind::SubblockDurationMismatch,
+            Location::Field("subblock_duration"),
+        ));
     }
     Ok(())
 }
@@ -463,12 +549,13 @@ fn validate_parameter_data_kind(data: &ParameterData, kind: ParamDefinitionType)
 /// still `checked_div`: GUARD-03 denies bare arithmetic because a bound that
 /// holds only by argument stops holding when the argument is edited.
 // ref: iamf-tools@v2.1.0 iamf/obu/parameter_block.cc ParameterBlockObu::GetNumSubblocks
-fn subblocks_implied_by(duration: u32, constant_subblock_duration: u32, at: u64) -> Result<u32> {
+fn subblocks_implied_by(
+    duration: u32,
+    constant_subblock_duration: u32,
+    at: Location,
+) -> Result<u32> {
     let overflow = || {
-        Error::new(
-            ErrorKind::SubblockDurationMismatch,
-            Location::InputOffset(at),
-        )
+        Error::new(ErrorKind::SubblockDurationMismatch, at)
     };
     let whole = duration
         .checked_div(constant_subblock_duration)
