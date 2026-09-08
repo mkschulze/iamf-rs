@@ -30,7 +30,7 @@
 //! long would be both slow and pointless.
 
 use crate::bits::{BitCursor, BitWriter};
-use crate::error::{Finding, Location, Result};
+use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::obu::header::{ObuType, Trimming, TypeSpecific};
 use crate::obu::{Obu, ObuHeader};
 
@@ -39,6 +39,13 @@ use crate::obu::{Obu, ObuHeader};
 /// `kObuIaAudioFrameId17 - kObuIaAudioFrameId0`.
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_frame.cc GetObuType
 pub const MAX_IMPLICIT_SUBSTREAM_ID: u32 = 17;
+
+/// The five-bit OBU type of `kObuIaAudioFrameId0`, which an implicit id is
+/// added to.
+const AUDIO_FRAME_ID0_TYPE: u32 = 6;
+
+/// The five-bit OBU type of `kObuIaAudioFrame` — the explicit-id form.
+const AUDIO_FRAME_EXPLICIT_TYPE: u8 = 5;
 
 /// The Audio Frame OBU payload.
 ///
@@ -132,42 +139,106 @@ impl AudioFrame {
 // The two halves of the implicit-id rule, adjacent and matched. Splitting them
 // across the file is how the encoding and the decoding of the same rule drift.
 
-/// The OBU type an `audio_substream_id` is written as.
+/// The OBU type an `audio_substream_id` is written as: `6 + id` for an id of
+/// 17 or less, `kObuIaAudioFrame` (5) otherwise.
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_frame.cc GetObuType
 #[must_use]
-pub fn obu_type_for(_substream_id: u32) -> ObuType {
-    // STUB(GREEN): the implicit-id encoding lands with the wire behaviour.
-    ObuType::AudioFrame
+pub fn obu_type_for(substream_id: u32) -> ObuType {
+    if substream_id > MAX_IMPLICIT_SUBSTREAM_ID {
+        return ObuType::AudioFrame;
+    }
+    // `substream_id <= 17` was just checked, so `6 + id <= 23` — inside the
+    // eighteen `kObuIaAudioFrameId*` values and inside `u8`. The arithmetic is
+    // still checked, because a bound that is only true by argument is a bound
+    // that stops being true when the argument is edited.
+    match substream_id
+        .checked_add(AUDIO_FRAME_ID0_TYPE)
+        .and_then(|value| u8::try_from(value).ok())
+    {
+        Some(value) => ObuType::from_value(value),
+        None => ObuType::AudioFrame,
+    }
 }
 
 /// The `audio_substream_id` an OBU type carries implicitly, or `None` when the
 /// type carries an explicit id (type 5) or is not an Audio Frame at all.
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_frame.cc AudioFrameObu::ReadAndValidatePayloadDerived
 #[must_use]
-pub fn substream_id_for(_obu_type: ObuType) -> Option<u32> {
-    // STUB(GREEN): the inverse lands with `obu_type_for`.
-    None
+pub fn substream_id_for(obu_type: ObuType) -> Option<u32> {
+    match obu_type.value() {
+        value @ 6..=23 => u32::from(value).checked_sub(AUDIO_FRAME_ID0_TYPE),
+        _ => None,
+    }
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_frame.cc AudioFrameObu::ReadAndValidatePayloadDerived
 // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c IAMF_OBU_split
-/// Read an Audio Frame payload, given the OBU type that framed it.
+// NOTE: `libiamf` performs no payload-level rejection here at all — it reads
+// the explicit id only for type 5, derives it for 6..=23, and takes the whole
+// remainder as the frame. Neither reference checks the frame's length against
+// `num_samples_per_frame` at this layer, so this reader does not either.
+/// Read an Audio Frame payload, given the header that framed it.
 ///
-/// The type is an **explicit argument** because it is what decides whether an
-/// `audio_substream_id` field is present at all. There is no way to answer that
-/// from the payload bytes alone.
-pub fn read_audio_frame(_obu_type: &ObuHeader, _r: &mut BitCursor<'_>) -> Result<AudioFrame> {
-    // STUB(GREEN): reads nothing and claims nothing.
-    Ok(AudioFrame::new(0, Vec::new()))
+/// The header is an **explicit argument** because `obu_type` is what decides
+/// whether an `audio_substream_id` field is present at all. There is no way to
+/// answer that from the payload bytes alone.
+pub fn read_audio_frame(header: &ObuHeader, r: &mut BitCursor<'_>) -> Result<AudioFrame> {
+    let start = r.byte_position();
+    let substream_id = match substream_id_for(header.obu_type) {
+        Some(implicit) => implicit,
+        None => {
+            if header.obu_type.value() != AUDIO_FRAME_EXPLICIT_TYPE {
+                return Err(Error::new(
+                    ErrorKind::NotAnAudioFrame,
+                    Location::InputOffset(start),
+                ));
+            }
+            r.read_uleb128()?
+        }
+    };
+
+    // The whole remainder is the frame, taken by byte offset. `read_uint8_span`
+    // caps the length against `bytes_remaining()` before reserving, and the
+    // reader is the bounded payload sub-reader `read_obu_with_header` built, so
+    // `obu_size` and the 2 MiB ceiling were already enforced upstream (T-01-33).
+    let remaining = r.bytes_remaining();
+    let payload = r.read_uint8_span(remaining)?.to_vec();
+
+    Ok(AudioFrame {
+        substream_id,
+        payload,
+    })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_frame.cc AudioFrameObu::ValidateAndWritePayload
-/// Write an Audio Frame payload, given the OBU type that frames it.
-pub fn write_audio_frame(
-    _w: &mut BitWriter,
-    _header: &ObuHeader,
-    _frame: &AudioFrame,
-) -> Result<()> {
-    // STUB(GREEN): emits nothing.
-    Ok(())
+/// Write an Audio Frame payload, given the header that frames it.
+///
+/// A frame whose header type carries an implicit id that disagrees with
+/// `substream_id` is a typed error rather than a silent choice of one of the
+/// two: the pair is exactly what `AudioFrame::into_obu` constructs
+/// consistently, so a disagreement here means a caller assembled the header by
+/// hand and got it wrong.
+pub fn write_audio_frame(w: &mut BitWriter, header: &ObuHeader, frame: &AudioFrame) -> Result<()> {
+    match substream_id_for(header.obu_type) {
+        Some(implicit) => {
+            if implicit != frame.substream_id {
+                return Err(Error::new(
+                    ErrorKind::SubstreamIdMismatch,
+                    Location::Field("audio_substream_id"),
+                ));
+            }
+        }
+        None => {
+            if header.obu_type.value() != AUDIO_FRAME_EXPLICIT_TYPE {
+                return Err(Error::new(
+                    ErrorKind::NotAnAudioFrame,
+                    Location::Field("obu_type"),
+                ));
+            }
+            // The ID is explicitly in the bitstream when `kObuIaAudioFrame`,
+            // and only then.
+            w.write_uleb128_minimal(frame.substream_id)?;
+        }
+    }
+    w.write_bytes(&frame.payload)
 }

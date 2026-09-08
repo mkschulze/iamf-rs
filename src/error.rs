@@ -83,6 +83,10 @@ pub enum ErrorKind {
     AdditionalProfileBelowPrimary,
     #[error("no profile permits this configuration")]
     ProfileNotFound,
+    #[error("this OBU type is not an Audio Frame")]
+    NotAnAudioFrame,
+    #[error("audio_substream_id disagrees with the id the OBU type implies")]
+    SubstreamIdMismatch,
     #[error("channel count exceeds what the profile permits")]
     ChannelCountExceedsProfile,
 }
