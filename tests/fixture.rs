@@ -23,6 +23,14 @@ use fixture::{
 };
 
 /// The `ObuType` of every OBU in a byte slice, in order.
+// GUARD-04's `allow-unwrap-in-tests` / `allow-expect-in-tests` /
+// `allow-panic-in-tests` carve-out (clippy.toml) applies to `#[test]` functions
+// only — a helper reachable from tests is not one. These helpers exist solely to
+// build or inspect a fixture, and a failure in them is an environment or
+// programming error that must stop the run loudly rather than be swallowed.
+// Kept as narrow, per-function allows so a future helper does not inherit the
+// exemption silently.
+#[allow(clippy::expect_used)]
 fn obu_types(bytes: &[u8]) -> Vec<ObuType> {
     let boundaries = find_obu_boundaries(bytes).expect("the fixture's OBU chain walks");
     let mut types = Vec::new();

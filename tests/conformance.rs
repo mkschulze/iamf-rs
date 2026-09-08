@@ -86,7 +86,13 @@ use iamf::sequence::{SequenceWriter, TemporalUnit};
 /// every consumer's `cargo build`, including Parallax's and docs.rs's, and it
 /// cannot be made conditional on "the developer wants reference tests".
 fn reference_decoder() -> Option<PathBuf> {
-    std::env::var_os("IAMF_REF_DECODER").map(PathBuf::from)
+    // An EMPTY value counts as unset. `IAMF_REF_DECODER=` is what a CI step
+    // that means "unset" usually writes, and treating it as a path would spawn
+    // the empty program and report the failure as a decode failure — a
+    // misdiagnosis, in the one place this file exists to prevent them.
+    std::env::var_os("IAMF_REF_DECODER")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Print the standard skip reason for a reference-gated test and return.

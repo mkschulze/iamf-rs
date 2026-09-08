@@ -122,7 +122,17 @@ pub fn peak_for(sample_size: u8) -> i32 {
 /// D-19). A constant or slowly-varying signal would make a swap invisible, and
 /// so would a signal whose channels ever coincide.
 pub fn ramp_sample(channel: usize, index: usize, peak: i32) -> i32 {
-    const STEP: i64 = 7919;
+    // `STEP` is a prime large enough to sweep the whole fold span several times
+    // over [`SAMPLE_FRAMES`] samples. That matters: a small step leaves the
+    // signal in one corner of its range — with a step of 7919 the 24-bit ramp
+    // never crosses zero in 300 frames — and a signal that never exercises its
+    // high bytes is a signal a wrong high byte can hide in.
+    //
+    // `OFFSET` separates the channels. It is coprime with the fold span at both
+    // 16 and 24 bits and smaller than either span divided by the channel count,
+    // so no two of the six channels ever coincide at any index — asserted by
+    // `the_ramp_distinguishes_every_channel_at_every_index`.
+    const STEP: i64 = 1_299_709;
     const OFFSET: i64 = 104_729;
     let span = i64::from(peak).saturating_mul(2).saturating_add(1);
     let base = i64::try_from(channel).unwrap_or(0).saturating_mul(OFFSET);
@@ -408,6 +418,14 @@ fn lpcm_config(id: u32, sample_size: u8, flags: SampleFormatFlags) -> CodecConfi
 /// `libiamf` treats a frame count that disagrees with `substream_count` as a
 /// hard error, so two sources for those two numbers is two numbers that
 /// eventually differ.
+// GUARD-04's `allow-unwrap-in-tests` / `allow-expect-in-tests` /
+// `allow-panic-in-tests` carve-out (clippy.toml) applies to `#[test]` functions
+// only — a helper reachable from tests is not one. These helpers exist solely to
+// build or inspect a fixture, and a failure in them is an environment or
+// programming error that must stop the run loudly rather than be swallowed.
+// Kept as narrow, per-function allows so a future helper does not inherit the
+// exemption silently.
+#[allow(clippy::panic)]
 fn channel_element(
     element_id: u32,
     codec_config_id: u32,
@@ -434,6 +452,7 @@ fn channel_element(
 
 /// The IA Sequence Header for a set of elements, with the **minimum** profile
 /// the configuration fits (PROF-02) rather than a hard-coded one.
+#[allow(clippy::panic)]
 fn header_for(elements: &[&AudioElement]) -> IaSequenceHeader {
     let (primary, additional) = select_minimum_profile(elements)
         .unwrap_or_else(|e| panic!("the fixture's element set has no profile: {e:?}"));

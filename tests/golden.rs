@@ -40,6 +40,14 @@ fn golden_dir() -> PathBuf {
 
 /// Read a committed golden artifact, failing with a message that says how to
 /// regenerate it rather than just that a file is missing.
+// GUARD-04's `allow-unwrap-in-tests` / `allow-expect-in-tests` /
+// `allow-panic-in-tests` carve-out (clippy.toml) applies to `#[test]` functions
+// only — a helper reachable from tests is not one. These helpers exist solely to
+// build or inspect a fixture, and a failure in them is an environment or
+// programming error that must stop the run loudly rather than be swallowed.
+// Kept as narrow, per-function allows so a future helper does not inherit the
+// exemption silently.
+#[allow(clippy::panic)]
 fn read_golden(name: &str) -> Vec<u8> {
     let path = golden_dir().join(name);
     match std::fs::read(&path) {
@@ -57,7 +65,10 @@ fn read_golden(name: &str) -> Vec<u8> {
 
 /// Lowercase hex of a byte slice.
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        text.push_str(&format!("{byte:02x}"));
+        text
+    })
 }
 
 /// The SHA-256 of `bytes`, as lowercase hex.

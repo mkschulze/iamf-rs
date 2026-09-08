@@ -21,6 +21,26 @@ A copy taken from either project's development tip does not belong here — both
 have drifted toward the draft-v2.0.0 tree, and a fixture from there is a file
 the pinned decoder rejects, which is a divergence no passing test would reveal.
 
+## `golden/` is not vendored — it is ours (D-20, GUARD-09)
+
+`tests/fixtures/golden/` holds three artifacts **this crate generates**, not
+copies of anything: `phase1_sample_identity.iamf` (7 073 bytes), its SHA-256,
+and an annotated structural dump produced by `iamf::dump::dump_annotated`. They
+are the committed golden every one of GUARD-09's four targets regenerates and
+compares against, which makes an output change a reviewable PR diff rather than
+a red job with no explanation.
+
+Nothing in that directory is licensed by AOM and nothing there is conformance
+evidence: a golden this crate generated is self-consistent with this crate by
+construction. It is change detection. Regenerate with
+
+```sh
+IAMF_REGENERATE_GOLDEN=1 cargo test --test golden regenerate_golden_artifacts -- --nocapture
+```
+
+and then **read the diff** — that is the whole reason the dump is committed
+alongside the bytes.
+
 ## The per-file size cap
 
 **65_536 bytes** (64 KiB) per file.

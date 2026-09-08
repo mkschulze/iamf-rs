@@ -5,10 +5,11 @@
 # golden-hash-only job on the non-Linux runners. A matrix that only builds
 # everywhere and only tests in one place does not support a byte-identity claim.
 #
-# The golden-fixture comparison this matrix exists to run lands in plan 01-08.
-# Until then the matrix proves the crate builds, lints and tests identically on
-# four targets, which is the property plan 01-08 will extend rather than
-# introduce.
+# The golden-fixture comparison this matrix exists to run landed in plan 01-08
+# and has its own named step below, so the byte-identity claim is legible in the
+# log rather than buried inside the general `cargo test` line. It is offline by
+# construction — no reference binary, no container — which is what lets it run
+# on all four targets rather than only on Linux (CONF-10).
 #
 # ---------------------------------------------------------------------------
 # Runner availability fallback (D-16's known operational risk)
@@ -94,6 +95,24 @@ jobs:
 
       - name: Test
         run: cargo test --locked --target ${{ matrix.target }}
+
+      # GUARD-09 and GUARD-10, as their own step. The general `cargo test` above
+      # already runs these targets; naming them separately is what makes a
+      # four-target byte-identity failure obvious in the log instead of one line
+      # among two hundred. If this step is red and the one above is green, the
+      # crate builds everywhere and produces DIFFERENT BYTES somewhere — look
+      # for a hashed container, a platform-dependent sort, or a float.
+      #
+      # `IAMF_REF_DECODER` is never set in this job, deliberately: the golden
+      # layer must be green with no reference binary present, which is what puts
+      # it in CONF-10's always-on layer. It is not exported to empty either —
+      # an empty path is not "unset", and the harness treats it as unset only
+      # because `reference_decoder()` was hardened to, not because a workflow
+      # can be relied on to get that distinction right.
+      - name: Golden fixture reproduces on this target (GUARD-09, GUARD-10)
+        run: >
+          cargo test --locked --target ${{ matrix.target }}
+          --test golden --test fixture
 
       # D-02: "dependency-free" means zero LINKED dependencies. Plain
       # `cargo tree -e normal` includes proc-macro edges and would show the whole

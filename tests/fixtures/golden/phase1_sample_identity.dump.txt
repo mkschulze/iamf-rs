@@ -1,0 +1,184 @@
+IA Sequence: 16 OBUs, 7073 bytes
+spec 1.1.0, dumped by iamf::dump — REVIEW AID, NOT CONFORMANCE EVIDENCE
+offset    field                             value
+--------  --------------------------------  -----
+
+00000000  OBU IaSequenceHeader              type=31 obu_size=6 len=8
+00000000  obu_redundant_copy                false
+00000000  ia_code                           0x69616d66 "iamf"
+00000000  primary_profile                   0
+00000000  additional_profile                0
+00000000  | f8 06 69 61 6d 66 00 00                          |..iamf..|
+
+00000008  OBU CodecConfig                   type=0 obu_size=16 len=18
+00000008  obu_redundant_copy                false
+00000008  codec_config_id                   200
+00000008  codec_id                          "ipcm"
+00000008  num_samples_per_frame             128
+00000008  audio_roll_distance               0
+00000008    sample_format_flags             1 (little-endian)
+00000008    sample_size                     24
+00000008    sample_rate                     48000
+00000008  | 00 10 c8 01 69 70 63 6d 80 01 00 00 01 18 00 00  |....ipcm........|
+00000018  | bb 80                                            |..|
+
+0000001a  OBU AudioElement                  type=1 obu_size=15 len=17
+0000001a  obu_redundant_copy                false
+0000001a  audio_element_id                  300
+0000001a  audio_element_type                0 (channel-based)
+0000001a  codec_config_id                   200
+0000001a  num_substreams                    4
+0000001a    audio_substream_id[0]           0
+0000001a    audio_substream_id[1]           1
+0000001a    audio_substream_id[2]           2
+0000001a    audio_substream_id[3]           3
+0000001a  num_parameters                    0
+0000001a  num_layers                        1
+0000001a    layer[0] loudspeaker_layout     2 (Ch5_1)
+0000001a    layer[0] substream_count        4
+0000001a    layer[0] coupled_substream_count  2
+0000001a    layer[0] output_gain_is_present  false
+0000001a    layer[0] recon_gain_is_present  false
+0000001a  | 08 0f ac 02 00 c8 01 04 00 01 02 03 00 20 20 04  |................|
+0000002a  | 02                                               |.|
+
+0000002b  OBU MixPresentation               type=2 obu_size=72 len=74
+0000002b  obu_redundant_copy                false
+0000002b  mix_presentation_id               42
+0000002b  count_label                       1
+0000002b    annotations_language[0]         "en-us"
+0000002b    localized_presentation_annotation[0]  "phase1_sample_identity"
+0000002b  num_sub_mixes                     1
+0000002b    sub_mix[0] num_audio_elements   1
+0000002b    sub_mix[0] element[0] audio_element_id  300
+0000002b    sub_mix[0] element[0] annotation[0]  "bed_5_1"
+0000002b    sub_mix[0] element[0] headphones_rendering_mode  0
+0000002b    sub_mix[0] element[0] rendering_config_extension  0 bytes
+0000002b    sub_mix[0] element[0] element_mix_gain parameter_id  100
+0000002b    sub_mix[0] element[0] element_mix_gain parameter_rate  48000
+0000002b    sub_mix[0] element[0] element_mix_gain param_definition_mode  true
+0000002b    sub_mix[0] element[0] element_mix_gain default_mix_gain  0.00000000 (0)
+0000002b    sub_mix[0] output_mix_gain parameter_id  100
+0000002b    sub_mix[0] output_mix_gain parameter_rate  48000
+0000002b    sub_mix[0] output_mix_gain param_definition_mode  true
+0000002b    sub_mix[0] output_mix_gain default_mix_gain  0.00000000 (0)
+0000002b    sub_mix[0] num_layouts          2
+0000002b    sub_mix[0] layout[0] layout_type  2
+0000002b    sub_mix[0] layout[0] sound_system  1 (B0_5_0)
+0000002b    sub_mix[0] layout[0] info_type  0
+0000002b    sub_mix[0] layout[0] integrated_loudness  -24.00000000 (-6144)
+0000002b    sub_mix[0] layout[0] digital_peak  -6.00000000 (-1536)
+0000002b    sub_mix[0] layout[1] layout_type  2
+0000002b    sub_mix[0] layout[1] sound_system  0 (A0_2_0)
+0000002b    sub_mix[0] layout[1] info_type  0
+0000002b    sub_mix[0] layout[1] integrated_loudness  -23.00000000 (-5888)
+0000002b    sub_mix[0] layout[1] digital_peak  -5.50000000 (-1408)
+0000002b  | 10 48 2a 01 65 6e 2d 75 73 00 70 68 61 73 65 31  |.H*.en-us.phase1|
+0000003b  | 5f 73 61 6d 70 6c 65 5f 69 64 65 6e 74 69 74 79  |_sample_identity|
+0000004b  | 00 01 01 ac 02 62 65 64 5f 35 5f 31 00 00 00 64  |.....bed_5_1...d|
+0000005b  | 80 f7 02 80 00 00 64 80 f7 02 80 00 00 02 84 00  |......d.........|
+0000006b  | e8 00 fa 00 80 00 e9 00 fa 80                    |..........|
+
+00000075  OBU AudioFrame(substream 0)       type=6 obu_size=768 len=771
+00000075  obu_redundant_copy                false
+00000075  obu_trimming_status_flag          false
+00000075  audio_substream_id                0
+00000075    id source                       implicit in obu_type (6 + substream_index)
+00000075  audio_frame (bytes)               768
+00000075  audio_frame[..16]                 00 00 c0 19 99 c1 fd d4 d3 16 6e d5 fa a9 e7 13 … (+752 more)
+
+00000378  OBU AudioFrame(substream 1)       type=7 obu_size=768 len=771
+00000378  obu_redundant_copy                false
+00000378  obu_trimming_status_flag          false
+00000378  audio_substream_id                1
+00000378    id source                       implicit in obu_type (6 + substream_index)
+00000378  audio_frame (bytes)               768
+00000378  audio_frame[..16]                 64 64 c6 7d fd c7 61 39 da 7a d2 db 5e 0e ee 77 … (+752 more)
+
+0000067b  OBU AudioFrame(substream 2)       type=8 obu_size=384 len=387
+0000067b  obu_redundant_copy                false
+0000067b  obu_trimming_status_flag          false
+0000067b  audio_substream_id                2
+0000067b    id source                       implicit in obu_type (6 + substream_index)
+0000067b  audio_frame (bytes)               384
+0000067b  audio_frame[..16]                 32 32 c3 2f 07 d7 2c dc ea 29 b1 fe 26 86 12 23 … (+368 more)
+
+000007fe  OBU AudioFrame(substream 3)       type=9 obu_size=384 len=387
+000007fe  obu_redundant_copy                false
+000007fe  obu_trimming_status_flag          false
+000007fe  audio_substream_id                3
+000007fe    id source                       implicit in obu_type (6 + substream_index)
+000007fe  audio_frame (bytes)               384
+000007fe  audio_frame[..16]                 4b cb c4 48 a0 d8 45 75 ec 42 4a 00 3f 1f 14 3c … (+368 more)
+
+00000981  OBU AudioFrame(substream 0)       type=6 obu_size=768 len=771
+00000981  obu_redundant_copy                false
+00000981  obu_trimming_status_flag          false
+00000981  audio_substream_id                0
+00000981    id source                       implicit in obu_type (6 + substream_index)
+00000981  audio_frame (bytes)               768
+00000981  audio_frame[..16]                 6d 7e 2a 86 17 2c 6a 53 3e 83 ec 3f 66 28 d2 7f … (+752 more)
+
+00000c84  OBU AudioFrame(substream 1)       type=7 obu_size=768 len=771
+00000c84  obu_redundant_copy                false
+00000c84  obu_trimming_status_flag          false
+00000c84  audio_substream_id                1
+00000c84    id source                       implicit in obu_type (6 + substream_index)
+00000c84  audio_frame (bytes)               768
+00000c84  audio_frame[..16]                 d1 e2 30 ea 7b 32 cd b7 c4 e6 50 c6 ca 8c d8 e3 … (+752 more)
+
+00000f87  OBU AudioFrame(substream 2)       type=8 obu_size=384 len=387
+00000f87  obu_redundant_copy                false
+00000f87  obu_trimming_status_flag          false
+00000f87  audio_substream_id                2
+00000f87    id source                       implicit in obu_type (6 + substream_index)
+00000f87  audio_frame (bytes)               384
+00000f87  audio_frame[..16]                 9f b0 2d 9b 85 c1 98 5a d5 95 2f e9 92 04 fd 8f … (+368 more)
+
+0000110a  OBU AudioFrame(substream 3)       type=9 obu_size=384 len=387
+0000110a  obu_redundant_copy                false
+0000110a  obu_trimming_status_flag          false
+0000110a  audio_substream_id                3
+0000110a    id source                       implicit in obu_type (6 + substream_index)
+0000110a  audio_frame (bytes)               384
+0000110a  audio_frame[..16]                 b8 49 2f b4 1e c3 b1 f3 d6 ae c8 ea ab 9d fe a8 … (+368 more)
+
+0000128d  OBU AudioFrame(substream 0)       type=6 obu_size=770 len=773
+0000128d  obu_redundant_copy                false
+0000128d  obu_trimming_status_flag          true
+0000128d  num_samples_to_trim_at_end        84
+0000128d  num_samples_to_trim_at_start      0
+0000128d  audio_substream_id                0
+0000128d    id source                       implicit in obu_type (6 + substream_index)
+0000128d  audio_frame (bytes)               768
+0000128d  audio_frame[..16]                 d9 fc 14 f2 95 16 d6 d1 28 ef 6a 2a d3 a6 3c ec … (+752 more)
+
+00001592  OBU AudioFrame(substream 1)       type=7 obu_size=770 len=773
+00001592  obu_redundant_copy                false
+00001592  obu_trimming_status_flag          true
+00001592  num_samples_to_trim_at_end        84
+00001592  num_samples_to_trim_at_start      0
+00001592  audio_substream_id                1
+00001592    id source                       implicit in obu_type (6 + substream_index)
+00001592  audio_frame (bytes)               768
+00001592  audio_frame[..16]                 3d 61 1b 56 fa 1c 3a 36 2f 53 cf 30 36 0b c3 4f … (+752 more)
+
+00001897  OBU AudioFrame(substream 2)       type=8 obu_size=386 len=389
+00001897  obu_redundant_copy                false
+00001897  obu_trimming_status_flag          true
+00001897  num_samples_to_trim_at_end        84
+00001897  num_samples_to_trim_at_start      0
+00001897  audio_substream_id                2
+00001897    id source                       implicit in obu_type (6 + substream_index)
+00001897  audio_frame (bytes)               384
+00001897  audio_frame[..16]                 0b 2f 18 08 04 2c 05 d9 3f 01 ae d3 fe 82 e7 fb … (+368 more)
+
+00001a1c  OBU AudioFrame(substream 3)       type=9 obu_size=386 len=389
+00001a1c  obu_redundant_copy                false
+00001a1c  obu_trimming_status_flag          true
+00001a1c  num_samples_to_trim_at_end        84
+00001a1c  num_samples_to_trim_at_start      0
+00001a1c  audio_substream_id                3
+00001a1c    id source                       implicit in obu_type (6 + substream_index)
+00001a1c  audio_frame (bytes)               384
+00001a1c  audio_frame[..16]                 24 c8 19 21 9d 2d 1d 72 c1 1a 47 d5 17 1c e9 14 … (+368 more)
