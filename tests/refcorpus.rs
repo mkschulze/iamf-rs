@@ -52,21 +52,22 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The `.iamf` count `MANIFEST.md` declares, so a fixture silently dropped from
 /// the corpus fails this test rather than quietly shrinking it.
-fn manifest_iamf_count() -> usize {
-    let text = fs::read_to_string(MANIFEST).expect("the fixture manifest is readable");
-    for line in text.lines() {
-        if let Some(tail) = line.split("files vendored:").nth(1) {
-            let digits: String = tail
-                .trim_start()
+///
+/// A helper rather than a `#[test]` body, so GUARD-04's carve-out does not
+/// reach it: it has no panic path and reports "the manifest no longer says" as
+/// `None`.
+fn manifest_iamf_count() -> Option<usize> {
+    let text = fs::read_to_string(MANIFEST).ok()?;
+    text.lines()
+        .filter_map(|line| line.split("files vendored:").nth(1))
+        .find_map(|tail| {
+            tail.trim_start()
                 .chars()
                 .take_while(char::is_ascii_digit)
-                .collect();
-            if let Ok(n) = digits.parse::<usize>() {
-                return n;
-            }
-        }
-    }
-    panic!("MANIFEST.md no longer declares an `.iamf` files vendored: N count");
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -86,10 +87,11 @@ fn every_vendored_iamf_walks_to_its_own_length() {
          measuring anything and would pass on an empty checkout"
     );
     assert_eq!(
-        files.len(),
+        Some(files.len()),
         manifest_iamf_count(),
         "MANIFEST.md declares a different number of vendored .iamf files than \
-         are on disk — a fixture was added or dropped without recording it"
+         are on disk — a fixture was added or dropped without recording it, or \
+         the manifest no longer carries the count at all"
     );
 
     for path in &files {
@@ -156,7 +158,8 @@ fn test_000003_walks_67_obus_ending_exactly_on_32567() {
 /// indistinguishable from a correct walk of a legitimately shorter file.
 #[test]
 fn a_file_truncated_mid_obu_is_an_error_not_a_short_boundary_list() {
-    let mut bytes = fs::read("tests/fixtures/reference/test_000003.iamf").expect("vendored fixture");
+    let mut bytes =
+        fs::read("tests/fixtures/reference/test_000003.iamf").expect("vendored fixture");
     bytes.truncate(bytes.len().saturating_sub(1));
 
     let err = find_obu_boundaries(&bytes)
