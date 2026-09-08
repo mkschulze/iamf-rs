@@ -40,15 +40,15 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Descriptor OBUs
 
-- [ ] **DESC-01**: IA Sequence Header (type 31) serialised and parsed
-- [ ] **DESC-02**: Codec Config (type 0) with an LPCM decoder config and a **derived** `audio_roll_distance`
-- [ ] **DESC-03**: `sample_format_flags` handled with the correct sense — `0` means **big**-endian, the opposite of a WAV-shaped assumption
-- [ ] **DESC-04**: Audio Element (type 1), single-layer channel-based, with recon gain and output gain flagged absent
-- [ ] **DESC-05**: Mix Presentation (type 2) with one sub-mix, including the **mandatory stereo layout** the reference hard-checks
-- [ ] **DESC-06**: Mandatory element and output Mix Gain param definitions (`param_definition_mode = 1`, `default_mix_gain = 0`) emitted even when the file contains zero Parameter Block OBUs
-- [ ] **DESC-07**: Layouts modelled as four distinct types — `loudspeaker_layout` (4 bits), `expanded_loudspeaker_layout` (u8, present only when layout == 15, offset by 13 from Eclipsa's index), `AmbisonicsConfig`, and `SoundSystem` — not one flat 31-variant enum
-- [ ] **DESC-08**: Descriptors written in reference order, honouring forward-only reference resolution (Audio Element references a Codec Config ID; Mix Presentation references Audio Element IDs)
-- [ ] **DESC-09**: Descriptor collections held as `Vec` in bitstream order with a `by_id()` accessor — never `BTreeMap`, which reorders bitstream-visible order
+- [x] **DESC-01**: IA Sequence Header (type 31) serialised and parsed
+- [x] **DESC-02**: Codec Config (type 0) with an LPCM decoder config and a **derived** `audio_roll_distance`
+- [x] **DESC-03**: `sample_format_flags` handled with the correct sense — `0` means **big**-endian, the opposite of a WAV-shaped assumption
+- [x] **DESC-04**: Audio Element (type 1), single-layer channel-based, with recon gain and output gain flagged absent
+- [x] **DESC-05**: Mix Presentation (type 2) with one sub-mix, including the **mandatory stereo layout** the reference hard-checks
+- [x] **DESC-06**: Mandatory element and output Mix Gain param definitions (`param_definition_mode = 1`, `default_mix_gain = 0`) emitted even when the file contains zero Parameter Block OBUs
+- [x] **DESC-07**: Layouts modelled as four distinct types — `loudspeaker_layout` (4 bits), `expanded_loudspeaker_layout` (u8, present only when layout == 15, offset by 13 from Eclipsa's index), `AmbisonicsConfig`, and `SoundSystem` — not one flat 31-variant enum
+- [x] **DESC-08**: Descriptors written in reference order, honouring forward-only reference resolution (Audio Element references a Codec Config ID; Mix Presentation references Audio Element IDs)
+- [x] **DESC-09**: Descriptor collections held as `Vec` in bitstream order with a `by_id()` accessor — never `BTreeMap`, which reorders bitstream-visible order
 
 ### Time-varying OBUs
 
@@ -206,15 +206,15 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | OBU-06 | Phase 1 | Complete |
 | OBU-07 | Phase 1 | Complete |
 | OBU-08 | Phase 1 | Complete |
-| DESC-01 | Phase 1 | Pending |
-| DESC-02 | Phase 1 | Pending |
-| DESC-03 | Phase 1 | Pending |
-| DESC-04 | Phase 1 | Pending |
-| DESC-05 | Phase 1 | Pending |
-| DESC-06 | Phase 1 | Pending |
-| DESC-07 | Phase 1 | Pending |
-| DESC-08 | Phase 1 | Pending |
-| DESC-09 | Phase 1 | Pending |
+| DESC-01 | Phase 1 | Complete |
+| DESC-02 | Phase 1 | Complete |
+| DESC-03 | Phase 1 | Complete |
+| DESC-04 | Phase 1 | Complete |
+| DESC-05 | Phase 1 | Complete |
+| DESC-06 | Phase 1 | Complete |
+| DESC-07 | Phase 1 | Complete |
+| DESC-08 | Phase 1 | Complete |
+| DESC-09 | Phase 1 | Complete |
 | TIME-01 | Phase 1 | Pending |
 | TIME-02 | Phase 1 | Pending |
 | TIME-03 | Phase 1 | Pending |
