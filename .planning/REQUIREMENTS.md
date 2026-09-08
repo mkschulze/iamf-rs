@@ -23,7 +23,15 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 - [ ] **OBU-01**: Header byte 0 encoded MSB-first as `[obu_type:5][obu_redundant_copy:1][type_specific_flag:1][obu_extension_flag:1]`
 - [ ] **OBU-02**: `obu_size` written as uleb128 counting every byte after the size field itself — trim fields and extension header included, byte 0 and the size bytes excluded
-- [ ] **OBU-03**: Bit 6 modelled as a polymorphic enum carried by the payload variant, not a shared `bool` — trimming status for audio frames, inverted `is_not_key_frame` for temporal delimiter, reserved-SHALL-be-0 elsewhere
+- [ ] **OBU-03**: Bit 6 modelled as an enum carried by the payload variant, not a shared `bool`, with exactly **two** cases — trimming status for Audio Frames (types 5 and 6..=23), and reserved-SHALL-be-0 for every other type
+
+  *Amended 2026-09-08 (plan 01-04).* The original wording gave bit 6 four meanings, adding an inverted key-frame flag for the Temporal Delimiter and an optional-fields flag for Mix Presentation. **That describes `iamf-tools@main`, a draft-v2.0.0 tree — not the v2.1.0 tag this project pins.**
+
+  - *Positive evidence.* At `iamf-tools@v2.1.0` the field is named `obu_trimming_status_flag`, and `IsTrimmingStatusFlagAllowed` (`iamf/obu/obu_header.cc:60-70`) returns `true` **only** for `kObuIaAudioFrame` and `kObuIaAudioFrameId0..=17`. `ObuHeader::Validate` (`obu_header.cc:95-101`) turns any other use into an `InvalidArgumentError`.
+  - *Negative evidence.* A repository-wide grep for the four draft-v2.0.0 symbol names over `iamf/obu/` returns **nothing** at v2.1.0 and returns **all of them** at `main`, where the accompanying comment reads "In IAMF v2.0.0, if `optional_fields_flag` is true…".
+  - *Decoder-side consequence, and the reason this is dangerous rather than merely wrong.* `libiamf@v1.1.0`'s `IAMF_OBU_split` (`code/src/iamf_dec/IAMF_OBU.c:64-120`) reads the two trim fields whenever bit 6 is set, **for any OBU type**; its own development tip guards that with an audio-frame check, but the tree we pin does not. So the four-variant model shifts a descriptor OBU's entire payload by two bytes on the exact decoder whose acceptance is the Core Value — silently, with no error and no crash, and invisibly to any test that only round-trips against itself.
+
+  **OBU-04 is unaffected.** The `obu_redundant_copy` legality table is correct as written and was verified at the same tag (`obu_header.cc:43-57`). Implemented as `TypeSpecific { Trimming(Option<Trimming>), Reserved }` in `src/obu/header.rs`; a verify gate greps `src/` for the draft-v2.0.0 names and must find none.
 - [ ] **OBU-04**: `obu_redundant_copy` rejected on audio frames, temporal delimiters and parameter blocks; legal only on descriptors (0, 1, 2, 31)
 - [ ] **OBU-05**: Trimming fields written END first, then START
 - [ ] **OBU-06**: Extension header (`extension_header_size` uleb128 plus that many bytes) read and written

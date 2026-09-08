@@ -76,7 +76,16 @@ There are four plausible wrong answers, and all four produce a file that *nearly
 
 ### Pitfall 2: Treating the third header bit as `obu_trimming_status_flag` for every OBU type
 
+> **PROVENANCE NOTE, added 2026-09-08 (plan 01-04). The four-variant model below was read from `iamf-tools@main` — a draft-v2.0.0 tree — not from the v2.1.0 tag this project pins. The pinned tree has TWO variants.**
+>
+> `GetIsKeyFrame` and `GetOptionalFieldsFlag`, cited in the confidence line immediately below, **do not exist anywhere under `iamf/obu/` at `iamf-tools@v2.1.0`**; they appear only at `main`. At v2.1.0, `IsTrimmingStatusFlagAllowed` returns true **only for Audio Frames** (types 5 and 6..=23) and `Validate()` rejects every other use.
+>
+> The pitfall's core lesson — *do not model bit 6 as a `bool` on a shared header* — stands, and so does everything it says about `obu_redundant_copy`. Only the number of variants changes, and it changes in the dangerous direction: `libiamf@v1.1.0`'s `IAMF_OBU_split` reads the trim fields for **any** type whose bit 6 is set, so implementing the four-variant model shifts a descriptor's payload by two bytes on the pinned decoder with no error and no crash.
+>
+> The original text is left in place below rather than rewritten, because knowing *where* the four-variant model came from is what stops it being re-derived. See `01-RESEARCH.md` CORRECTION 1 for the greps at both revisions, `REQUIREMENTS.md` OBU-03 for the amended requirement, and `src/obu/header.rs` for the model actually implemented.
+
 **Confidence: HIGH — read from `obu_header.cc` (`Validate`, `GetObuTrimmingStatusFlag`, `GetIsKeyFrame`, `GetOptionalFieldsFlag`) and `iamf_obu.c`.**
+*(Superseded — see the provenance note above. `GetIsKeyFrame`/`GetOptionalFieldsFlag` are `main`-only symbols.)*
 
 **What goes wrong:**
 
