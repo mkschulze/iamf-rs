@@ -115,8 +115,8 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [x] **FUZZ-01**: `fuzz/` as an independent workspace with its own lockfile, excluded from the root workspace
 - [x] **FUZZ-02**: `parse_sequence` fuzz target
 - [x] **FUZZ-03**: `obu_roundtrip` fuzz target
-- [ ] **FUZZ-04**: Corpus committed and seeded from real `iamf-tools` output
-- [ ] **FUZZ-05**: Stable-toolchain corpus-regression test on all four targets, so every crash ever found becomes a permanent cross-platform test
+- [x] **FUZZ-04**: Corpus committed and seeded from real `iamf-tools` output
+- [x] **FUZZ-05**: Stable-toolchain corpus-regression test on all four targets, so every crash ever found becomes a permanent cross-platform test
 
 ### Codec framing
 
@@ -260,8 +260,8 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | FUZZ-01 | Phase 2 | Complete |
 | FUZZ-02 | Phase 2 | Complete |
 | FUZZ-03 | Phase 2 | Complete |
-| FUZZ-04 | Phase 2 | Pending |
-| FUZZ-05 | Phase 2 | Pending |
+| FUZZ-04 | Phase 2 | Complete |
+| FUZZ-05 | Phase 2 | Complete |
 | CODEC-01 | Phase 3 | Pending |
 | CODEC-02 | Phase 3 | Pending |
 | CODEC-03 | Phase 3 | Pending |

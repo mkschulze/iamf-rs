@@ -87,7 +87,7 @@ Plans:
 - [x] 02-04: Round-trip properties in both directions with exact unknown-data position fidelity
 - [x] 02-05: Independently derive and assert field-level expectations for the committed reference corpus
 - [x] 02-06: Independent `fuzz/` workspace, shared bounded model generator, and exactly two fuzz targets
-- [ ] 02-07: Committed seeded corpora, four-target stable replay, and bounded nightly fuzzing
+- [x] 02-07: Committed seeded corpora, four-target stable replay, and bounded nightly fuzzing
 
 ### Phase 3: FLAC and Opus Framing
 
