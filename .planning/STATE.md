@@ -4,17 +4,17 @@ milestone: v1
 current_phase: 02
 current_phase_name: Parser, Round-Trip and Fuzzing
 status: in_progress
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-09-09T01:30:47.130Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-09-09T01:50:17.698Z"
 last_activity: 2026-09-09
-last_activity_desc: Plan 02-02 completed — reserved-field fidelity and literal migration
+last_activity_desc: Plan 02-03 completed — transactional flat sequence parser, validation, and grouping
 state_head: 4d81cd0
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 17
-  completed_plans: 12
-  percent: 71
+  completed_plans: 13
+  percent: 76
 ---
 
 # Project State
@@ -29,24 +29,13 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 02 (Parser, Round-Trip and Fuzzing) — IN PROGRESS
-Plan: 2 of 7
-Status: Plan 02-02 complete; ready for 02-03
-Last activity: 2026-09-09 — Reserved-field fidelity and literal migration completed
+Plan: 3 of 7
+Status: Plan 02-03 complete; ready for 02-04
+Last activity: 2026-09-09 — Transactional flat sequence parser, validation, and grouping completed
 
-Progress: [███░░░░░░░] 29% of Phase 02 plans
+Progress: [████░░░░░░] 43% of Phase 02 plans
 
 ## Performance Metrics
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| - | - | - | - |
-
-**Recent Trend:**
-
-- Last 5 plans: —
-- Trend: —
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -65,6 +54,7 @@ Progress: [███░░░░░░░] 29% of Phase 02 plans
 | Phase 01 P10 | 34min | 4 tasks | 5 files |
 | Phase 02 P01 | 16min | 2 tasks | 7 files |
 | Phase 02 P02 | 14min | 2 tasks | 13 files |
+| Phase 02 P03 | 15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -117,6 +107,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Reserved demixing modes and high Recon Gain bits are preserved and diagnosed rather than rejected or normalized.
 - [Phase 02]: Each reserved group is stored at its nearest exact wire structure and emitted unchanged.
 - [Phase 02]: Non-zero reserved syntax remains structurally permissive and is diagnosed only through validate().
+- [Phase 02]: Sequence parsing dispatches the real cursor only through central bounded OBU readers and translates payload errors once.
+- [Phase 02]: Flat validation and grouping retain exact wire order and never reconstruct or sort a DescriptorSet.
 
 ### Pending Todos
 
@@ -148,6 +140,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-09T01:30:47.127Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-09-09T01:50:17.695Z
+Stopped at: Completed 02-03-PLAN.md
 Resume file: None

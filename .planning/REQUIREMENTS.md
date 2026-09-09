@@ -102,7 +102,7 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Parser and round-trip
 
-- [ ] **PARSE-01**: Sequence-level parser reading a bitstream back into the model
+- [x] **PARSE-01**: Sequence-level parser reading a bitstream back into the model
 - [x] **PARSE-02**: `ParamDefinitionRegistry` passed as an explicit argument to the parser
 - [ ] **PARSE-03**: `parse(serialize(model)) == model` holds universally
 - [ ] **PARSE-04**: `serialize(parse(bytes)) == bytes` holds for our own output, with the non-minimal-leb128 caveat documented for foreign files
@@ -250,7 +250,7 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | GUARD-11 | Phase 1 | Complete |
 | GUARD-12 | Phase 1 | Complete |
 | GUARD-13 | Phase 1 | Complete |
-| PARSE-01 | Phase 2 | Pending |
+| PARSE-01 | Phase 2 | Complete |
 | PARSE-02 | Phase 2 | Complete |
 | PARSE-03 | Phase 2 | Pending |
 | PARSE-04 | Phase 2 | Pending |
