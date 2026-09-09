@@ -85,8 +85,8 @@ Plans:
 - [x] 02-02: Preserve and migrate every reserved field currently discarded by known readers
 - [x] 02-03: Transactional sequence parser, flat-order validation, and canonical temporal grouping
 - [x] 02-04: Round-trip properties in both directions with exact unknown-data position fidelity
-- [ ] 02-05: Independently derive and assert field-level expectations for the committed reference corpus
-- [ ] 02-06: Independent `fuzz/` workspace, shared bounded model generator, and exactly two fuzz targets
+- [x] 02-05: Independently derive and assert field-level expectations for the committed reference corpus
+- [x] 02-06: Independent `fuzz/` workspace, shared bounded model generator, and exactly two fuzz targets
 - [ ] 02-07: Committed seeded corpora, four-target stable replay, and bounded nightly fuzzing
 
 ### Phase 3: FLAC and Opus Framing
@@ -151,7 +151,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
-| 2. Parser, Round-Trip and Fuzzing | 5/7 | In Progress | - |
+| 2. Parser, Round-Trip and Fuzzing | 6/7 | In Progress | - |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
