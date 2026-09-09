@@ -4,17 +4,17 @@ milestone: v1
 current_phase: 02
 current_phase_name: Parser, Round-Trip and Fuzzing
 status: in_progress
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-09-09T02:06:40Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-09-09T02:53:28Z"
 last_activity: 2026-09-09
-last_activity_desc: Plan 02-04 completed — structural and byte round trips with exact unknown-data fidelity
-state_head: c12e22b
+last_activity_desc: Plan 02-05 completed — all 39 reference fixtures have evidence-backed semantic dispositions
+state_head: 59e2133
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 17
-  completed_plans: 14
-  percent: 82
+  completed_plans: 15
+  percent: 88
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 02 (Parser, Round-Trip and Fuzzing) — IN PROGRESS
-Plan: 4 of 7
-Status: Plan 02-04 complete; ready for 02-05
-Last activity: 2026-09-09 — Structural and byte round trips with exact unknown-data fidelity completed
+Plan: 5 of 7
+Status: Plan 02-05 complete; ready for 02-06
+Last activity: 2026-09-09 — Reference corpus semantic dispositions completed
 
-Progress: [██████░░░░] 57% of Phase 02 plans
+Progress: [███████░░░] 71% of Phase 02 plans
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [██████░░░░] 57% of Phase 02 plans
 | Phase 02 P02 | 14min | 2 tasks | 13 files |
 | Phase 02 P03 | 15min | 2 tasks | 3 files |
 | Phase 02 P04 | 13min | 2 tasks | 3 files |
+| Phase 02 P05 | 19min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,7 @@ Recent decisions affecting current work:
 - [Phase 02]: ParsedSequence::from_parts mirrors canonical writer order without serialization and centralizes known trailing bytes for derived equality.
 - [Phase 02]: Own-output byte identity covers both writer paths; legal foreign non-minimal obu_size widths canonicalize and are the explicit syntax caveat.
 - [Phase 02]: Unknown fidelity is locked by semantic index, raw bytes, and complete absolute OBU boundary vectors.
+- [Phase 02]: Bounded ungoverned Parameter Blocks preserve raw bytes and validate missing context; governed malformed syntax remains structural.
 
 ### Pending Todos
 
@@ -136,14 +138,12 @@ Recent decisions affecting current work:
 
 ## Deferred Items
 
-Items acknowledged and deferred at milestone close, most recent first:
-
 | Category | Item | Status | Deferred At | Milestone |
 |----------|------|--------|-------------|-----------|
 | *(none)* | | | | |
 
 ## Session Continuity
 
-Last session: 2026-09-09T02:06:40Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-09-09T02:53:28.673Z
+Stopped at: Completed 02-05-PLAN.md
 Resume file: None

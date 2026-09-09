@@ -108,7 +108,7 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 - [x] **PARSE-04**: `serialize(parse(bytes)) == bytes` holds for our own output, with the non-minimal-leb128 caveat documented for foreign files
 - [x] **PARSE-05**: Unknown OBU types preserved verbatim at the correct byte offset
 - [x] **PARSE-06**: Unknown parameter data preserved verbatim
-- [ ] **PARSE-07**: Files produced by `iamf-tools` parse successfully and are asserted understood
+- [x] **PARSE-07**: Files produced by `iamf-tools` parse successfully and are asserted understood
 
 ### Fuzzing
 
@@ -256,7 +256,7 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | PARSE-04 | Phase 2 | Complete |
 | PARSE-05 | Phase 2 | Complete |
 | PARSE-06 | Phase 2 | Complete |
-| PARSE-07 | Phase 2 | Pending |
+| PARSE-07 | Phase 2 | Complete |
 | FUZZ-01 | Phase 2 | Pending |
 | FUZZ-02 | Phase 2 | Pending |
 | FUZZ-03 | Phase 2 | Pending |
