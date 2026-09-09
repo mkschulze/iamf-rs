@@ -13,7 +13,7 @@ categories = ["encoding", "multimedia::audio"]
 
 [workspace]
 members = ["."]
-exclude = ["fuzz"]
+exclude = ["fuzz", "tools/codec-fixtures"]
 
 # Every dependency states its licence on the line that adds it (CLAUDE.md
 # Constraints). Phase 1's shipping graph is exactly one crate: `thiserror` is

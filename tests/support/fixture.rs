@@ -712,6 +712,65 @@ pub fn endianness() -> Fixture {
     }
 }
 
+/// Three committed FLAC access units; generation is exclusively in the
+/// excluded `tools/codec-fixtures` integration-test package.
+#[allow(clippy::expect_used)] // Missing committed fixtures must stop tests loudly.
+pub fn flac() -> Fixture {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codecs/flac");
+    let bytes = std::fs::read(dir.join("expected.s16le")).expect("committed FLAC expected PCM");
+    assert_eq!(bytes.len(), 1200, "300 stereo s16le frames");
+    let pcm = bytes
+        .chunks_exact(2)
+        .map(|pair| i32::from(i16::from_le_bytes(pair.try_into().expect("two PCM bytes"))))
+        .collect();
+    let units = (0..3)
+        .map(|index| EncodedTemporalUnit {
+            trimming: (index == 2).then_some(Trimming {
+                at_end: 84,
+                at_start: 0,
+            }),
+            substream_payloads: vec![
+                std::fs::read(dir.join(format!("packet-{index:03}.bin")))
+                    .expect("committed opaque FLAC frame"),
+            ],
+        })
+        .collect();
+    let config = CodecConfig::flac(200, 128, 48_000, 16).expect("valid FLAC configuration");
+    let element = channel_element(300, 200, LoudspeakerLayout::Stereo, 0);
+    let mix_gain = MixGainParamDefinition::mode_1(100, SAMPLE_RATE);
+    let presentation = MixPresentation {
+        mix_presentation_id: 42,
+        annotations_language: vec![b"en-us".to_vec()],
+        localized_presentation_annotations: vec![b"phase3_flac".to_vec()],
+        sub_mixes: vec![SubMix {
+            elements: vec![SubMixAudioElement {
+                audio_element_id: 300,
+                localized_element_annotations: vec![b"stereo_flac".to_vec()],
+                rendering_config: RenderingConfig::stereo(),
+                element_mix_gain: mix_gain.clone(),
+            }],
+            output_mix_gain: mix_gain,
+            layouts: vec![LayoutWithLoudness {
+                layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
+                loudness: Loudness::new(-6144, -1536),
+            }],
+        }],
+        trailing: Vec::new(),
+    };
+    Fixture {
+        name: "phase3_flac",
+        descriptors: DescriptorSet {
+            sequence_header: header_for(&[&element]),
+            codec_configs: vec![config],
+            audio_elements: vec![element],
+            mix_presentations: vec![presentation],
+        },
+        expected_pcm: vec![pcm],
+        frame_sources: vec![FrameSource::PreEncoded(units)],
+    }
+}
+
 /// **CONF-04 — the structure-only fixture.**
 ///
 /// **Two** Audio Elements in one sub-mix, so descriptor ordering is observable

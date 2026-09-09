@@ -1586,6 +1586,16 @@ fn the_endianness_fixture_is_conformant() {
     }
 }
 
+/// The committed three-frame FLAC corpus uses the unchanged shared gate.
+#[test]
+fn the_flac_fixture_is_conformant() {
+    let fixture = fixture::flac();
+    match assert_conformant(&fixture) {
+        Ok(report) => report.print(fixture.name),
+        Err(message) => panic!("{message}"),
+    }
+}
+
 /// **CONF-04 on the structure-only fixture.**
 ///
 /// Its decoded PCM is a **mix** — `iamfdec` renders every element in the sub-mix

@@ -1,0 +1,25 @@
+[package]
+name = "iamf-codec-fixtures"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT OR Apache-2.0"
+autolib = false
+autobins = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[workspace]
+members = ["."]
+
+[dev-dependencies]
+flacenc = { version = "=0.5.1", default-features = false } # Apache-2.0
+claxon = "=0.4.3" # Apache-2.0
+opus = "=0.4.0" # MIT OR Apache-2.0; bundled libopus is BSD-3-Clause
+sha2 = "=0.10.9" # MIT OR Apache-2.0
+
+[[test]]
+name = "flac_fixtures"
+path = "tests/flac_fixtures.rs"
