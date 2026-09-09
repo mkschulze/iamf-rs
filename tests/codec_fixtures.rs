@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use iamf::obu::Trimming;
+
 #[path = "support/fixture.rs"]
 mod fixture;
 
@@ -12,9 +14,18 @@ fn corpus() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codecs/flac")
 }
 
+fn opus_corpus() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codecs/opus")
+}
+
 #[allow(clippy::expect_used)] // Missing committed artifacts must fail loudly.
 fn artifact(name: &str) -> Vec<u8> {
     std::fs::read(corpus().join(name)).expect("committed FLAC artifact must exist")
+}
+
+#[allow(clippy::expect_used)] // Missing committed artifacts must fail loudly.
+fn opus_artifact(name: &str) -> Vec<u8> {
+    std::fs::read(opus_corpus().join(name)).expect("committed Opus artifact must exist")
 }
 
 #[allow(clippy::expect_used)] // Committed test data must be readable.
@@ -43,6 +54,102 @@ fn pcm(bytes: &[u8], big_endian: bool) -> Vec<i32> {
             })
         })
         .collect()
+}
+
+struct OpusCorpus {
+    lookahead: usize,
+    packets: usize,
+    end_trim: usize,
+    source_frames: usize,
+    units: Vec<fixture::EncodedTemporalUnit>,
+    expected: Vec<i32>,
+}
+
+#[allow(clippy::expect_used)] // A malformed committed corpus is a hard test failure.
+fn load_opus_corpus() -> OpusCorpus {
+    let text = String::from_utf8(opus_artifact("MANIFEST.md")).expect("UTF-8 Opus manifest");
+    let mut fields = BTreeMap::new();
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(" = ") {
+            assert!(fields.insert(key.to_owned(), value.to_owned()).is_none());
+        }
+    }
+    let number = |key: &str| -> usize {
+        fields
+            .get(key)
+            .unwrap_or_else(|| panic!("Opus manifest field {key}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("numeric Opus manifest field {key}"))
+    };
+    let lookahead = number("L");
+    let packets = number("P");
+    let end_trim = number("E");
+    let source_frames = number("S");
+    assert!(lookahead > 0, "Opus lookahead must be nonzero");
+    assert_eq!(packets, (source_frames + lookahead).div_ceil(960));
+    assert!(
+        packets >= 2,
+        "Opus corpus must contain at least two packets"
+    );
+    assert_eq!(end_trim, packets * 960 - lookahead - source_frames);
+    assert!(end_trim > 0 && end_trim < 960);
+    assert_ne!(end_trim, lookahead);
+
+    for (key, expected) in fields.iter().filter(|(key, _)| key.starts_with("sha256.")) {
+        let name = key.strip_prefix("sha256.").expect("digest key prefix");
+        let digest = format!("{:x}", Sha256::digest(opus_artifact(name)));
+        assert_eq!(&digest, expected, "{name}");
+    }
+
+    let order = fields
+        .get("packet_order")
+        .expect("Opus packet order")
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    assert_eq!(order.len(), packets);
+    let mut units = Vec::with_capacity(packets);
+    for (index, name) in order.iter().enumerate() {
+        let bytes = opus_artifact(name);
+        assert!(!bytes.is_empty(), "Opus packet {name} must be nonempty");
+        assert!(!bytes.windows(8).any(|window| window == b"OpusHead"));
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            fields.get(&format!("sha256.{name}")),
+            Some(&digest),
+            "{name}"
+        );
+        let trimming = if index == 0 {
+            Some(Trimming {
+                at_start: lookahead as u32,
+                at_end: 0,
+            })
+        } else if index + 1 == packets {
+            Some(Trimming {
+                at_start: 0,
+                at_end: end_trim as u32,
+            })
+        } else {
+            None
+        };
+        units.push(fixture::EncodedTemporalUnit {
+            trimming,
+            substream_payloads: vec![bytes],
+        });
+    }
+    let expected_bytes = opus_artifact("expected.s16le");
+    let digest = format!("{:x}", Sha256::digest(&expected_bytes));
+    assert_eq!(fields.get("sha256.expected.s16le"), Some(&digest));
+    let expected = pcm(&expected_bytes, false);
+    assert_eq!(expected.len(), source_frames * 2, "expected stereo frames");
+    OpusCorpus {
+        lookahead,
+        packets,
+        end_trim,
+        source_frames,
+        units,
+        expected,
+    }
 }
 
 fn crc(bytes: &[u8], width: u32, polynomial: u16) -> u16 {
@@ -234,4 +341,40 @@ fn flac_adapter_writes_exact_packets_and_only_final_end_trim() {
             }))
         );
     }
+}
+
+#[test]
+fn opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output() {
+    let corpus = load_opus_corpus();
+    assert_eq!(corpus.units.len(), corpus.packets);
+    assert_eq!(
+        corpus.units[0].trimming,
+        Some(Trimming {
+            at_start: corpus.lookahead as u32,
+            at_end: 0
+        })
+    );
+    assert_eq!(
+        corpus.units.last().and_then(|unit| unit.trimming),
+        Some(Trimming {
+            at_start: 0,
+            at_end: corpus.end_trim as u32
+        })
+    );
+    for unit in corpus
+        .units
+        .iter()
+        .skip(1)
+        .take(corpus.packets.saturating_sub(2))
+    {
+        assert!(
+            unit.trimming.is_none()
+                || unit.trimming
+                    == Some(Trimming {
+                        at_start: 0,
+                        at_end: 0
+                    })
+        );
+    }
+    assert_eq!(corpus.expected.len(), corpus.source_frames * 2);
 }
