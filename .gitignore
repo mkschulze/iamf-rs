@@ -36,3 +36,6 @@ target
 # cargo-fuzz build products are transient. The independent lockfile, seed
 # corpus, and intentionally minimized regression artifacts remain tracked.
 /fuzz/target/
+
+# Isolated development worktrees.
+/.worktrees/
