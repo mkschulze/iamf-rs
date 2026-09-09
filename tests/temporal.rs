@@ -17,11 +17,11 @@ use iamf::error::{ErrorKind, Location};
 use iamf::obu::{
     AnimationType, AudioFrame, BlockDurationFields, DemixingInfoParameterData, DurationFields,
     MixGainParameterData, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
-    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock,
-    ReconGainElement, ReconGainInfoParameterData, TemporalDelimiter, Trimming, TypeSpecific,
-    obu_type_for, plan_frames, read_audio_frame, read_obu_with, read_obu_with_header,
-    read_parameter_block, read_temporal_delimiter, substream_id_for, validate_temporal_unit,
-    write_audio_frame, write_obu, write_obu_with, write_obu_with_header, write_parameter_block,
+    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock, ReconGainElement,
+    ReconGainInfoParameterData, TemporalDelimiter, Trimming, TypeSpecific, obu_type_for,
+    plan_frames, read_audio_frame, read_obu_with, read_obu_with_header, read_parameter_block,
+    read_temporal_delimiter, substream_id_for, validate_temporal_unit, write_audio_frame,
+    write_obu, write_obu_with, write_obu_with_header, write_parameter_block,
     write_temporal_delimiter,
 };
 
@@ -444,12 +444,8 @@ fn a_mode_1_parameter_block_carries_its_own_duration_fields() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(
-        &mut w,
-        &definition,
-        &ParameterDataContext::MixGain,
-        &block,
-    );
+    let written =
+        write_parameter_block(&mut w, &definition, &ParameterDataContext::MixGain, &block);
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(w.finish().unwrap_or_default(), bytes);
 
@@ -468,6 +464,7 @@ fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
     let definition = ParamDefinition {
         parameter_id: 100,
         parameter_rate: 16000,
+        reserved: 0,
         duration_fields: Some(DurationFields {
             duration: 256,
             constant_subblock_duration: 128,
@@ -494,12 +491,8 @@ fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(
-        &mut w,
-        &definition,
-        &ParameterDataContext::MixGain,
-        &block,
-    );
+    let written =
+        write_parameter_block(&mut w, &definition, &ParameterDataContext::MixGain, &block);
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(w.finish().unwrap_or_default(), bytes);
 }
@@ -690,11 +683,11 @@ fn explicit_parameter_subblock_durations_are_required_and_must_sum_to_duration()
         &missing,
     )
     .expect_err("mode 1 with no constant duration carries each duration");
+    assert_eq!(missing_err.kind(), &ErrorKind::SubblockDurationMismatch);
     assert_eq!(
-        missing_err.kind(),
-        &ErrorKind::SubblockDurationMismatch
+        missing_writer.finish().unwrap_or_default(),
+        Vec::<u8>::new()
     );
-    assert_eq!(missing_writer.finish().unwrap_or_default(), Vec::<u8>::new());
 
     let mut sum_writer = BitWriter::new();
     let sum_err = write_parameter_block(
@@ -724,10 +717,7 @@ fn parameter_subblock_durations_are_forbidden_when_the_duration_is_implied() {
     let err = write_parameter_block(&mut w, &definition, &ParameterDataContext::MixGain, &block)
         .expect_err("an implied duration has no per-subblock field on the wire");
 
-    assert_eq!(
-        err.kind(),
-        &ErrorKind::SubblockDurationMismatch
-    );
+    assert_eq!(err.kind(), &ErrorKind::SubblockDurationMismatch);
     assert_eq!(w.finish().unwrap_or_default(), Vec::<u8>::new());
 }
 
@@ -787,7 +777,10 @@ fn a_subblock_count_larger_than_the_bytes_remaining_is_refused_before_reserving(
     );
 }
 
-fn registry_with(definition: ParamDefinition, context: ParameterDataContext) -> ParamDefinitionRegistry {
+fn registry_with(
+    definition: ParamDefinition,
+    context: ParameterDataContext,
+) -> ParamDefinitionRegistry {
     let mut registry = ParamDefinitionRegistry::new();
     registry.register(definition, context);
     registry
@@ -877,10 +870,13 @@ fn missing_and_mismatched_recon_gain_context_are_located_errors() {
         subblocks: vec![ParameterSubblock {
             subblock_duration: None,
             data: ParameterData::ReconGain(ReconGainInfoParameterData {
-                layers: vec![None, Some(ReconGainElement {
-                    recon_gain_flag: 0,
-                    recon_gain: [0; 12],
-                })],
+                layers: vec![
+                    None,
+                    Some(ReconGainElement {
+                        recon_gain_flag: 0,
+                        recon_gain: [0; 12],
+                    }),
+                ],
             }),
         }],
     };
@@ -915,8 +911,7 @@ fn reserved_demixing_modes_and_high_recon_flags_are_preserved_but_diagnosed() {
         })],
     });
     assert!(recon.validate().iter().any(|finding| {
-        finding.at == Location::Field("recon_gain_flag")
-            && finding.message.contains("above bit 11")
+        finding.at == Location::Field("recon_gain_flag") && finding.message.contains("above bit 11")
     }));
 }
 

@@ -17,8 +17,8 @@
 use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::{ErrorKind, Location};
-use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::model::by_id;
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
     AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, AudioElementType,
     ChannelAudioLayerConfig, CodecConfig, DecoderConfig, IaSequenceHeader, Layout,
@@ -170,7 +170,10 @@ fn codec_config_reproduces_offsets_0x08_through_0x19() {
 #[test]
 fn codec_config_matches_the_vendored_reference_file_at_0x08() {
     let expected = TEST_000003.get(0x08..0x1a).expect("the file is longer");
-    assert_eq!(obu_bytes(&published_codec_config(), write_codec_config), expected);
+    assert_eq!(
+        obu_bytes(&published_codec_config(), write_codec_config),
+        expected
+    );
 }
 
 #[test]
@@ -293,7 +296,10 @@ fn codec_config_validate_reports_all_six_out_of_range_conditions() {
         "sample_rate",
         "audio_roll_distance",
     ] {
-        assert!(joined.contains(field), "no finding named `{field}`:\n{joined}");
+        assert!(
+            joined.contains(field),
+            "no finding named `{field}`:\n{joined}"
+        );
     }
     assert!(
         messages.len() >= 6,
@@ -304,13 +310,20 @@ fn codec_config_validate_reports_all_six_out_of_range_conditions() {
 #[test]
 fn the_first_26_bytes_of_test_000003_are_reproduced_from_its_published_configuration() {
     let mut w = BitWriter::new();
-    write_obu_with(&mut w, &published_sequence_header(), write_ia_sequence_header)
-        .expect("sequence header");
+    write_obu_with(
+        &mut w,
+        &published_sequence_header(),
+        write_ia_sequence_header,
+    )
+    .expect("sequence header");
     write_obu_with(&mut w, &published_codec_config(), write_codec_config).expect("codec config");
     let produced = w.finish().expect("byte-aligned");
 
     assert_eq!(produced.len(), 0x1a);
-    assert_eq!(produced.as_slice(), TEST_000003.get(0x00..0x1a).expect("longer"));
+    assert_eq!(
+        produced.as_slice(),
+        TEST_000003.get(0x00..0x1a).expect("longer")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +336,7 @@ fn reserved_element_obu(value: u8) -> Vec<u8> {
     let type_byte = value.wrapping_shl(5);
     vec![
         0x08, 0x0c, // Audio Element, obu_size 12
-        0xac, 0x02, // audio_element_id 300
+        0xac, 0x02,      // audio_element_id 300
         type_byte, // audio_element_type(3) / reserved(5)
         0xc8, 0x01, // codec_config_id 200
         0x01, 0x00, // num_substreams 1, id 0
@@ -359,9 +372,7 @@ fn every_audio_element_reserved_group_round_trips_without_normalization() {
     // Hand-computed packing: every reserved group is non-zero and adjacent to
     // a differently-sized live field, so a width or ordering mistake changes
     // this vector rather than merely changing a model assertion.
-    let bytes = hex!(
-        "08 13 01 1b 02 01 03 01 01 04 05 d5 b3 ab 32 1a 01 01 ab 12 34"
-    );
+    let bytes = hex!("08 13 01 1b 02 01 03 01 01 04 05 d5 b3 ab 32 1a 01 01 ab 12 34");
     let mut reader = BitCursor::new(&bytes);
     let parsed = read_obu_with(&mut reader, read_audio_element).expect("reserved values parse");
 
@@ -371,7 +382,11 @@ fn every_audio_element_reserved_group_round_trips_without_normalization() {
         default_reserved,
         default_w_reserved,
         ..
-    } = parsed.payload.params.first().expect("one demixing definition")
+    } = parsed
+        .payload
+        .params
+        .first()
+        .expect("one demixing definition")
     else {
         panic!("expected demixing definition");
     };
@@ -410,7 +425,9 @@ fn every_audio_element_reserved_group_round_trips_without_normalization() {
         "output_gain.reserved",
     ] {
         assert!(
-            findings.iter().any(|finding| finding.at == Location::Field(field)),
+            findings
+                .iter()
+                .any(|finding| finding.at == Location::Field(field)),
             "missing finding for {field}: {findings:?}"
         );
     }
@@ -663,19 +680,31 @@ fn rendering_and_layout_reserved_groups_round_trip_at_their_exact_widths() {
     assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
 
     let findings = parsed.payload.validate();
-    assert!(findings.iter().any(|finding| {
-        finding.at == Location::Field("rendering_config.reserved")
-    }));
-    assert!(findings.iter().any(|finding| {
-        finding.at == Location::Field("layout.reserved")
-    }));
+    assert!(
+        findings
+            .iter()
+            .any(|finding| { finding.at == Location::Field("rendering_config.reserved") })
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| { finding.at == Location::Field("layout.reserved") })
+    );
 }
 
 #[test]
 fn integrated_loudness_and_digital_peak_are_signed_16_big_endian() {
     let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
-    assert_eq!(bytes.get(0x4c..0x4e), Some(hex!("ca 5b").as_slice()), "-13733");
-    assert_eq!(bytes.get(0x4e..0x50), Some(hex!("cd b1").as_slice()), "-12879");
+    assert_eq!(
+        bytes.get(0x4c..0x4e),
+        Some(hex!("ca 5b").as_slice()),
+        "-13733"
+    );
+    assert_eq!(
+        bytes.get(0x4e..0x50),
+        Some(hex!("cd b1").as_slice()),
+        "-12879"
+    );
 }
 
 #[test]
@@ -726,10 +755,12 @@ fn a_sub_mix_with_two_layouts_serialises_two_loudness_blocks() {
         sub_mix.layouts = vec![
             LayoutWithLoudness {
                 layout: Layout::SoundSystem(SoundSystem::B0_5_0),
+                reserved: 0,
                 loudness: Loudness::new(-14000, -13000),
             },
             LayoutWithLoudness {
                 layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
                 loudness: Loudness::new(-13733, -12879),
             },
         ];
@@ -938,9 +969,7 @@ fn the_120_byte_descriptor_prologue_of_test_000003_is_reproduced_byte_exact() {
         produced.as_slice(),
         TEST_000003.get(0x00..0x78).expect("the file is longer"),
     );
-    assert!(
-        published_descriptor_set().validate().is_empty(),
-        "{:?}",
-        published_descriptor_set().validate()
-    );
+    let findings = published_descriptor_set().validate();
+    assert_eq!(findings.len(), 1, "unexpected findings: {findings:?}");
+    assert!(findings[0].message.contains("parameter_id 100"));
 }

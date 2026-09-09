@@ -68,6 +68,8 @@ impl HeadphonesRenderingMode {
 pub struct RenderingConfig {
     /// `headphones_rendering_mode`.
     pub headphones_rendering_mode: HeadphonesRenderingMode,
+    /// Six reserved bits following `headphones_rendering_mode`.
+    pub reserved: u8,
     /// `rendering_config_extension_bytes`, verbatim. Its size is derived from
     /// this length.
     pub extension: Vec<u8>,
@@ -79,6 +81,7 @@ impl RenderingConfig {
     pub const fn stereo() -> Self {
         Self {
             headphones_rendering_mode: HeadphonesRenderingMode::Stereo,
+            reserved: 0,
             extension: Vec::new(),
         }
     }
@@ -250,6 +253,9 @@ impl Layout {
 pub struct LayoutWithLoudness {
     /// `loudness_layout`.
     pub layout: Layout,
+    /// Reserved bits following the layout selector: two bits for Sound System
+    /// layouts and six bits for every other layout type.
+    pub reserved: u8,
     /// `loudness`.
     pub loudness: Loudness,
 }
@@ -384,6 +390,13 @@ impl MixPresentation {
         for sub_mix in &self.sub_mixes {
             findings.extend(sub_mix.validate());
             for element in &sub_mix.elements {
+                push_reserved_finding(
+                    &mut findings,
+                    element.rendering_config.reserved,
+                    "rendering_config.reserved",
+                    6,
+                );
+                findings.extend(element.element_mix_gain.definition.validate());
                 if element.localized_element_annotations.len() != self.count_label() {
                     findings.push(Finding {
                         at: Location::Field("localized_element_annotations"),
@@ -397,8 +410,26 @@ impl MixPresentation {
                     });
                 }
             }
+            findings.extend(sub_mix.output_mix_gain.definition.validate());
+            for layout in &sub_mix.layouts {
+                let width = if layout.layout.sound_system().is_some() {
+                    2
+                } else {
+                    6
+                };
+                push_reserved_finding(&mut findings, layout.reserved, "layout.reserved", width);
+            }
         }
         findings
+    }
+}
+
+fn push_reserved_finding(findings: &mut Vec<Finding>, value: u8, field: &'static str, width: u8) {
+    if value != 0 {
+        findings.push(Finding {
+            at: Location::Field(field),
+            message: format!("{field} is non-zero ({value:#x}) in its {width}-bit reserved field"),
+        });
     }
 }
 
@@ -600,13 +631,14 @@ fn write_sub_mix_audio_element(w: &mut BitWriter, v: &SubMixAudioElement) -> Res
 fn read_rendering_config(r: &mut BitCursor<'_>) -> Result<RenderingConfig> {
     let headphones_rendering_mode =
         HeadphonesRenderingMode::from_value(u8::try_from(r.read_unsigned(2)?).unwrap_or(0));
-    let _reserved = r.read_unsigned(6)?;
+    let reserved = u8::try_from(r.read_unsigned(6)?).unwrap_or(0);
     let start = r.byte_position();
     let size = r.read_uleb128()?;
     let size = usize::try_from(size)
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
     Ok(RenderingConfig {
         headphones_rendering_mode,
+        reserved,
         extension: r.read_uint8_span(size)?.to_vec(),
     })
 }
@@ -615,7 +647,7 @@ fn read_rendering_config(r: &mut BitCursor<'_>) -> Result<RenderingConfig> {
 /// Write the rendering config, its extension size derived from the bytes.
 fn write_rendering_config(w: &mut BitWriter, v: &RenderingConfig) -> Result<()> {
     w.write_unsigned(u64::from(v.headphones_rendering_mode.value()), 2)?;
-    w.write_unsigned(0, 6)?;
+    w.write_unsigned(u64::from(v.reserved), 6)?;
     write_derived_count(w, v.extension.len(), "rendering_config_extension_size")?;
     w.write_bytes(&v.extension)
 }
@@ -651,20 +683,25 @@ fn write_mix_gain_param_definition(w: &mut BitWriter, v: &MixGainParamDefinition
 /// structurally paired with it.
 fn read_layout_with_loudness(r: &mut BitCursor<'_>) -> Result<LayoutWithLoudness> {
     let layout_type = u8::try_from(r.read_unsigned(2)?).unwrap_or(0);
-    let layout = if layout_type == 2 {
+    let (layout, reserved) = if layout_type == 2 {
         let sound_system = u8::try_from(r.read_unsigned(4)?).unwrap_or(0);
-        let _reserved = r.read_unsigned(2)?;
-        Layout::SoundSystem(SoundSystem::from_value(sound_system))
+        let reserved = u8::try_from(r.read_unsigned(2)?).unwrap_or(0);
+        (
+            Layout::SoundSystem(SoundSystem::from_value(sound_system)),
+            reserved,
+        )
     } else {
-        let _reserved = r.read_unsigned(6)?;
-        if layout_type == 3 {
+        let reserved = u8::try_from(r.read_unsigned(6)?).unwrap_or(0);
+        let layout = if layout_type == 3 {
             Layout::Binaural
         } else {
             Layout::Reserved(layout_type)
-        }
+        };
+        (layout, reserved)
     };
     Ok(LayoutWithLoudness {
         layout,
+        reserved,
         loudness: read_loudness(r)?,
     })
 }
@@ -676,9 +713,9 @@ fn write_layout_with_loudness(w: &mut BitWriter, v: &LayoutWithLoudness) -> Resu
     match v.layout.sound_system() {
         Some(sound_system) => {
             w.write_unsigned(u64::from(sound_system.value()), 4)?;
-            w.write_unsigned(0, 2)?;
+            w.write_unsigned(u64::from(v.reserved), 2)?;
         }
-        None => w.write_unsigned(0, 6)?,
+        None => w.write_unsigned(u64::from(v.reserved), 6)?,
     }
     write_loudness(w, &v.loudness)
 }

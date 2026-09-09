@@ -118,6 +118,7 @@ pub fn published_mix_presentation() -> Obu<MixPresentation> {
                 output_mix_gain: published_mix_gain(),
                 layouts: vec![LayoutWithLoudness {
                     layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                    reserved: 0,
                     // -13733 / 256 == -53.64453125 LUFS, and
                     // -12879 / 256 == -50.30859375 dBFS. `tests/profile.rs`
                     // proves `lufs_to_q7_8` reproduces both from those inputs.

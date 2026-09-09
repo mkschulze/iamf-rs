@@ -7,7 +7,9 @@ use crate::model::layout::{
     AmbisonicsConfig, AmbisonicsMonoConfig, AmbisonicsProjectionConfig, ExpandedLoudspeakerLayout,
     LoudspeakerLayout,
 };
-use crate::obu::param_definition::{ParamDefinition, read_param_definition, write_param_definition};
+use crate::obu::param_definition::{
+    ParamDefinition, read_param_definition, write_param_definition,
+};
 
 /// `param_definition_type` for a demixing parameter.
 pub const PARAM_DEFINITION_DEMIXING: u32 = 1;
@@ -20,6 +22,8 @@ pub const PARAM_DEFINITION_RECON_GAIN: u32 = 2;
 pub struct OutputGain {
     /// `output_gain_flags`, a 6-bit channel mask.
     pub flags: u8,
+    /// Two reserved bits following `output_gain_flags`.
+    pub reserved: u8,
     /// `output_gain`, a signed 16-bit Q7.8 value.
     pub gain: i16,
 }
@@ -45,6 +49,8 @@ pub struct ChannelAudioLayerConfig {
     /// `recon_gain_is_present_flag`. See the type comment for why this one is
     /// stored.
     pub recon_gain_is_present: bool,
+    /// Two reserved bits following the gate flags.
+    pub reserved: u8,
     /// `substream_count`.
     pub substream_count: u8,
     /// `coupled_substream_count`.
@@ -64,6 +70,7 @@ impl ChannelAudioLayerConfig {
             loudspeaker_layout,
             output_gain: None,
             recon_gain_is_present: false,
+            reserved: 0,
             substream_count,
             coupled_substream_count,
         }
@@ -88,6 +95,8 @@ impl ChannelAudioLayerConfig {
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.h ScalableChannelLayoutConfig
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScalableChannelLayoutConfig {
+    /// Five reserved bits following `num_layers`.
+    pub reserved: u8,
     /// The layers, in bitstream order.
     pub layers: Vec<ChannelAudioLayerConfig>,
 }
@@ -97,6 +106,7 @@ impl ScalableChannelLayoutConfig {
     #[must_use]
     pub fn single_layer(layer: ChannelAudioLayerConfig) -> Self {
         Self {
+            reserved: 0,
             layers: vec![layer],
         }
     }
@@ -216,8 +226,12 @@ pub enum AudioElementParam {
         definition: ParamDefinition,
         /// `default_dmixp_mode`, 3 bits.
         default_dmixp_mode: u8,
+        /// Five reserved bits following `default_dmixp_mode`.
+        default_reserved: u8,
         /// `default_w`, 4 bits.
         default_w: u8,
+        /// Four reserved bits following `default_w`.
+        default_w_reserved: u8,
     },
     /// `PARAMETER_DEFINITION_RECON_GAIN = 2`.
     ReconGain {
@@ -257,6 +271,8 @@ impl AudioElementParam {
 pub struct AudioElement {
     /// `audio_element_id`.
     pub audio_element_id: u32,
+    /// Five reserved bits following `audio_element_type`.
+    pub reserved: u8,
     /// `audio_element_type` and the config it gates.
     pub audio_element_type: AudioElementType,
     /// `codec_config_id`, resolved forward-only through
@@ -285,6 +301,7 @@ impl AudioElement {
     ) -> Self {
         Self {
             audio_element_id,
+            reserved: 0,
             audio_element_type: AudioElementType::channel_based(ChannelBasedConfig {
                 scalable_channel_layout,
             }),
@@ -311,6 +328,7 @@ impl AudioElement {
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
+        push_reserved_finding(&mut findings, self.reserved, "audio_element.reserved", 5);
         if self.audio_substream_ids.is_empty() {
             findings.push(Finding {
                 at: Location::Field("num_substreams"),
@@ -319,6 +337,12 @@ impl AudioElement {
             });
         }
         if let AudioElementType::ChannelBased(config) = &self.audio_element_type {
+            push_reserved_finding(
+                &mut findings,
+                config.scalable_channel_layout.reserved,
+                "scalable_channel_layout_config.reserved",
+                5,
+            );
             let layers = &config.scalable_channel_layout.layers;
             if layers.is_empty() {
                 findings.push(Finding {
@@ -340,8 +364,50 @@ impl AudioElement {
                     ),
                 });
             }
+            for layer in layers {
+                push_reserved_finding(
+                    &mut findings,
+                    layer.reserved,
+                    "channel_audio_layer_config.reserved",
+                    2,
+                );
+                if let Some(output_gain) = layer.output_gain {
+                    push_reserved_finding(
+                        &mut findings,
+                        output_gain.reserved,
+                        "output_gain.reserved",
+                        2,
+                    );
+                }
+            }
         }
         for param in &self.params {
+            match param {
+                AudioElementParam::Demixing {
+                    definition,
+                    default_reserved,
+                    default_w_reserved,
+                    ..
+                } => {
+                    findings.extend(definition.validate());
+                    push_reserved_finding(
+                        &mut findings,
+                        *default_reserved,
+                        "default_demixing_info_parameter_data.reserved",
+                        5,
+                    );
+                    push_reserved_finding(
+                        &mut findings,
+                        *default_w_reserved,
+                        "default_w.reserved",
+                        4,
+                    );
+                }
+                AudioElementParam::ReconGain { definition } => {
+                    findings.extend(definition.validate());
+                }
+                AudioElementParam::Extension { .. } => {}
+            }
             if param.param_definition_type() == 0 {
                 findings.push(Finding {
                     at: Location::Field("param_definition_type"),
@@ -355,6 +421,15 @@ impl AudioElement {
     }
 }
 
+fn push_reserved_finding(findings: &mut Vec<Finding>, value: u8, field: &'static str, width: u8) {
+    if value != 0 {
+        findings.push(Finding {
+            at: Location::Field(field),
+            message: format!("{field} is non-zero ({value:#x}) in its {width}-bit reserved field"),
+        });
+    }
+}
+
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AudioElementObu::ReadAndValidatePayloadDerived
 /// Read an Audio Element payload from a **bounded** payload reader.
 ///
@@ -365,7 +440,7 @@ impl AudioElement {
 pub fn read_audio_element(r: &mut BitCursor<'_>) -> Result<AudioElement> {
     let audio_element_id = r.read_uleb128()?;
     let type_value = u8::try_from(r.read_unsigned(3)?).unwrap_or(0);
-    let _reserved = r.read_unsigned(5)?;
+    let reserved = u8::try_from(r.read_unsigned(5)?).unwrap_or(0);
     let codec_config_id = r.read_uleb128()?;
 
     let audio_substream_ids = read_counted(r, |r| r.read_uleb128())?;
@@ -393,6 +468,7 @@ pub fn read_audio_element(r: &mut BitCursor<'_>) -> Result<AudioElement> {
 
     Ok(AudioElement {
         audio_element_id,
+        reserved,
         audio_element_type,
         codec_config_id,
         audio_substream_ids,
@@ -406,7 +482,7 @@ pub fn read_audio_element(r: &mut BitCursor<'_>) -> Result<AudioElement> {
 pub fn write_audio_element(w: &mut BitWriter, v: &AudioElement) -> Result<()> {
     w.write_uleb128_minimal(v.audio_element_id)?;
     w.write_unsigned(u64::from(v.audio_element_type.value()), 3)?;
-    w.write_unsigned(0, 5)?;
+    w.write_unsigned(u64::from(v.reserved), 5)?;
     w.write_uleb128_minimal(v.codec_config_id)?;
 
     write_count(w, v.audio_substream_ids.len(), "num_substreams")?;
@@ -476,13 +552,15 @@ fn read_audio_element_param(r: &mut BitCursor<'_>) -> Result<AudioElementParam> 
         PARAM_DEFINITION_DEMIXING => {
             let definition = read_param_definition(r)?;
             let default_dmixp_mode = u8::try_from(r.read_unsigned(3)?).unwrap_or(0);
-            let _reserved = r.read_unsigned(5)?;
+            let default_reserved = u8::try_from(r.read_unsigned(5)?).unwrap_or(0);
             let default_w = u8::try_from(r.read_unsigned(4)?).unwrap_or(0);
-            let _reserved = r.read_unsigned(4)?;
+            let default_w_reserved = u8::try_from(r.read_unsigned(4)?).unwrap_or(0);
             Ok(AudioElementParam::Demixing {
                 definition,
                 default_dmixp_mode,
+                default_reserved,
                 default_w,
+                default_w_reserved,
             })
         }
         PARAM_DEFINITION_RECON_GAIN => Ok(AudioElementParam::ReconGain {
@@ -509,13 +587,15 @@ fn write_audio_element_param(w: &mut BitWriter, v: &AudioElementParam) -> Result
         AudioElementParam::Demixing {
             definition,
             default_dmixp_mode,
+            default_reserved,
             default_w,
+            default_w_reserved,
         } => {
             write_param_definition(w, definition)?;
             w.write_unsigned(u64::from(*default_dmixp_mode), 3)?;
-            w.write_unsigned(0, 5)?;
+            w.write_unsigned(u64::from(*default_reserved), 5)?;
             w.write_unsigned(u64::from(*default_w), 4)?;
-            w.write_unsigned(0, 4)
+            w.write_unsigned(u64::from(*default_w_reserved), 4)
         }
         AudioElementParam::ReconGain { definition } => write_param_definition(w, definition),
         AudioElementParam::Extension { bytes, .. } => {
@@ -533,7 +613,7 @@ fn read_scalable_channel_layout_config(
     let start = r.byte_position();
     let num_layers = usize::try_from(r.read_unsigned(3)?)
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
-    let _reserved = r.read_unsigned(5)?;
+    let reserved = u8::try_from(r.read_unsigned(5)?).unwrap_or(0);
     // Bounds-check before reserving: a layer is at least three bytes, so a
     // count above the bytes left is unreadable by construction.
     if num_layers > r.bytes_remaining() {
@@ -546,7 +626,7 @@ fn read_scalable_channel_layout_config(
     for _ in 0..num_layers {
         layers.push(read_channel_audio_layer_config(r)?);
     }
-    Ok(ScalableChannelLayoutConfig { layers })
+    Ok(ScalableChannelLayoutConfig { reserved, layers })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc ScalableChannelLayoutConfig::Write
@@ -558,7 +638,7 @@ fn write_scalable_channel_layout_config(
     let num_layers = u64::try_from(v.layers.len())
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::Field("num_layers")))?;
     w.write_unsigned(num_layers, 3)?;
-    w.write_unsigned(0, 5)?;
+    w.write_unsigned(u64::from(v.reserved), 5)?;
     for layer in &v.layers {
         write_channel_audio_layer_config(w, layer)?;
     }
@@ -573,15 +653,19 @@ fn read_channel_audio_layer_config(r: &mut BitCursor<'_>) -> Result<ChannelAudio
     let layout_bits = u8::try_from(r.read_unsigned(4)?).unwrap_or(0);
     let output_gain_is_present = r.read_bool()?;
     let recon_gain_is_present = r.read_bool()?;
-    let _reserved_a = r.read_unsigned(2)?;
+    let reserved = u8::try_from(r.read_unsigned(2)?).unwrap_or(0);
     let substream_count = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
     let coupled_substream_count = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
 
     let output_gain = if output_gain_is_present {
         let flags = u8::try_from(r.read_unsigned(6)?).unwrap_or(0);
-        let _reserved_b = r.read_unsigned(2)?;
+        let reserved = u8::try_from(r.read_unsigned(2)?).unwrap_or(0);
         let gain = i16::try_from(r.read_signed(16)?).unwrap_or(0);
-        Some(OutputGain { flags, gain })
+        Some(OutputGain {
+            flags,
+            reserved,
+            gain,
+        })
     } else {
         None
     };
@@ -600,6 +684,7 @@ fn read_channel_audio_layer_config(r: &mut BitCursor<'_>) -> Result<ChannelAudio
         loudspeaker_layout,
         output_gain,
         recon_gain_is_present,
+        reserved,
         substream_count,
         coupled_substream_count,
     })
@@ -609,19 +694,16 @@ fn read_channel_audio_layer_config(r: &mut BitCursor<'_>) -> Result<ChannelAudio
 /// Write one layer. Both gate flags come from the data they gate, never from a
 /// stored copy — see [`ChannelAudioLayerConfig`] for why `recon_gain` is the
 /// documented exception.
-fn write_channel_audio_layer_config(
-    w: &mut BitWriter,
-    v: &ChannelAudioLayerConfig,
-) -> Result<()> {
+fn write_channel_audio_layer_config(w: &mut BitWriter, v: &ChannelAudioLayerConfig) -> Result<()> {
     w.write_unsigned(u64::from(v.loudspeaker_layout.value()), 4)?;
     w.write_bool(v.output_gain_is_present())?;
     w.write_bool(v.recon_gain_is_present())?;
-    w.write_unsigned(0, 2)?;
+    w.write_unsigned(u64::from(v.reserved), 2)?;
     w.write_unsigned(u64::from(v.substream_count), 8)?;
     w.write_unsigned(u64::from(v.coupled_substream_count), 8)?;
     if let Some(gain) = v.output_gain {
         w.write_unsigned(u64::from(gain.flags), 6)?;
-        w.write_unsigned(0, 2)?;
+        w.write_unsigned(u64::from(gain.reserved), 2)?;
         w.write_signed(i64::from(gain.gain), 16)?;
     }
     if let Some(expanded) = v.loudspeaker_layout.expanded() {
@@ -661,18 +743,14 @@ fn read_ambisonics_config(r: &mut BitCursor<'_>) -> Result<AmbisonicsConfig> {
             let coupled_substream_count = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
             let rows = usize::from(substream_count)
                 .checked_add(usize::from(coupled_substream_count))
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start))
-                })?;
+                .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
             let entries = rows
                 .checked_mul(usize::from(output_channel_count))
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start))
-                })?;
+                .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
             // Two bytes per entry, checked before reserving.
-            let bytes_needed = entries.checked_mul(2).ok_or_else(|| {
-                Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start))
-            })?;
+            let bytes_needed = entries
+                .checked_mul(2)
+                .ok_or_else(|| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
             if bytes_needed > r.bytes_remaining() {
                 return Err(Error::new(
                     ErrorKind::UnexpectedEndOfInput,

@@ -16,7 +16,7 @@
 //! with a "not applicable" value.
 
 use crate::bits::{BitCursor, BitWriter};
-use crate::error::{Error, ErrorKind, Location, Result};
+use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::DescriptorSet;
 
 use super::audio_element::{AudioElement, AudioElementParam, AudioElementType};
@@ -216,6 +216,9 @@ pub struct ParamDefinition {
     pub parameter_id: u32,
     /// `parameter_rate`, in ticks per second.
     pub parameter_rate: u32,
+    /// Seven reserved bits following `param_definition_mode`, preserved
+    /// verbatim so foreign syntax can round-trip.
+    pub reserved: u8,
     /// The duration block, present exactly when `param_definition_mode` is
     /// `false`.
     ///
@@ -236,6 +239,7 @@ impl ParamDefinition {
         Self {
             parameter_id,
             parameter_rate,
+            reserved: 0,
             duration_fields: None,
         }
     }
@@ -249,6 +253,21 @@ impl ParamDefinition {
     pub const fn param_definition_mode(&self) -> bool {
         self.duration_fields.is_none()
     }
+
+    /// Semantic findings for the shared definition prefix.
+    #[must_use]
+    pub fn validate(&self) -> Vec<Finding> {
+        reserved_finding(self.reserved, "param_definition.reserved", 7)
+            .into_iter()
+            .collect()
+    }
+}
+
+fn reserved_finding(value: u8, field: &'static str, width: u8) -> Option<Finding> {
+    (value != 0).then(|| Finding {
+        at: Location::Field(field),
+        message: format!("{field} is non-zero ({value:#x}) in its {width}-bit reserved field"),
+    })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/param_definitions.cc ParamDefinition::ReadAndValidate
@@ -258,7 +277,6 @@ pub fn read_param_definition(r: &mut BitCursor<'_>) -> Result<ParamDefinition> {
     let parameter_rate = r.read_uleb128()?;
     let param_definition_mode = r.read_bool()?;
     let reserved = u8::try_from(r.read_unsigned(7)?).unwrap_or(0);
-    let _ = reserved; // Preserved as zero on write; reported by no rule here.
 
     let duration_fields = if param_definition_mode {
         None
@@ -297,6 +315,7 @@ pub fn read_param_definition(r: &mut BitCursor<'_>) -> Result<ParamDefinition> {
     Ok(ParamDefinition {
         parameter_id,
         parameter_rate,
+        reserved,
         duration_fields,
     })
 }
@@ -310,7 +329,7 @@ pub fn write_param_definition(w: &mut BitWriter, v: &ParamDefinition) -> Result<
     w.write_uleb128_minimal(v.parameter_id)?;
     w.write_uleb128_minimal(v.parameter_rate)?;
     w.write_bool(v.param_definition_mode())?;
-    w.write_unsigned(0, 7)?;
+    w.write_unsigned(u64::from(v.reserved), 7)?;
     if let Some(fields) = v.duration_fields.as_ref() {
         w.write_uleb128_minimal(fields.duration)?;
         w.write_uleb128_minimal(fields.constant_subblock_duration)?;
