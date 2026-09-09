@@ -40,7 +40,11 @@ fn duplicate_parameter_ids_are_retained_and_lookup_binds_to_the_first() {
 #[test]
 fn descriptor_observation_preserves_nested_wire_order() {
     let mut descriptors = published_descriptor_set();
-    descriptors.audio_elements[0].params = vec![
+    descriptors
+        .audio_elements
+        .first_mut()
+        .expect("published fixture has one Audio Element")
+        .params = vec![
         AudioElementParam::Demixing {
             definition: definition(11),
             default_dmixp_mode: 0,
@@ -63,10 +67,44 @@ fn descriptor_observation_preserves_nested_wire_order() {
 }
 
 #[test]
+fn registry_lookup_follows_the_audio_element_order_emitted_by_the_writer() {
+    let mut later = support::published_audio_element().payload;
+    later.audio_element_id = 20;
+    later.params = vec![AudioElementParam::Demixing {
+        definition: definition(55),
+        default_dmixp_mode: 0,
+        default_w: 0,
+    }];
+    let mut earlier = later.clone();
+    earlier.audio_element_id = 10;
+    earlier.params = vec![AudioElementParam::ReconGain {
+        definition: definition(55),
+    }];
+    let mut descriptors = published_descriptor_set();
+    descriptors.audio_elements = vec![later, earlier];
+    descriptors.mix_presentations.clear();
+
+    let registry = ParamDefinitionRegistry::from_descriptors(&descriptors)
+        .expect("the definitions are structurally readable");
+
+    assert_eq!(
+        registry.get(55).map(|entry| &entry.context),
+        Some(&ParameterDataContext::ReconGain {
+            recon_gain_is_present: vec![false],
+        }),
+        "Audio Element 10 is emitted before Audio Element 20"
+    );
+}
+
+#[test]
 fn an_extension_definition_registers_its_shared_prefix_and_reserved_context() {
     let mut descriptors = published_descriptor_set();
     // ParamDefinition { id: 7, rate: 1, mode: 1 }, followed by extension data.
-    descriptors.audio_elements[0].params = vec![AudioElementParam::Extension {
+    descriptors
+        .audio_elements
+        .first_mut()
+        .expect("published fixture has one Audio Element")
+        .params = vec![AudioElementParam::Extension {
         param_definition_type: 9,
         bytes: vec![0x07, 0x01, 0x80, 0xaa],
     }];
@@ -82,11 +120,14 @@ fn an_extension_definition_registers_its_shared_prefix_and_reserved_context() {
 #[test]
 fn recon_gain_context_has_exactly_one_presence_flag_per_channel_layer() {
     let mut descriptors = published_descriptor_set();
-    descriptors.audio_elements[0].params = vec![AudioElementParam::ReconGain {
+    let element = descriptors
+        .audio_elements
+        .first_mut()
+        .expect("published fixture has one Audio Element");
+    element.params = vec![AudioElementParam::ReconGain {
         definition: definition(12),
     }];
-    let AudioElementType::ChannelBased(config) =
-        &mut descriptors.audio_elements[0].audio_element_type
+    let AudioElementType::ChannelBased(config) = &mut element.audio_element_type
     else {
         unreachable!("published fixture is channel based");
     };

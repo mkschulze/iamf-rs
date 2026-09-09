@@ -17,7 +17,7 @@ use iamf::error::{ErrorKind, Location};
 use iamf::obu::{
     AnimationType, AudioFrame, BlockDurationFields, DemixingInfoParameterData, DurationFields,
     MixGainParameterData, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
-    ParamDefinitionType, ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock,
+    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock,
     ReconGainElement, ReconGainInfoParameterData, TemporalDelimiter, Trimming, TypeSpecific,
     obu_type_for, plan_frames, read_audio_frame, read_obu_with, read_obu_with_header,
     read_parameter_block, read_temporal_delimiter, substream_id_for, validate_temporal_unit,
@@ -422,9 +422,10 @@ fn a_mode_1_parameter_block_carries_its_own_duration_fields() {
     // Then one subblock: animation_type 0 (Step), start_point_value 0.
     let bytes = hex!("64 80 01 80 01 00 00 00");
     let definition = ParamDefinition::mode_1(100, 16000);
+    let registry = registry_with(definition.clone(), ParameterDataContext::MixGain);
     let mut r = BitCursor::new(&bytes);
 
-    let block = match read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain) {
+    let block = match read_parameter_block(&mut r, &registry) {
         Ok(block) => block,
         Err(error) => panic!("a mode-1 Mix Gain block parses: {error}"),
     };
@@ -443,7 +444,12 @@ fn a_mode_1_parameter_block_carries_its_own_duration_fields() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block);
+    let written = write_parameter_block(
+        &mut w,
+        &definition,
+        &ParameterDataContext::MixGain,
+        &block,
+    );
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(w.finish().unwrap_or_default(), bytes);
 
@@ -469,9 +475,10 @@ fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
         }),
     };
     let bytes = hex!("64 01 00 00 ff ff 01 00 00 ff ff");
+    let registry = registry_with(definition.clone(), ParameterDataContext::MixGain);
     let mut r = BitCursor::new(&bytes);
 
-    let block = match read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain) {
+    let block = match read_parameter_block(&mut r, &registry) {
         Ok(block) => block,
         Err(error) => panic!("a mode-0 Mix Gain block parses: {error}"),
     };
@@ -487,7 +494,12 @@ fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
     );
 
     let mut w = BitWriter::new();
-    let written = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block);
+    let written = write_parameter_block(
+        &mut w,
+        &definition,
+        &ParameterDataContext::MixGain,
+        &block,
+    );
     assert!(written.is_ok(), "{written:?}");
     assert_eq!(w.finish().unwrap_or_default(), bytes);
 }
@@ -495,11 +507,12 @@ fn a_mode_0_parameter_block_takes_its_duration_from_the_definition() {
 #[test]
 fn the_three_animation_shapes_have_the_reference_field_widths() {
     let definition = ParamDefinition::mode_1(1, 48000);
+    let registry = registry_with(definition, ParameterDataContext::MixGain);
     let read_one = |body: &[u8]| -> Option<MixGainParameterData> {
         let mut bytes = vec![0x01, 0x01, 0x01];
         bytes.extend_from_slice(body);
         let mut r = BitCursor::new(&bytes);
-        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+        read_parameter_block(&mut r, &registry)
             .ok()?
             .subblocks
             .first()
@@ -542,9 +555,10 @@ fn an_unmodelled_parameter_definition_type_preserves_its_payload_verbatim() {
     // length on the wire rather than an invented boundary.
     let definition = ParamDefinition::mode_1(5, 48000);
     let bytes = hex!("05 01 01 03 de ad be");
+    let registry = registry_with(definition.clone(), ParameterDataContext::Reserved(7));
     let mut r = BitCursor::new(&bytes);
 
-    let block = match read_parameter_block(&mut r, &definition, ParamDefinitionType::Reserved(7)) {
+    let block = match read_parameter_block(&mut r, &registry) {
         Ok(block) => block,
         Err(error) => panic!("an unmodelled parameter type parses: {error}"),
     };
@@ -559,7 +573,7 @@ fn an_unmodelled_parameter_definition_type_preserves_its_payload_verbatim() {
     let written = write_parameter_block(
         &mut w,
         &definition,
-        ParamDefinitionType::Reserved(7),
+        &ParameterDataContext::Reserved(7),
         &block,
     );
     assert!(written.is_ok(), "{written:?}");
@@ -586,7 +600,7 @@ fn a_mix_gain_definition_rejects_raw_parameter_data_before_writing() {
     };
     let mut w = BitWriter::new();
 
-    let err = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block)
+    let err = write_parameter_block(&mut w, &definition, &ParameterDataContext::MixGain, &block)
         .expect_err("raw data cannot be framed as Mix Gain syntax");
 
     assert_eq!(err.kind(), &ErrorKind::UnsupportedParameterData);
@@ -613,7 +627,7 @@ fn canonical_parameter_kinds_cannot_be_smuggled_through_reserved_aliases() {
         let err = write_parameter_block(
             &mut w,
             &definition,
-            ParamDefinitionType::Reserved(raw_kind),
+            &ParameterDataContext::Reserved(raw_kind),
             &block,
         )
         .expect_err("values 0, 1, and 2 are canonical kinds, not extensions");
@@ -645,7 +659,7 @@ fn an_implied_parameter_subblock_count_mismatch_is_rejected_before_writing() {
     };
     let mut w = BitWriter::new();
 
-    let err = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block)
+    let err = write_parameter_block(&mut w, &definition, &ParameterDataContext::MixGain, &block)
         .expect_err("ceil(4 / 2) requires two subblocks");
 
     assert_eq!(err.kind(), &ErrorKind::SubblockDurationMismatch);
@@ -672,7 +686,7 @@ fn explicit_parameter_subblock_durations_are_required_and_must_sum_to_duration()
     let missing_err = write_parameter_block(
         &mut missing_writer,
         &definition,
-        ParamDefinitionType::MixGain,
+        &ParameterDataContext::MixGain,
         &missing,
     )
     .expect_err("mode 1 with no constant duration carries each duration");
@@ -686,7 +700,7 @@ fn explicit_parameter_subblock_durations_are_required_and_must_sum_to_duration()
     let sum_err = write_parameter_block(
         &mut sum_writer,
         &definition,
-        ParamDefinitionType::MixGain,
+        &ParameterDataContext::MixGain,
         &wrong_sum,
     )
     .expect_err("the explicit durations must total three");
@@ -707,7 +721,7 @@ fn parameter_subblock_durations_are_forbidden_when_the_duration_is_implied() {
     };
     let mut w = BitWriter::new();
 
-    let err = write_parameter_block(&mut w, &definition, ParamDefinitionType::MixGain, &block)
+    let err = write_parameter_block(&mut w, &definition, &ParameterDataContext::MixGain, &block)
         .expect_err("an implied duration has no per-subblock field on the wire");
 
     assert_eq!(
@@ -726,10 +740,11 @@ fn an_unknown_animation_type_is_the_same_typed_error_the_reference_returns() {
     // looser here would mean guessing where the next subblock starts.
     let definition = ParamDefinition::mode_1(1, 48000);
     let bytes = hex!("01 01 01 03 00 00");
+    let registry = registry_with(definition, ParameterDataContext::MixGain);
     let mut r = BitCursor::new(&bytes);
 
     assert_eq!(
-        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+        read_parameter_block(&mut r, &registry)
             .err()
             .map(|e| e.kind().clone()),
         Some(ErrorKind::UnsupportedParameterData)
@@ -739,15 +754,16 @@ fn an_unknown_animation_type_is_the_same_typed_error_the_reference_returns() {
 #[test]
 fn a_parameter_id_disagreeing_with_the_definition_is_a_typed_error() {
     let definition = ParamDefinition::mode_1(100, 16000);
+    let registry = registry_with(definition, ParameterDataContext::MixGain);
     let bytes = hex!("63 01 01 00 00 00");
     let mut r = BitCursor::new(&bytes);
 
     assert_eq!(
-        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+        read_parameter_block(&mut r, &registry)
             .err()
             .map(|e| e.kind().clone()),
-        Some(ErrorKind::ParameterIdMismatch),
-        "the reference checks the bitstream id against the definition's"
+        Some(ErrorKind::NoGoverningParamDefinition),
+        "registry dispatch refuses an id that no descriptor governs"
     );
 }
 
@@ -759,10 +775,11 @@ fn a_subblock_count_larger_than_the_bytes_remaining_is_refused_before_reserving(
     // nothing left in the buffer.
     let definition = ParamDefinition::mode_1(1, 48000);
     let bytes = hex!("01 ff ff ff 7f 00 ff ff ff 7f");
+    let registry = registry_with(definition, ParameterDataContext::MixGain);
     let mut r = BitCursor::new(&bytes);
 
     assert_eq!(
-        read_parameter_block(&mut r, &definition, ParamDefinitionType::MixGain)
+        read_parameter_block(&mut r, &registry)
             .err()
             .map(|e| e.kind().clone()),
         Some(ErrorKind::UnexpectedEndOfInput),

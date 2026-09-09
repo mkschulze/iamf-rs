@@ -21,15 +21,10 @@
 //! compiler will not let you parse a Parameter Block without saying which
 //! definition governs it.
 //!
-//! So: [`read_parameter_block`] takes `&ParamDefinition` and a
-//! [`ParamDefinitionType`]. Omitting either is a compile error, not a runtime
-//! one. There is no static factory here, no peek-then-dispatch and **no hidden
-//! parser state**.
-//!
-//! Phase 2's PARSE-02 turns this into a *registry* argument at the sequence
-//! level — the sequence parser will carry the descriptors it has seen and look
-//! the definition up by `parameter_id`. The registry is an **argument** there
-//! too, never hidden state. That is the shape this signature is establishing.
+//! So: [`read_parameter_block`] takes a [`ParamDefinitionRegistry`], peeks the
+//! block's ID through a cloned cursor, and looks up both the shared definition
+//! and its owner-specific data context. Omitting that registry is a compile
+//! error. There is no static factory and **no hidden parser state**.
 //!
 //! # `param_definition_type` is a second argument, and it has to be
 //!
@@ -53,8 +48,10 @@
 //! material, not acted on.**
 
 use crate::bits::{BitCursor, BitWriter};
-use crate::error::{Error, ErrorKind, Location, Result};
-use crate::obu::param_definition::ParamDefinition;
+use crate::error::{Error, ErrorKind, Finding, Location, Result};
+use crate::obu::param_definition::{
+    ParamDefinition, ParamDefinitionRegistry, ParameterDataContext,
+};
 
 /// `param_definition_type` — which parameter definition governs a block, and
 /// therefore what shape each subblock's parameter data takes.
@@ -192,6 +189,10 @@ impl MixGainParameterData {
 pub enum ParameterData {
     /// `PARAMETER_DEFINITION_MIX_GAIN`.
     MixGain(MixGainParameterData),
+    /// `PARAMETER_DEFINITION_DEMIXING`.
+    Demixing(DemixingInfoParameterData),
+    /// `PARAMETER_DEFINITION_RECON_GAIN`.
+    ReconGain(ReconGainInfoParameterData),
     /// An unmodelled `param_definition_type`: `parameter_data_size` plus
     /// exactly that many bytes, kept verbatim so the block re-serialises
     /// unchanged.
@@ -200,6 +201,73 @@ pub enum ParameterData {
     /// element type, and it works for the same reason: the length is **on the
     /// wire**, so the payload can be skipped without being understood.
     Raw(Vec<u8>),
+}
+
+/// The exact 3+5-bit Demixing Info parameter-data byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DemixingInfoParameterData {
+    /// `dmixp_mode`, 3 bits. Reserved values are retained and diagnosed.
+    pub dmixp_mode: u8,
+    /// Reserved, 5 bits.
+    pub reserved: u8,
+}
+
+/// One present Recon Gain layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconGainElement {
+    /// ULEB bitmask selecting which of the twelve gain bytes are present.
+    pub recon_gain_flag: u32,
+    /// Gains indexed by flag bit; unselected entries are zero after parsing.
+    pub recon_gain: [u8; 12],
+}
+
+/// Recon Gain data aligned one-for-one with the associated channel layers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconGainInfoParameterData {
+    /// `None` for a layer whose descriptor flag is clear.
+    pub layers: Vec<Option<ReconGainElement>>,
+}
+
+impl ParameterData {
+    /// Semantic findings that do not prevent faithful parsing or writing.
+    #[must_use]
+    pub fn validate(&self) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        match self {
+            Self::Demixing(data) => {
+                if matches!(data.dmixp_mode, 3 | 7) {
+                    findings.push(Finding {
+                        at: Location::Field("dmixp_mode"),
+                        message: format!("dmixp_mode {} is reserved", data.dmixp_mode),
+                    });
+                }
+                if data.reserved != 0 {
+                    findings.push(Finding {
+                        at: Location::Field("reserved"),
+                        message: format!(
+                            "demixing reserved field carries non-zero value {}",
+                            data.reserved
+                        ),
+                    });
+                }
+            }
+            Self::ReconGain(data) => {
+                for element in data.layers.iter().flatten() {
+                    if element.recon_gain_flag & !0x0fff != 0 {
+                        findings.push(Finding {
+                            at: Location::Field("recon_gain_flag"),
+                            message: format!(
+                                "recon_gain_flag {} sets reserved bits above bit 11",
+                                element.recon_gain_flag
+                            ),
+                        });
+                    }
+                }
+            }
+            Self::MixGain(_) | Self::Raw(_) => {}
+        }
+        findings
+    }
 }
 
 /// One entry of `subblocks`.
@@ -224,7 +292,9 @@ impl ParameterSubblock {
     pub const fn mix_gain(&self) -> Option<&MixGainParameterData> {
         match &self.data {
             ParameterData::MixGain(data) => Some(data),
-            ParameterData::Raw(_) => None,
+            ParameterData::Demixing(_) | ParameterData::ReconGain(_) | ParameterData::Raw(_) => {
+                None
+            }
         }
     }
 
@@ -234,7 +304,9 @@ impl ParameterSubblock {
     pub fn raw(&self) -> Option<&[u8]> {
         match &self.data {
             ParameterData::Raw(bytes) => Some(bytes),
-            ParameterData::MixGain(_) => None,
+            ParameterData::MixGain(_)
+            | ParameterData::Demixing(_)
+            | ParameterData::ReconGain(_) => None,
         }
     }
 }
@@ -270,6 +342,17 @@ pub struct ParameterBlock {
     pub subblocks: Vec<ParameterSubblock>,
 }
 
+impl ParameterBlock {
+    /// Semantic findings carried by its parameter-data subblocks.
+    #[must_use]
+    pub fn validate(&self) -> Vec<Finding> {
+        self.subblocks
+            .iter()
+            .flat_map(|subblock| subblock.data.validate())
+            .collect()
+    }
+}
+
 // ref: iamf-tools@v2.1.0 iamf/obu/parameter_block.cc ParameterBlockObu::ReadAndValidatePayloadDerived
 // ref: iamf-tools@v2.1.0 iamf/obu/mix_gain_parameter_data.cc MixGainParameterData::ReadAndValidate
 /// Read a Parameter Block payload, given the **descriptor-resident context**
@@ -281,10 +364,19 @@ pub struct ParameterBlock {
 /// than a convenience.
 pub fn read_parameter_block(
     r: &mut BitCursor<'_>,
-    def: &ParamDefinition,
-    kind: ParamDefinitionType,
+    registry: &ParamDefinitionRegistry,
 ) -> Result<ParameterBlock> {
     let start = r.byte_position();
+    let mut peek = r.clone();
+    let peeked_parameter_id = peek.read_uleb128()?;
+    let registered = registry.get(peeked_parameter_id).ok_or_else(|| {
+        Error::new(
+            ErrorKind::NoGoverningParamDefinition,
+            Location::InputOffset(start),
+        )
+    })?;
+    let def = &registered.definition;
+    let context = &registered.context;
     let parameter_id = r.read_uleb128()?;
     // The reference checks that the id in the bitstream agrees with the
     // definition it was handed. Ours can too, and for the same reason: a
@@ -376,7 +468,7 @@ pub fn read_parameter_block(
         };
         subblocks.push(ParameterSubblock {
             subblock_duration,
-            data: read_parameter_data(r, kind)?,
+            data: read_parameter_data(r, context)?,
         });
     }
 
@@ -407,10 +499,10 @@ pub fn read_parameter_block(
 pub fn write_parameter_block(
     w: &mut BitWriter,
     def: &ParamDefinition,
-    kind: ParamDefinitionType,
+    context: &ParameterDataContext,
     block: &ParameterBlock,
 ) -> Result<()> {
-    validate_parameter_block(def, kind, block)?;
+    validate_parameter_block(def, context, block)?;
 
     w.write_uleb128_minimal(block.parameter_id)?;
     if let Some(fields) = block.duration_fields {
@@ -429,14 +521,14 @@ pub fn write_parameter_block(
         if let Some(duration) = subblock.subblock_duration {
             w.write_uleb128_minimal(duration)?;
         }
-        write_parameter_data(w, &subblock.data)?;
+        write_parameter_data(w, context, &subblock.data)?;
     }
     Ok(())
 }
 
 pub(crate) fn validate_parameter_block(
     def: &ParamDefinition,
-    kind: ParamDefinitionType,
+    context: &ParameterDataContext,
     block: &ParameterBlock,
 ) -> Result<()> {
     if block.parameter_id != def.parameter_id {
@@ -452,7 +544,7 @@ pub(crate) fn validate_parameter_block(
         ));
     }
     for subblock in &block.subblocks {
-        validate_parameter_data_kind(&subblock.data, kind)?;
+        validate_parameter_data_kind(&subblock.data, context)?;
     }
 
     let (expected_count, carries_subblock_duration, declared_duration) =
@@ -526,22 +618,39 @@ pub(crate) fn validate_parameter_block(
     Ok(())
 }
 
-fn validate_parameter_data_kind(data: &ParameterData, kind: ParamDefinitionType) -> Result<()> {
-    // `Reserved` is publicly constructible, so normalize by wire value before
-    // matching: Reserved(0..=2) are aliases for canonical modelled kinds, not
-    // length-prefixed extension syntax.
-    let kind = ParamDefinitionType::from_value(kind.value());
-    let matches = matches!(
-        (kind, data),
-        (ParamDefinitionType::MixGain, ParameterData::MixGain(_))
-            | (ParamDefinitionType::Reserved(_), ParameterData::Raw(_))
-    );
+fn validate_parameter_data_kind(
+    data: &ParameterData,
+    context: &ParameterDataContext,
+) -> Result<()> {
+    let matches = match (context, data) {
+        (ParameterDataContext::MixGain, ParameterData::MixGain(_))
+        | (ParameterDataContext::Demixing, ParameterData::Demixing(_))
+        | (ParameterDataContext::Reserved(3..), ParameterData::Raw(_)) => true,
+        (
+            ParameterDataContext::ReconGain {
+                recon_gain_is_present,
+            },
+            ParameterData::ReconGain(data),
+        ) => {
+            data.layers.len() == recon_gain_is_present.len()
+                && data
+                    .layers
+                    .iter()
+                    .zip(recon_gain_is_present)
+                    .all(|(layer, present)| layer.is_some() == *present)
+        }
+        _ => false,
+    };
     if matches {
         Ok(())
     } else {
         Err(Error::new(
             ErrorKind::UnsupportedParameterData,
-            Location::Field("parameter_data"),
+            if matches!(context, ParameterDataContext::ReconGain { .. }) {
+                Location::Field("recon_gain_is_present")
+            } else {
+                Location::Field("parameter_data")
+            },
         ))
     }
 }
@@ -583,10 +692,13 @@ fn subblocks_implied_by(
 // mean guessing where the next subblock starts. An unmodelled
 // `param_definition_type` is a different case entirely: it has an explicit
 // `parameter_data_size` on the wire, so "verbatim" is well defined.
-fn read_parameter_data(r: &mut BitCursor<'_>, kind: ParamDefinitionType) -> Result<ParameterData> {
+fn read_parameter_data(
+    r: &mut BitCursor<'_>,
+    context: &ParameterDataContext,
+) -> Result<ParameterData> {
     let start = r.byte_position();
-    match kind {
-        ParamDefinitionType::MixGain => {
+    match context {
+        ParameterDataContext::MixGain => {
             let animation = AnimationType::from_value(r.read_uleb128()?);
             let data = match animation {
                 AnimationType::Step => MixGainParameterData::Step {
@@ -614,27 +726,60 @@ fn read_parameter_data(r: &mut BitCursor<'_>, kind: ParamDefinitionType) -> Resu
         // `parameter_data_size` then exactly that many bytes. The length goes
         // through `read_uint8_span`, which caps it against `bytes_remaining()`
         // before reserving.
-        ParamDefinitionType::Reserved(_) => {
+        ParameterDataContext::Demixing => Ok(ParameterData::Demixing(
+            DemixingInfoParameterData {
+                dmixp_mode: u8::try_from(r.read_unsigned(3)?).unwrap_or(0),
+                reserved: u8::try_from(r.read_unsigned(5)?).unwrap_or(0),
+            },
+        )),
+        ParameterDataContext::ReconGain {
+            recon_gain_is_present,
+        } => {
+            let mut layers = Vec::with_capacity(recon_gain_is_present.len());
+            for present in recon_gain_is_present {
+                if !present {
+                    layers.push(None);
+                    continue;
+                }
+                let recon_gain_flag = r.read_uleb128()?;
+                let mut recon_gain = [0_u8; 12];
+                for index in 0_u32..12 {
+                    if recon_gain_flag & (1_u32 << index) != 0 {
+                        let value = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
+                        if let Some(slot) = recon_gain.get_mut(usize::try_from(index).unwrap_or(0)) {
+                            *slot = value;
+                        }
+                    }
+                }
+                layers.push(Some(ReconGainElement {
+                    recon_gain_flag,
+                    recon_gain,
+                }));
+            }
+            Ok(ParameterData::ReconGain(ReconGainInfoParameterData {
+                layers,
+            }))
+        }
+        ParameterDataContext::Reserved(0..=2) => Err(Error::new(
+            ErrorKind::UnsupportedParameterData,
+            Location::InputOffset(start),
+        )),
+        ParameterDataContext::Reserved(_) => {
             let size = r.read_uleb128()?;
             let size = usize::try_from(size)
                 .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
             Ok(ParameterData::Raw(r.read_uint8_span(size)?.to_vec()))
         }
-        // Demixing and recon-gain parameter data are Phase 2/3 work. Recon
-        // gain in particular cannot be parsed from the definition alone — it
-        // needs the referenced Audio Element's layer configuration — so
-        // modelling it here would mean inventing a second hidden context, the
-        // exact thing TIME-05 exists to prevent.
-        ParamDefinitionType::Demixing | ParamDefinitionType::ReconGain => Err(Error::new(
-            ErrorKind::UnsupportedParameterData,
-            Location::InputOffset(start),
-        )),
     }
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/mix_gain_parameter_data.cc MixGainParameterData::Write
 // ref: iamf-tools@v2.1.0 iamf/obu/extension_parameter_data.cc ExtensionParameterData::Write
-fn write_parameter_data(w: &mut BitWriter, data: &ParameterData) -> Result<()> {
+fn write_parameter_data(
+    w: &mut BitWriter,
+    context: &ParameterDataContext,
+    data: &ParameterData,
+) -> Result<()> {
     match data {
         ParameterData::MixGain(mix_gain) => {
             // The selector is derived from the variant, never stored (Pattern 2).
@@ -662,6 +807,40 @@ fn write_parameter_data(w: &mut BitWriter, data: &ParameterData) -> Result<()> {
                     w.write_unsigned(u64::from(control_point_relative_time), 8)
                 }
             }
+        }
+        ParameterData::Demixing(data) => {
+            w.write_unsigned(u64::from(data.dmixp_mode), 3)?;
+            w.write_unsigned(u64::from(data.reserved), 5)
+        }
+        ParameterData::ReconGain(data) => {
+            let ParameterDataContext::ReconGain {
+                recon_gain_is_present,
+            } = context
+            else {
+                return Err(Error::new(
+                    ErrorKind::UnsupportedParameterData,
+                    Location::Field("parameter_data"),
+                ));
+            };
+            for (layer, present) in data.layers.iter().zip(recon_gain_is_present) {
+                if !present {
+                    continue;
+                }
+                let element = layer.as_ref().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::UnsupportedParameterData,
+                        Location::Field("recon_gain_is_present"),
+                    )
+                })?;
+                w.write_uleb128_minimal(element.recon_gain_flag)?;
+                for (index, gain) in element.recon_gain.iter().enumerate() {
+                    let index = u32::try_from(index).unwrap_or(0);
+                    if element.recon_gain_flag & (1_u32 << index) != 0 {
+                        w.write_unsigned(u64::from(*gain), 8)?;
+                    }
+                }
+            }
+            Ok(())
         }
         ParameterData::Raw(bytes) => {
             let size = u32::try_from(bytes.len()).map_err(|_| {

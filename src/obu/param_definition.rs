@@ -152,7 +152,12 @@ impl ParamDefinitionRegistry {
     /// used by the descriptor bitstream.
     pub fn from_descriptors(descriptors: &DescriptorSet) -> Result<Self> {
         let mut registry = Self::new();
-        for element in &descriptors.audio_elements {
+        // `write_descriptors` emits Audio Elements in a stable ascending-ID
+        // order. Mirror that wire order here without mutating or reusing the
+        // registry as an output-order source.
+        let mut audio_elements: Vec<&AudioElement> = descriptors.audio_elements.iter().collect();
+        audio_elements.sort_by_key(|element| element.audio_element_id);
+        for element in audio_elements {
             registry.observe_audio_element(element)?;
         }
         for presentation in &descriptors.mix_presentations {

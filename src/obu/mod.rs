@@ -38,8 +38,9 @@ pub use audio_frame::{
     substream_id_for, validate_temporal_unit, write_audio_frame,
 };
 pub use parameter_block::{
-    AnimationType, BlockDurationFields, MixGainParameterData, ParamDefinitionType, ParameterBlock,
-    ParameterData, ParameterSubblock, read_parameter_block, write_parameter_block,
+    AnimationType, BlockDurationFields, DemixingInfoParameterData, MixGainParameterData,
+    ParamDefinitionType, ParameterBlock, ParameterData, ParameterSubblock, ReconGainElement,
+    ReconGainInfoParameterData, read_parameter_block, write_parameter_block,
 };
 pub use temporal_delimiter::{
     TemporalDelimiter, read_temporal_delimiter, write_temporal_delimiter,

@@ -232,7 +232,7 @@ impl<W: Write> SequenceWriter<W> {
                 write_parameter_block(
                     w,
                     &governing.definition,
-                    governing.context.param_definition_type(),
+                    &governing.context,
                     payload,
                 )
             })?;
@@ -298,7 +298,7 @@ impl<W: Write> SequenceWriter<W> {
                 write_parameter_block(
                     w,
                     &governing.definition,
-                    governing.context.param_definition_type(),
+                    &governing.context,
                     payload,
                 )
             })?;
