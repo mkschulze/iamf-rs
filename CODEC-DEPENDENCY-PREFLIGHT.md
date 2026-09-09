@@ -1,7 +1,7 @@
 # Codec dependency preflight
 
 **Status:** PASS
-**Executed:** 2026-09-09T14:00:04Z
+**Executed:** 2026-09-09T14:01:21Z
 
 This is CODEC-06 evidence recorded before adding any codec crate to this
 repository. The preflight creates a disposable Cargo package outside the
@@ -14,7 +14,7 @@ exit. It does not edit `Cargo.toml` or `Cargo.lock`.
 - `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 - `cargo-deny 0.20.2`
 - `jq-1.8.2` (extracts resolved package fields from locked metadata)
-- Temporary package: `/private/var/folders/8z/1xzmsslj11g7rv7hf1g73j340000gn/T/iamf-codec-preflight.LKOVWT` (removed after this run)
+- Temporary package: `/private/var/folders/8z/1xzmsslj11g7rv7hf1g73j340000gn/T/iamf-codec-preflight.k4uXtB` (removed after this run)
 
 ## Candidate resolution and policy result
 
