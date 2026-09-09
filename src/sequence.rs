@@ -388,8 +388,9 @@ impl ParsedSequence {
                 false
             } else {
                 match obu {
-                    SequenceObu::ParameterBlock(_)
-                    | SequenceObu::UngovernedParameterBlock(_) => saw_frame,
+                    SequenceObu::ParameterBlock(_) | SequenceObu::UngovernedParameterBlock(_) => {
+                        saw_frame
+                    }
                     SequenceObu::AudioFrame(frame) => {
                         frame_ids.contains(&frame.payload.substream_id)
                     }
