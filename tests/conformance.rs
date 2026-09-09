@@ -84,13 +84,14 @@ use iamf::obu::{
     AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
     RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    Trimming,
 };
 
 use iamf::obu::{ObuType, find_obu_boundaries, plan_frames, read_obu_header};
 
 use fixture::{
-    ElementSpec, Fixture, FixtureCodec, FrameSource, describe_channel_mismatch, peak_for, ramp_pcm,
-    store_interleaved, store_sample,
+    ElementSpec, EncodedTemporalUnit, Fixture, FixtureCodec, FrameSource,
+    describe_channel_mismatch, peak_for, ramp_pcm, store_interleaved, store_sample,
 };
 
 // ---------------------------------------------------------------------------
@@ -1245,11 +1246,32 @@ fn assert_fixture_trim_is_forced(
             let last = units.last().ok_or_else(|| {
                 "CONF-03: the committed source has no final temporal unit".to_owned()
             })?;
+            for (index, unit) in units.iter().enumerate() {
+                let trimming = unit.trimming.unwrap_or(Trimming {
+                    at_end: 0,
+                    at_start: 0,
+                });
+                if index.saturating_add(1) != units.len() && trimming.at_end != 0 {
+                    return Err(format!(
+                        "CONF-03: temporal unit {index} carries trim_at_end {}, but only the \
+                         final temporal unit may trim at end",
+                        trimming.at_end
+                    ));
+                }
+                if index != 0 && trimming.at_start != 0 {
+                    return Err(format!(
+                        "CONF-03: temporal unit {index} carries trim_at_start {}, but only the \
+                         first temporal unit may trim at start",
+                        trimming.at_start
+                    ));
+                }
+            }
             let at_start = first.trimming.map_or(0, |trim| trim.at_start);
             let at_end = last.trimming.map_or(0, |trim| trim.at_end);
-            if at_start == 0 && at_end == 0 {
+            if at_end == 0 {
                 return Err(
-                    "CONF-03: committed access units force neither start nor end trimming"
+                    "CONF-03: trim_at_end is 0, but the final temporal unit must carry a \
+                     strictly positive end trim"
                         .to_owned(),
                 );
             }
@@ -1295,6 +1317,67 @@ fn assert_fixture_trim_is_forced(
             Ok((at_end, at_start))
         }
     }
+}
+
+#[test]
+fn conf_03_rejects_an_end_trim_on_a_middle_pre_encoded_unit() {
+    let mut fixture = fixture::sample_identity();
+    fixture.frame_sources = vec![FrameSource::PreEncoded(vec![
+        EncodedTemporalUnit {
+            trimming: None,
+            substream_payloads: vec![Vec::new(); 4],
+        },
+        EncodedTemporalUnit {
+            trimming: Some(Trimming {
+                at_end: 1,
+                at_start: 0,
+            }),
+            substream_payloads: vec![Vec::new(); 4],
+        },
+        EncodedTemporalUnit {
+            trimming: Some(Trimming {
+                at_end: 84,
+                at_start: 0,
+            }),
+            substream_payloads: vec![Vec::new(); 4],
+        },
+    ])];
+    let spec = fixture.spec().expect("its spec resolves");
+    let error = assert_fixture_trim_is_forced(&fixture, spec)
+        .expect_err("only the final temporal unit may trim at end");
+    assert!(
+        error.contains("temporal unit 1") && error.contains("trim_at_end 1"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn conf_03_requires_a_positive_end_trim_for_pre_encoded_units() {
+    let mut fixture = fixture::sample_identity();
+    fixture.frame_sources = vec![FrameSource::PreEncoded(vec![
+        EncodedTemporalUnit {
+            trimming: Some(Trimming {
+                at_end: 0,
+                at_start: 84,
+            }),
+            substream_payloads: vec![Vec::new(); 4],
+        },
+        EncodedTemporalUnit {
+            trimming: None,
+            substream_payloads: vec![Vec::new(); 4],
+        },
+        EncodedTemporalUnit {
+            trimming: None,
+            substream_payloads: vec![Vec::new(); 4],
+        },
+    ])];
+    let spec = fixture.spec().expect("its spec resolves");
+    let error = assert_fixture_trim_is_forced(&fixture, spec)
+        .expect_err("CONF-03 always requires a positive final end trim");
+    assert!(
+        error.contains("trim_at_end is 0") && error.contains("strictly positive"),
+        "unexpected error: {error}"
+    );
 }
 
 /// **CONF-04.** Structure is observable in our own output: at least six OBUs,
