@@ -16,6 +16,7 @@
 
 use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
+use iamf::dump::dump_annotated;
 use iamf::error::{ErrorKind, Location};
 use iamf::model::by_id;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
@@ -690,6 +691,36 @@ fn rendering_and_layout_reserved_groups_round_trip_at_their_exact_widths() {
             .iter()
             .any(|finding| { finding.at == Location::Field("layout.reserved") })
     );
+}
+
+#[test]
+fn dump_exposes_every_owned_reserved_value() {
+    let mut bytes = hex!(
+        "08 13 01 1b 02 01 03 01 01 04 05 d5 b3 ab 32 1a 01 01 ab 12 34"
+    )
+    .to_vec();
+    let mut mix = TEST_000003
+        .get(0x28..0x78)
+        .expect("the file is longer")
+        .to_vec();
+    mix[0x3b] = 0x2d;
+    mix[0x4a] = 0x83;
+    bytes.extend_from_slice(&mix);
+
+    let dump = dump_annotated(&bytes).expect("reserved vectors dump");
+    for expected in [
+        "audio_element_reserved",
+        "default_demixing_reserved",
+        "default_w_reserved",
+        "scalable_channel_layout_reserved",
+        "layer[0] reserved",
+        "output_gain_reserved",
+        "param_definition_reserved",
+        "rendering_config_reserved",
+        "layout[0] reserved",
+    ] {
+        assert!(dump.contains(expected), "missing {expected} from:\n{dump}");
+    }
 }
 
 #[test]
