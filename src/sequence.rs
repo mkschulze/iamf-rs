@@ -435,6 +435,12 @@ fn observe_parameter_duplicates<F>(
 }
 
 /// Parse all of `input`, returning no public prefix on failure.
+///
+/// Models written by this crate round-trip through derived [`PartialEq`], and
+/// bytes produced by either crate sequence writer re-emit byte-identically.
+/// Foreign IAMF may use a legal non-minimal ULEB128 width for `obu_size`;
+/// widths are syntax rather than model data, so re-emitting such input uses
+/// this crate's minimal canonical width and can change those bytes.
 pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
     let mut reader = BitCursor::new(input);
     let mut registry = ParamDefinitionRegistry::new();
@@ -527,6 +533,12 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
 
 // ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc ObuSequencerBase::PickAndPlace
 /// Write a parsed sequence faithfully in its stored flat order.
+///
+/// Parsing and re-emitting output from this crate is byte-identical. This does
+/// not promise universal foreign-byte identity: a legal non-minimal ULEB128
+/// `obu_size` width is not retained by [`ParsedSequence`] and is emitted in
+/// minimal canonical form. Payload bytes, unknown OBUs, and their positions
+/// are retained exactly.
 pub fn write_parsed_sequence<W: Write>(mut sink: W, sequence: &ParsedSequence) -> Result<W> {
     let mut writer = BitWriter::new();
     let mut registry = ParamDefinitionRegistry::new();
