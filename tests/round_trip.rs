@@ -68,6 +68,23 @@ fn foreign_non_minimal_obu_size_is_the_documented_width_caveat() {
 }
 
 #[test]
+fn test_000015_preserves_its_raw_ungoverned_parameter_block_in_place() {
+    let bytes = include_bytes!("fixtures/reference/test_000015.iamf");
+    let parsed = parse_sequence(bytes).expect("valid pinned fixture parses");
+    let raw_index = parsed
+        .obus
+        .iter()
+        .position(|obu| matches!(obu, SequenceObu::UngovernedParameterBlock(_)))
+        .expect("fixture carries its explicit ungoverned block");
+
+    assert_eq!(raw_index, 4, "raw block remains immediately after descriptors");
+    assert_eq!(
+        write_parsed_sequence(Vec::new(), &parsed).expect("flat fixture writes"),
+        bytes
+    );
+}
+
+#[test]
 fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
     let case = sequence_cases::rich_case(1, false, vec![0x44, 0x55], -7);
     let mut expected = ParsedSequence::from_parts(&case.descriptors, &case.units)

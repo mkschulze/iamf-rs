@@ -14,7 +14,8 @@ use iamf::obu::{
     write_obu,
 };
 use iamf::sequence::{
-    ParsedSequence, SequenceObu, UnknownObu, parse_sequence, write_parsed_sequence,
+    ParsedSequence, SequenceObu, UngovernedParameterBlock, UnknownObu, parse_sequence,
+    write_parsed_sequence,
 };
 use support::published_descriptor_set;
 
@@ -293,19 +294,42 @@ fn redundant_descriptors_and_unknown_obus_remain_at_their_exact_positions() {
 }
 
 #[test]
-fn a_parameter_block_without_a_governing_definition_is_a_located_error() {
-    let sequence = ParsedSequence {
-        obus: vec![SequenceObu::ParameterBlock(mode_1_block(100))],
-    };
-    let bytes = write_parsed_sequence(Vec::new(), &sequence)
-        .expect_err("writer also requires explicit governing context");
-    assert_eq!(bytes.kind(), &ErrorKind::NoGoverningParamDefinition);
+fn a_bounded_parameter_block_without_governing_context_is_preserved_and_diagnosed() {
+    // Header type 3, payload size 4, parameter_id 101, followed by syntax that
+    // cannot be interpreted without the missing definition.
+    let bytes = [0x18, 0x04, 0x65, 0x00, 0xbb, 0xcc];
+    let parsed = parse_sequence(&bytes).expect("bounded ungoverned block parses as raw");
 
-    // Header type 3, payload size 1, parameter_id 100. The parser cannot know
-    // the remainder's syntax without a definition.
-    let err = parse_sequence(&[0x18, 0x01, 0x64]).expect_err("definition is absent");
-    assert_eq!(err.kind(), &ErrorKind::NoGoverningParamDefinition);
-    assert_eq!(err.at(), Location::InputOffset(2));
+    assert_eq!(
+        parsed.obus,
+        vec![SequenceObu::UngovernedParameterBlock(
+            UngovernedParameterBlock {
+                header: ObuHeader::new(ObuType::ParameterBlock),
+                payload: vec![0x65, 0x00, 0xbb, 0xcc],
+            }
+        )]
+    );
+    assert_eq!(
+        parsed.validate(),
+        vec![iamf::error::Finding {
+            at: Location::Field("parameter_id"),
+            message: "parameter block references parameter_id 101, which no definition in this sequence carries".to_owned(),
+        }]
+    );
+    assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes.to_vec()));
+}
+
+#[test]
+fn malformed_governed_parameter_block_remains_a_structural_error() {
+    let mut bytes = support::descriptor_bytes(&published_descriptor_set());
+    let payload_offset = u64::try_from(bytes.len()).unwrap_or(0).saturating_add(2);
+    // parameter_id 100 is governed by the published Mix Presentation. Its
+    // mode-1 duration starts an unterminated ULEB128 and must not become raw.
+    bytes.extend_from_slice(&[0x18, 0x02, 0x64, 0x80]);
+
+    let error = parse_sequence(&bytes).expect_err("governed syntax is truncated");
+    assert_eq!(error.kind(), &ErrorKind::UnexpectedEndOfInput);
+    assert_eq!(error.at(), Location::InputOffset(payload_offset.saturating_add(1)));
 }
 
 #[test]
