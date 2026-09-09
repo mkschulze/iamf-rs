@@ -123,6 +123,11 @@ jobs:
       - name: Test
         run: cargo test --locked --target ${{ matrix.target }}
 
+      - name: Replay permanent fuzz corpus on stable
+        run: >
+          cargo test --locked --features fuzzing --target ${{ matrix.target }}
+          --test fuzz_regression
+
       # GUARD-09 and GUARD-10, as their own step. The general `cargo test` above
       # already runs these targets; naming them separately is what makes a
       # four-target byte-identity failure obvious in the log instead of one line
@@ -179,6 +184,25 @@ jobs:
 
       - name: cargo deny check
         run: cargo deny --all-features check
+
+      - name: cargo deny check (isolated fuzz workspace)
+        run: >
+          cargo deny --manifest-path fuzz/Cargo.toml --config fuzz/deny.toml
+          --all-features check
+
+      - name: Assert libFuzzer remains outside the root lock and linked graph
+        shell: bash
+        run: |
+          if grep -q '^name = "libfuzzer-sys"$' Cargo.lock; then
+            echo "libfuzzer-sys leaked into the root Cargo.lock" >&2
+            exit 1
+          fi
+          graph=$(cargo tree --locked -e normal,no-proc-macro --prefix none)
+          echo "$graph"
+          if grep -q 'libfuzzer' <<<"$graph"; then
+            echo "libFuzzer leaked into the root default linked graph" >&2
+            exit 1
+          fi
 
       # A guardrail that is configured and a guardrail that fires are different
       # things. This step introduces six deliberate violations and asserts each

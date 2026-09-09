@@ -1,0 +1,56 @@
+name: fuzz
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: bounded Linux fuzz discovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install dated nightly and pinned cargo-fuzz
+        run: |
+          rustup toolchain install nightly-2026-09-01 --profile minimal
+          cargo +stable install cargo-fuzz --version 0.13.2 --locked
+          cargo fuzz --version
+
+      - name: Build and run hostile parse fuzzing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/fuzz-logs
+          cargo +nightly-2026-09-01 fuzz build parse_sequence \
+            2>&1 | tee target/fuzz-logs/parse_sequence-build.log
+          cargo +nightly-2026-09-01 fuzz run parse_sequence \
+            fuzz/corpus/parse_sequence -- -max_total_time=300 \
+            2>&1 | tee target/fuzz-logs/parse_sequence-run.log
+
+      - name: Build and run structural round-trip fuzzing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-09-01 fuzz build obu_roundtrip --features roundtrip-model \
+            2>&1 | tee target/fuzz-logs/obu_roundtrip-build.log
+          cargo +nightly-2026-09-01 fuzz run obu_roundtrip --features roundtrip-model \
+            fuzz/corpus/obu_roundtrip -- -max_total_time=300 \
+            2>&1 | tee target/fuzz-logs/obu_roundtrip-run.log
+
+      - name: Upload fuzz failures and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-output
+          path: |
+            fuzz/artifacts/**
+            target/fuzz-logs/**
+          if-no-files-found: warn
+          retention-days: 14
