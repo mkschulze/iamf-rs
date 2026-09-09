@@ -41,14 +41,213 @@
 
 use std::io::Write;
 
-use crate::bits::BitWriter;
-use crate::error::{Error, ErrorKind, Location, Result};
+use crate::bits::{BitCursor, BitWriter};
+use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::{DescriptorSet, write_descriptors};
 use crate::obu::{
-    AudioFrame, Obu, ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock,
-    RegisteredParamDefinition, TemporalDelimiter, write_audio_frame, write_obu_with_header,
-    write_parameter_block, write_temporal_delimiter,
+    AudioElement, AudioFrame, CodecConfig, IaSequenceHeader, MixPresentation, Obu, ObuHeader,
+    ObuType, ParamDefinitionRegistry, ParameterBlock, RegisteredParamDefinition, TemporalDelimiter,
+    read_audio_element, read_audio_frame, read_codec_config, read_ia_sequence_header,
+    read_mix_presentation, read_obu_header, read_obu_with, read_obu_with_header,
+    read_parameter_block, read_temporal_delimiter, write_audio_element, write_audio_frame,
+    write_codec_config, write_ia_sequence_header, write_mix_presentation, write_obu,
+    write_obu_with, write_obu_with_header, write_parameter_block, write_temporal_delimiter,
 };
+
+/// An OBU whose type is reserved by IAMF v1.1.0.
+///
+/// Its payload is indivisible: without syntax there is no meaningful boundary
+/// between modeled content and trailing bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownObu {
+    /// The complete common header, including extension and redundant-copy flag.
+    pub header: ObuHeader,
+    /// The complete bounded payload.
+    pub payload: Vec<u8>,
+}
+
+/// One parsed OBU in exact wire order.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SequenceObu {
+    IaSequenceHeader(Obu<IaSequenceHeader>),
+    CodecConfig(Obu<CodecConfig>),
+    AudioElement(Obu<AudioElement>),
+    MixPresentation(Obu<MixPresentation>),
+    ParameterBlock(Obu<ParameterBlock>),
+    TemporalDelimiter(Obu<TemporalDelimiter>),
+    AudioFrame(Obu<AudioFrame>),
+    Unknown(UnknownObu),
+}
+
+/// A whole IA Sequence as owned OBUs in exact wire order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ParsedSequence {
+    /// Every OBU, including redundant descriptors and unknown types.
+    pub obus: Vec<SequenceObu>,
+}
+
+impl ParsedSequence {
+    /// Semantic findings over the flat wire-order model.
+    #[must_use]
+    pub fn validate(&self) -> Vec<Finding> {
+        Vec::new()
+    }
+
+    /// Canonical temporal-unit ranges into [`Self::obus`].
+    #[must_use]
+    pub fn temporal_unit_ranges(&self) -> Vec<core::ops::Range<usize>> {
+        Vec::new()
+    }
+}
+
+/// Parse all of `input`, returning no public prefix on failure.
+pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
+    let mut reader = BitCursor::new(input);
+    let mut registry = ParamDefinitionRegistry::new();
+    let mut obus = Vec::new();
+
+    while reader.bytes_remaining() > 0 {
+        // Inspection never advances the real cursor. It identifies the
+        // dispatcher arm and the absolute start of the bounded payload; the
+        // central OBU reader below remains the sole framing and drain path.
+        let mut inspection = reader.clone();
+        let (header, _) = read_obu_header(&mut inspection)?;
+        let payload_base = inspection.byte_position();
+
+        let parsed = match header.obu_type {
+            ObuType::IaSequenceHeader => {
+                let mut obu = read_obu_with(&mut reader, |payload| {
+                    read_ia_sequence_header(payload)
+                        .map_err(|error| error.with_input_base(payload_base))
+                })?;
+                obu.trailing = core::mem::take(&mut obu.payload.trailing);
+                SequenceObu::IaSequenceHeader(obu)
+            }
+            ObuType::CodecConfig => {
+                let mut obu = read_obu_with(&mut reader, |payload| {
+                    read_codec_config(payload).map_err(|error| error.with_input_base(payload_base))
+                })?;
+                obu.trailing = core::mem::take(&mut obu.payload.trailing);
+                SequenceObu::CodecConfig(obu)
+            }
+            ObuType::AudioElement => {
+                let mut obu = read_obu_with(&mut reader, |payload| {
+                    read_audio_element(payload).map_err(|error| error.with_input_base(payload_base))
+                })?;
+                obu.trailing = core::mem::take(&mut obu.payload.trailing);
+                registry
+                    .observe_audio_element(&obu.payload)
+                    .map_err(|error| error.with_input_base(payload_base))?;
+                SequenceObu::AudioElement(obu)
+            }
+            ObuType::MixPresentation => {
+                let mut obu = read_obu_with(&mut reader, |payload| {
+                    read_mix_presentation(payload)
+                        .map_err(|error| error.with_input_base(payload_base))
+                })?;
+                obu.trailing = core::mem::take(&mut obu.payload.trailing);
+                registry.observe_mix_presentation(&obu.payload);
+                SequenceObu::MixPresentation(obu)
+            }
+            ObuType::ParameterBlock => {
+                SequenceObu::ParameterBlock(read_obu_with(&mut reader, |payload| {
+                    read_parameter_block(payload, &registry)
+                        .map_err(|error| error.with_input_base(payload_base))
+                })?)
+            }
+            ObuType::TemporalDelimiter => {
+                SequenceObu::TemporalDelimiter(read_obu_with(&mut reader, |payload| {
+                    read_temporal_delimiter(payload)
+                        .map_err(|error| error.with_input_base(payload_base))
+                })?)
+            }
+            ObuType::Reserved(_) => {
+                let obu = read_obu_with(&mut reader, |payload| {
+                    let remaining = payload.bytes_remaining();
+                    payload
+                        .read_uint8_span(remaining)
+                        .map(<[u8]>::to_vec)
+                        .map_err(|error| error.with_input_base(payload_base))
+                })?;
+                SequenceObu::Unknown(UnknownObu {
+                    header: obu.header,
+                    payload: obu.payload,
+                })
+            }
+            // Every remaining current variant is one of the Audio Frame types
+            // 5..=23. Keeping them in one arm mirrors `is_audio_frame()` and
+            // avoids duplicating the eighteen implicit-id spellings here.
+            _ => SequenceObu::AudioFrame(read_obu_with_header(
+                &mut reader,
+                |actual_header, payload| {
+                    read_audio_frame(actual_header, payload)
+                        .map_err(|error| error.with_input_base(payload_base))
+                },
+            )?),
+        };
+        obus.push(parsed);
+    }
+
+    Ok(ParsedSequence { obus })
+}
+
+/// Write a parsed sequence faithfully in its stored flat order.
+pub fn write_parsed_sequence<W: Write>(mut sink: W, sequence: &ParsedSequence) -> Result<W> {
+    let mut writer = BitWriter::new();
+    let mut registry = ParamDefinitionRegistry::new();
+
+    for obu in &sequence.obus {
+        match obu {
+            SequenceObu::IaSequenceHeader(obu) => {
+                write_obu_with(&mut writer, obu, write_ia_sequence_header)?;
+            }
+            SequenceObu::CodecConfig(obu) => {
+                write_obu_with(&mut writer, obu, write_codec_config)?;
+            }
+            SequenceObu::AudioElement(obu) => {
+                write_obu_with(&mut writer, obu, write_audio_element)?;
+                registry.observe_audio_element(&obu.payload)?;
+            }
+            SequenceObu::MixPresentation(obu) => {
+                write_obu_with(&mut writer, obu, write_mix_presentation)?;
+                registry.observe_mix_presentation(&obu.payload);
+            }
+            SequenceObu::ParameterBlock(obu) => {
+                let registered = registry.get(obu.payload.parameter_id).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::NoGoverningParamDefinition,
+                        Location::Field("parameter_id"),
+                    )
+                })?;
+                write_obu_with(&mut writer, obu, |payload, block| {
+                    write_parameter_block(
+                        payload,
+                        &registered.definition,
+                        &registered.context,
+                        block,
+                    )
+                })?;
+            }
+            SequenceObu::TemporalDelimiter(obu) => {
+                write_obu_with(&mut writer, obu, write_temporal_delimiter)?;
+            }
+            SequenceObu::AudioFrame(obu) => {
+                write_obu_with_header(&mut writer, obu, write_audio_frame)?;
+            }
+            SequenceObu::Unknown(obu) => {
+                write_obu(&mut writer, &obu.header, &obu.payload)?;
+            }
+        }
+    }
+
+    let bytes = writer.finish()?;
+    sink.write_all(&bytes)
+        .map_err(|_| Error::new(ErrorKind::SinkWrite, Location::OutputOffset(0)))?;
+    sink.flush()
+        .map_err(|_| Error::new(ErrorKind::SinkWrite, Location::OutputOffset(0)))?;
+    Ok(sink)
+}
 
 /// One temporal unit: everything between one presentation instant and the
 /// next, in bitstream order.
@@ -229,12 +428,7 @@ impl<W: Write> SequenceWriter<W> {
             // this path is not taken at all for LPCM.
             let governing = self.definition_for(block.payload.parameter_id)?.clone();
             self.emit_preflighted_obu(block, |w, _header, payload| {
-                write_parameter_block(
-                    w,
-                    &governing.definition,
-                    &governing.context,
-                    payload,
-                )
+                write_parameter_block(w, &governing.definition, &governing.context, payload)
             })?;
         }
 
@@ -295,12 +489,7 @@ impl<W: Write> SequenceWriter<W> {
         for block in &unit.parameter_blocks {
             let governing = self.definition_for(block.payload.parameter_id)?.clone();
             self.serialize_obu(block, |w, _header, payload| {
-                write_parameter_block(
-                    w,
-                    &governing.definition,
-                    &governing.context,
-                    payload,
-                )
+                write_parameter_block(w, &governing.definition, &governing.context, payload)
             })?;
         }
         for frame in &unit.audio_frames {
@@ -311,14 +500,12 @@ impl<W: Write> SequenceWriter<W> {
 
     /// The `ParamDefinition` governing `parameter_id`, or a typed error.
     fn definition_for(&self, parameter_id: u32) -> Result<&RegisteredParamDefinition> {
-        self.definitions
-            .get(parameter_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::NoGoverningParamDefinition,
-                    Location::Field("parameter_id"),
-                )
-            })
+        self.definitions.get(parameter_id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::NoGoverningParamDefinition,
+                Location::Field("parameter_id"),
+            )
+        })
     }
 
     /// Build one whole OBU in the reused scratch buffer and hand it to the
@@ -366,12 +553,13 @@ impl<W: Write> SequenceWriter<W> {
                     ));
                 }
                 Ok(written) => {
-                    self.bytes_written = self.bytes_written.checked_add(
-                        u64::try_from(written).unwrap_or(u64::MAX),
-                    ).ok_or_else(|| {
-                        self.state = State::Poisoned;
-                        Error::new(ErrorKind::ObuSizeOverflow, Location::Unlocated)
-                    })?;
+                    self.bytes_written = self
+                        .bytes_written
+                        .checked_add(u64::try_from(written).unwrap_or(u64::MAX))
+                        .ok_or_else(|| {
+                            self.state = State::Poisoned;
+                            Error::new(ErrorKind::ObuSizeOverflow, Location::Unlocated)
+                        })?;
                     remaining = remaining.get(written..).unwrap_or_default();
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}

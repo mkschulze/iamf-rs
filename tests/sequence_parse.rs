@@ -3,15 +3,15 @@
 #[path = "support/test_000003.rs"]
 mod support;
 
-use iamf::bits::{BitWriter};
+use iamf::bits::BitWriter;
 use iamf::error::{ErrorKind, Location};
 use iamf::model::DescriptorSet;
 use iamf::model::layout::LoudspeakerLayout;
 use iamf::obu::{
-    AudioElementParam, AudioElementType, AudioFrame, BlockDurationFields,
-    ChannelAudioLayerConfig, MixGainParameterData, Obu, ObuHeader, ObuType, ParamDefinition,
-    ParamDefinitionRegistry, ParameterBlock, ParameterData, ParameterDataContext,
-    ParameterSubblock, TemporalDelimiter, write_obu,
+    AudioElementParam, AudioElementType, AudioFrame, BlockDurationFields, ChannelAudioLayerConfig,
+    MixGainParameterData, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
+    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock, TemporalDelimiter,
+    write_obu,
 };
 use iamf::sequence::{
     ParsedSequence, SequenceObu, UnknownObu, parse_sequence, write_parsed_sequence,
@@ -339,7 +339,10 @@ fn flat_validation_reports_local_then_duplicate_then_reference_findings_in_wire_
     assert!(messages[0].contains("primary_profile"), "{messages:?}");
     assert!(messages[1].contains("codec_config_id 7"), "{messages:?}");
     assert!(messages[2].contains("codec_config_id 999"), "{messages:?}");
-    assert!(messages[3].contains("audio_substream_id 77"), "{messages:?}");
+    assert!(
+        messages[3].contains("audio_substream_id 77"),
+        "{messages:?}"
+    );
 }
 
 #[test]
@@ -355,7 +358,14 @@ fn canonical_grouping_uses_only_delimiters_and_wire_distinguishable_transitions(
     let block = || SequenceObu::ParameterBlock(mode_1_block(100));
 
     let delimited = ParsedSequence {
-        obus: vec![descriptor.clone(), delimiter(), frame(0), frame(1), delimiter(), frame(0)],
+        obus: vec![
+            descriptor.clone(),
+            delimiter(),
+            frame(0),
+            frame(1),
+            delimiter(),
+            frame(0),
+        ],
     };
     assert_eq!(delimited.temporal_unit_ranges(), vec![1..4, 4..6]);
 

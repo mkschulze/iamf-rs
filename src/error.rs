@@ -150,6 +150,19 @@ impl Error {
     pub const fn at(&self) -> Location {
         self.at
     }
+
+    /// Translate an error raised by a bounded payload reader into the parent
+    /// input's coordinate space.
+    ///
+    /// Header errors already originate on the parent cursor and must not pass
+    /// through this helper. Sequence dispatch applies it only inside the
+    /// payload callback handed to the central OBU reader.
+    pub(crate) fn with_input_base(mut self, base: u64) -> Self {
+        if let Location::InputOffset(relative) = self.at {
+            self.at = Location::InputOffset(base.saturating_add(relative));
+        }
+        self
+    }
 }
 
 impl fmt::Display for Error {
