@@ -463,9 +463,9 @@ fn flac_constructor_rejects_exact_rate_frame_and_depth_boundaries() {
         assert_eq!(error.kind(), &ErrorKind::SampleRateNotSupportedByCodec);
         assert_eq!(error.at(), Location::Field("sample_rate"));
     }
-    for frame_size in [0, u32::from(u16::MAX).saturating_add(1)] {
+    for frame_size in [0, 1, 15, u32::from(u16::MAX).saturating_add(1)] {
         let error = CodecConfig::flac(1, frame_size, 48_000, 16)
-            .expect_err("frame size must fit a non-zero u16");
+            .expect_err("frame size must fit FLAC's 16..=u16::MAX range");
         assert_eq!(error.kind(), &ErrorKind::SamplesPerFrameNotSupportedByCodec);
         assert_eq!(error.at(), Location::Field("num_samples_per_frame"));
     }
@@ -475,6 +475,16 @@ fn flac_constructor_rejects_exact_rate_frame_and_depth_boundaries() {
         assert_eq!(error.kind(), &ErrorKind::BitsPerSampleNotSupportedByCodec);
         assert_eq!(error.at(), Location::Field("bits_per_sample"));
     }
+}
+
+#[test]
+fn flac_constructor_accepts_sixteen_samples_without_validation_findings() {
+    let config = CodecConfig::flac(1, 16, 48_000, 16).expect("16 is FLAC's minimum block size");
+    let flac = config.flac_config().expect("fresh config is typed FLAC");
+
+    assert_eq!(flac.minimum_block_size, 16);
+    assert_eq!(flac.maximum_block_size, 16);
+    assert!(config.validate().is_empty());
 }
 
 #[test]

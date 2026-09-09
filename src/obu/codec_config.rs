@@ -202,7 +202,7 @@ impl CodecConfig {
     /// # Errors
     ///
     /// Returns a codec capability error when the sample rate, samples per
-    /// frame, or actual PCM bit depth cannot be represented by this syntax.
+    /// frame, or actual PCM bit depth is outside FLAC's supported range.
     pub fn flac(
         codec_config_id: u32,
         num_samples_per_frame: u32,
@@ -215,7 +215,7 @@ impl CodecConfig {
                 Location::Field("sample_rate"),
             ));
         }
-        if num_samples_per_frame == 0 {
+        if num_samples_per_frame < 16 {
             return Err(Error::new(
                 ErrorKind::SamplesPerFrameNotSupportedByCodec,
                 Location::Field("num_samples_per_frame"),
