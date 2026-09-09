@@ -4,17 +4,17 @@ milestone: v1
 current_phase: 03
 current_phase_name: FLAC and Opus Framing
 status: ready_to_execute
-stopped_at: Phase 03 Plan 02 complete; ready to execute 03-03
-last_updated: "2026-09-09T06:46:12Z"
-last_activity: 2026-09-09
-last_activity_desc: Phase 03 Plan 02 complete — FLAC corpus and conformance verified
-state_head: 065f121
+stopped_at: Phase 03 Plan 03 complete; ready to execute 03-04
+last_updated: "2026-09-10T02:00:00Z"
+last_activity: 2026-09-10
+last_activity_desc: Phase 03 Plan 03 complete — typed Opus configuration and framing arithmetic verified
+state_head: 073bb88
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 25
-  completed_plans: 19
-  percent: 76
+  completed_plans: 20
+  percent: 80
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 03 (FLAC and Opus Framing) — READY TO EXECUTE
-Plan: 2 of 8
-Status: Plan 03-02 complete; ready for 03-03
-Last activity: 2026-09-09 — FLAC corpus and conformance verified
+Plan: 3 of 8
+Status: Plan 03-03 complete; ready for 03-04
+Last activity: 2026-09-10 — typed Opus configuration and framing arithmetic verified
 
-Progress: [██░░░░░░░░] 25% of Phase 03 plans
+Progress: [████░░░░░░] 38% of Phase 03 plans
 
 ## Performance Metrics
 
@@ -124,10 +124,12 @@ Recent decisions affecting current work:
 - [Phase 03]: Shipping code frames pre-encoded FLAC/Opus access units only; codec implementations stay in an excluded integration-test package as exact dev-dependencies.
 - [Phase 03]: Opus framing is compared exactly against an independent decode of the same committed packets, never approximately against lossy source PCM.
 - [Phase 03]: Eight sequential plans isolate typed configs, fixture generation, shared-gate integration, dependency boundaries, offline regressions, and CI closure.
+- [Phase 03]: Complete 11-byte Opus configurations parse as typed syntax, while short or trailing foreign bytes remain exact raw/trailing fidelity data.
+- [Phase 03]: Fresh Opus construction is pinned to 48 kHz and derives its roll distance with checked integer arithmetic; no runtime codec or resampler enters the shipping graph.
 
 ### Pending Todos
 
-- Execute Phase 3 Plan 03-03: typed Opus configuration, sample-rate rejection, and checked roll derivation.
+- Execute Phase 3 Plan 03-04: excluded Opus fixture generation, measured lookahead, exact packet counts, and standalone decode oracle.
 
 ### Blockers/Concerns
 
@@ -153,6 +155,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-09T06:46:12Z
-Stopped at: Phase 03 Plan 02 complete; ready to execute 03-03
-Resume file: .planning/phases/03-flac-and-opus-framing/03-03-PLAN.md
+Last session: 2026-09-10T02:00:00Z
+Stopped at: Phase 03 Plan 03 complete; ready to execute 03-04
+Resume file: .planning/phases/03-flac-and-opus-framing/03-04-PLAN.md
