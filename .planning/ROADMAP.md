@@ -23,7 +23,7 @@ deliberately absent below.
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Conformant LPCM Bitstream** - A standalone `.iamf` the reference decodes sample-identically, with every guardrail and every byte-level fact pinned
-- [ ] **Phase 2: Parser, Round-Trip and Fuzzing** - Read the bitstream back into the model, prove both round-trip directions, and ship a fuzzer with a committed corpus
+- [x] **Phase 2: Parser, Round-Trip and Fuzzing** - Read the bitstream back into the model, prove both round-trip directions, and ship a fuzzer with a committed corpus (completed 2026-09-09)
 - [ ] **Phase 3: FLAC and Opus Framing** - Two more codecs through the unchanged conformance harness, with zero codec crates in the shipping graph
 - [ ] **Phase 4: Parallax-Facing API** - One validated `build()`, minimum-profile selection, and a dependency-free bitstream core
 
@@ -77,7 +77,7 @@ strictly ordered verification-gap closure waves):
 
 **Research**: No — the parser mirrors the writer one-for-one and the fuzzing setup is fully specified in STACK.md §4 and ARCHITECTURE.md. Mechanical once Phase 1 is verified; skip `--research-phase`
 **Note**: "Phase 1 encoder, Phase 2 parser" does not mean no reader code before Phase 2 — land the reader alongside the writer per OBU type wherever it is cheap in Phase 1. Phase 2 is about the *sequence*-level parser, the registry, the round-trip property and the fuzzer
-**Plans**: 7 plans
+**Plans**: 7/7 plans executed
 
 Plans:
 
@@ -151,7 +151,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
-| 2. Parser, Round-Trip and Fuzzing | 6/7 | In Progress | - |
+| 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
