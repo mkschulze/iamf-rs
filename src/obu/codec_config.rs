@@ -272,14 +272,17 @@ impl CodecConfig {
         }
     }
 
-    /// The six rules `iamf-tools@v2.1.0` rejects on and **neither** `libiamf`
-    /// revision checks, reported as Findings rather than parse failures.
+    /// Report every modelled LPCM and FLAC semantic contradiction as a
+    /// Finding rather than rejecting or normalising parsed bytes.
     ///
-    /// Reporting them matters even though the decoder accepts them: an
-    /// out-of-range `sample_size` falls through `libiamf`'s PCM init to a
-    /// 16-bit little-endian reader with **no error**, producing
-    /// plausible-sounding garbage. The Finding is the only signal there is.
+    /// LPCM checks its format flag, sample size and selected sample rates. FLAC
+    /// checks the one-block STREAMINFO header, block sizes, packed rate/channel/
+    /// depth/sample-count fields, zero roll distance, and the encoder-side
+    /// zero-frame-size and zero-MD5 recommendations. The pinned readers accept
+    /// several of these contradictions, so preserving first and diagnosing
+    /// separately is what keeps foreign input reproducible.
     // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/lpcm_decoder_config.cc LpcmDecoderConfig::Validate
+    // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/flac_decoder_config.cc FlacDecoderConfig::ReadAndValidate / ValidateEncodingRestrictions
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
