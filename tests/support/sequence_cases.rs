@@ -51,7 +51,6 @@ pub fn canonical_parsed_strategy() -> impl Strategy<Value = ParsedSequence> {
                 }
                 if shape >= 4 {
                     let header = ObuHeader::new(ObuType::Reserved(27))
-                        .with_redundant_copy(true)
                         .with_extension(vec![0x91, 0x00, 0xfe]);
                     let at = position % parsed.obus.len().saturating_add(1);
                     parsed.obus.insert(

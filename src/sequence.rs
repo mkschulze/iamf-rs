@@ -88,6 +88,92 @@ pub struct ParsedSequence {
 }
 
 impl ParsedSequence {
+    /// Flatten encoder-facing descriptors and temporal units into their exact
+    /// canonical wire order without serialising them.
+    ///
+    /// Codec Configs and Audio Elements follow the same stable ascending-ID
+    /// ordering as [`crate::model::write_descriptors`]; Mix Presentations and
+    /// every temporal member retain list order. Payload-owned trailing bytes
+    /// are moved to the common [`Obu::trailing`] owner just as
+    /// [`parse_sequence`] does, so derived equality compares the same model on
+    /// both sides of a round trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an extension parameter definition cannot supply
+    /// the parse context needed by later Parameter Blocks.
+    pub fn from_parts(descriptors: &DescriptorSet, units: &[TemporalUnit]) -> Result<Self> {
+        // Establish that the same descriptor context used by both writers can
+        // be built. This inspects ordering/context only and emits no bytes.
+        let _registry = ParamDefinitionRegistry::from_descriptors(descriptors)?;
+        let mut obus = Vec::new();
+
+        let mut sequence_header = descriptors.sequence_header.clone();
+        let sequence_header_trailing = core::mem::take(&mut sequence_header.trailing);
+        obus.push(SequenceObu::IaSequenceHeader(Obu {
+            header: ObuHeader::new(ObuType::IaSequenceHeader),
+            payload: sequence_header,
+            trailing: sequence_header_trailing,
+        }));
+
+        let mut codec_configs: Vec<&CodecConfig> = descriptors.codec_configs.iter().collect();
+        codec_configs.sort_by_key(|config| config.codec_config_id);
+        for config in codec_configs {
+            let mut payload = config.clone();
+            let trailing = core::mem::take(&mut payload.trailing);
+            obus.push(SequenceObu::CodecConfig(Obu {
+                header: ObuHeader::new(ObuType::CodecConfig),
+                payload,
+                trailing,
+            }));
+        }
+
+        let mut audio_elements: Vec<&AudioElement> = descriptors.audio_elements.iter().collect();
+        audio_elements.sort_by_key(|element| element.audio_element_id);
+        for element in audio_elements {
+            let mut payload = element.clone();
+            let trailing = core::mem::take(&mut payload.trailing);
+            obus.push(SequenceObu::AudioElement(Obu {
+                header: ObuHeader::new(ObuType::AudioElement),
+                payload,
+                trailing,
+            }));
+        }
+
+        for presentation in &descriptors.mix_presentations {
+            let mut payload = presentation.clone();
+            let trailing = core::mem::take(&mut payload.trailing);
+            obus.push(SequenceObu::MixPresentation(Obu {
+                header: ObuHeader::new(ObuType::MixPresentation),
+                payload,
+                trailing,
+            }));
+        }
+
+        for unit in units {
+            if let Some(delimiter) = unit.temporal_delimiter {
+                obus.push(SequenceObu::TemporalDelimiter(Obu::new(
+                    ObuHeader::new(ObuType::TemporalDelimiter),
+                    delimiter,
+                )));
+            }
+            obus.extend(
+                unit.parameter_blocks
+                    .iter()
+                    .cloned()
+                    .map(SequenceObu::ParameterBlock),
+            );
+            obus.extend(
+                unit.audio_frames
+                    .iter()
+                    .cloned()
+                    .map(SequenceObu::AudioFrame),
+            );
+        }
+
+        Ok(Self { obus })
+    }
+
     /// Semantic findings over the flat wire-order model.
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
