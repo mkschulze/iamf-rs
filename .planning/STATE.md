@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 03
 current_phase_name: FLAC and Opus Framing
-status: ready_to_plan
-stopped_at: Phase 03 context approved; planning in progress
-last_updated: "2026-09-09T04:49:00Z"
+status: ready_to_execute
+stopped_at: Phase 03 planned and verified; ready to execute 03-01
+last_updated: "2026-09-09T06:46:12Z"
 last_activity: 2026-09-09
-last_activity_desc: Phase 03 codec-framing design approved
-state_head: 73b50b1
+last_activity_desc: Phase 03 planned — 8 plans in 8 sequential waves, checker passed
+state_head: 4ef1372
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 17
+  total_plans: 25
   completed_plans: 17
-  percent: 100
+  percent: 68
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 
 ## Current Position
 
-Phase: 03 (FLAC and Opus Framing) — PLANNING
-Plan: Not started
-Status: Design approved; planning in progress
-Last activity: 2026-09-09 — Codec-framing design approved
+Phase: 03 (FLAC and Opus Framing) — READY TO EXECUTE
+Plan: 0 of 8
+Status: Plans verified; ready for 03-01
+Last activity: 2026-09-09 — Eight codec-framing plans verified
 
 Progress: [░░░░░░░░░░] 0% of Phase 03 plans
 
@@ -121,10 +121,13 @@ Recent decisions affecting current work:
 - [Phase 02]: One bounded canonical generator supplies both stable smoke replay and the structural libFuzzer oracle.
 - [Phase 02]: Permanent parser seeds are byte-identical pinned iamf-tools fixtures; structural seeds are named bounded models, and transient coverage expansion is minimized before retention.
 - [Phase 02]: Stable CI exhaustively replays every retained corpus/artifact input on four target paths; scheduled Linux nightly fuzzing remains a separate bounded discovery job.
+- [Phase 03]: Shipping code frames pre-encoded FLAC/Opus access units only; codec implementations stay in an excluded integration-test package as exact dev-dependencies.
+- [Phase 03]: Opus framing is compared exactly against an independent decode of the same committed packets, never approximately against lossy source PCM.
+- [Phase 03]: Eight sequential plans isolate typed configs, fixture generation, shared-gate integration, dependency boundaries, offline regressions, and CI closure.
 
 ### Pending Todos
 
-- Plan Phase 3: FLAC and Opus Framing.
+- Execute Phase 3 Plan 03-01: dependency preflight and typed FLAC configuration.
 
 ### Blockers/Concerns
 
@@ -150,6 +153,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-09T04:49:00Z
-Stopped at: Phase 03 context approved; planning in progress
-Resume file: .planning/phases/03-flac-and-opus-framing/03-CONTEXT.md
+Last session: 2026-09-09T06:46:12Z
+Stopped at: Phase 03 planned and verified; ready to execute 03-01
+Resume file: .planning/phases/03-flac-and-opus-framing/03-01-PLAN.md
