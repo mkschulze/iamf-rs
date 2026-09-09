@@ -1,5 +1,7 @@
 //! Field-level expectations for every committed foreign IAMF fixture.
 
+#![allow(clippy::expect_used, clippy::panic)]
+
 #[path = "support/reference_expectations.rs"]
 mod reference_expectations;
 
@@ -291,7 +293,9 @@ fn test_000059_asserts_demixing_and_every_recon_gain_layer_flag_and_gain() {
     assert_eq!(blocks.len(), 26, "test_000059.iamf: Recon Gain block count");
     let mut gains = [0_u8; 12];
     for index in [0_usize, 2, 3, 4] {
-        gains[index] = 255;
+        if let Some(gain) = gains.get_mut(index) {
+            *gain = 255;
+        }
     }
     let expected = ParameterData::ReconGain(ReconGainInfoParameterData {
         layers: vec![
