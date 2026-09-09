@@ -32,3 +32,7 @@ target
 # GSD session-scoped runtime state (PID/session-id locks, dispatch sentinels)
 /.gsd/
 /.planning/milestone.lock
+
+# cargo-fuzz build products are transient. The independent lockfile, seed
+# corpus, and intentionally minimized regression artifacts remain tracked.
+/fuzz/target/

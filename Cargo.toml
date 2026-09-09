@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["iamf", "audio", "bitstream", "spatial-audio", "aom"]
 categories = ["encoding", "multimedia::audio"]
 
+[workspace]
+members = ["."]
+exclude = ["fuzz"]
+
 # Every dependency states its licence on the line that adds it (CLAUDE.md
 # Constraints). Phase 1's shipping graph is exactly one crate: `thiserror` is
 # unconditional per PROJECT.md ("never `anyhow` in a library"), and D-02 defines
@@ -22,6 +26,11 @@ categories = ["encoding", "multimedia::audio"]
 # used only as a differential oracle (arrives in plan 01-03).
 [dependencies]
 thiserror = "2.0.20" # MIT OR Apache-2.0
+arbitrary = { version = "1.4.2", optional = true } # MIT OR Apache-2.0 — bounded structured fuzz input only
+
+[features]
+default = []
+fuzzing = ["dep:arbitrary"]
 
 # Dev-only, and none of these reach the linked graph — `cargo tree -e
 # normal,no-proc-macro` is the instrument that proves it (plain `-e normal`
@@ -37,6 +46,11 @@ hex-literal = "1.1.0"   # MIT OR Apache-2.0 — hand-computed vectors (BITS-06, 
 proptest = "1.11.0"     # MIT OR Apache-2.0 — differential oracle (D-01); MSRV 1.85, exactly GUARD-12's floor
 bitstream-io = "4.10.0" # MIT/Apache-2.0 (slash form; cargo-deny 0.20.2 resolves it as OR) — the oracle itself
 sha2 = "0.10.9"         # MIT OR Apache-2.0 — GUARD-09's golden digest (D-20), dev-only
+
+[[test]]
+name = "fuzz_regression"
+path = "tests/fuzz_regression.rs"
+required-features = ["fuzzing"]
 
 # Why `sha2` and not a platform tool: GUARD-09 runs the golden test on all four
 # targets including `x86_64-pc-windows-msvc`, where neither `shasum` nor

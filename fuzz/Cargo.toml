@@ -1,0 +1,34 @@
+[package]
+name = "iamf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.85"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[features]
+default = []
+roundtrip-model = ["iamf/fuzzing"]
+
+[dependencies]
+libfuzzer-sys = "=0.4.13" # MIT OR Apache-2.0 AND NCSA — scoped to this excluded workspace
+iamf = { path = "..", default-features = false }
+
+[[bin]]
+name = "parse_sequence"
+path = "fuzz_targets/parse_sequence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "obu_roundtrip"
+path = "fuzz_targets/obu_roundtrip.rs"
+test = false
+doc = false
+bench = false
+required-features = ["roundtrip-model"]
