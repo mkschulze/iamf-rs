@@ -34,7 +34,11 @@ const PINNED_POSITIVE_FIXTURES: [(&str, &str); 4] = [
 
 fn files_below(root: &Path, required: bool) -> Vec<PathBuf> {
     if !root.exists() {
-        assert!(!required, "required replay root is missing: {}", root.display());
+        assert!(
+            !required,
+            "required replay root is missing: {}",
+            root.display()
+        );
         return Vec::new();
     }
 
@@ -51,7 +55,11 @@ fn files_below(root: &Path, required: bool) -> Vec<PathBuf> {
             let kind = entry
                 .file_type()
                 .unwrap_or_else(|error| panic!("cannot inspect {}: {error}", path.display()));
-            assert!(!kind.is_symlink(), "replay input must be a copy: {}", path.display());
+            assert!(
+                !kind.is_symlink(),
+                "replay input must be a copy: {}",
+                path.display()
+            );
             if kind.is_dir() {
                 pending.push(path);
             } else if kind.is_file() {
@@ -63,7 +71,11 @@ fn files_below(root: &Path, required: bool) -> Vec<PathBuf> {
     }
     files.sort();
     if required {
-        assert!(!files.is_empty(), "replay corpus is empty: {}", root.display());
+        assert!(
+            !files.is_empty(),
+            "replay corpus is empty: {}",
+            root.display()
+        );
     }
     files
 }
@@ -71,7 +83,11 @@ fn files_below(root: &Path, required: bool) -> Vec<PathBuf> {
 fn read_replay_input(path: &Path) -> Vec<u8> {
     let bytes = fs::read(path)
         .unwrap_or_else(|error| panic!("cannot read replay input {}: {error}", path.display()));
-    assert!(!bytes.is_empty(), "replay input is empty: {}", path.display());
+    assert!(
+        !bytes.is_empty(),
+        "replay input is empty: {}",
+        path.display()
+    );
     bytes
 }
 
@@ -83,10 +99,17 @@ fn replay_model(path: &Path, data: &[u8]) {
         .unwrap_or_else(|error| panic!("model seed {} does not write: {error}", path.display()));
     let parsed = parse_sequence(&bytes)
         .unwrap_or_else(|error| panic!("model seed {} does not parse: {error}", path.display()));
-    assert_eq!(parsed, sequence, "structural mismatch for {}", path.display());
     assert_eq!(
-        write_parsed_sequence(Vec::new(), &parsed)
-            .unwrap_or_else(|error| panic!("model seed {} does not rewrite: {error}", path.display())),
+        parsed,
+        sequence,
+        "structural mismatch for {}",
+        path.display()
+    );
+    assert_eq!(
+        write_parsed_sequence(Vec::new(), &parsed).unwrap_or_else(|error| panic!(
+            "model seed {} does not rewrite: {error}",
+            path.display()
+        )),
         bytes,
         "byte mismatch for {}",
         path.display()
@@ -116,10 +139,15 @@ fn pinned_positive_parse_seeds_are_exact_fixture_copies() {
     for (name, expected_digest) in PINNED_POSITIVE_FIXTURES {
         let original = read_replay_input(&source.join(name));
         let seed = read_replay_input(&corpus.join(name));
-        assert_eq!(sha256_hex(&original), expected_digest, "fixture drift: {name}");
+        assert_eq!(
+            sha256_hex(&original),
+            expected_digest,
+            "fixture drift: {name}"
+        );
         assert_eq!(sha256_hex(&seed), expected_digest, "seed drift: {name}");
         assert_eq!(seed, original, "seed is not byte-identical: {name}");
-        parse_sequence(&seed).unwrap_or_else(|error| panic!("positive seed {name} failed: {error}"));
+        parse_sequence(&seed)
+            .unwrap_or_else(|error| panic!("positive seed {name} failed: {error}"));
     }
 }
 
@@ -153,7 +181,10 @@ fn documented_roundtrip_seed_shapes_are_present() {
         "unknown-after",
         "bounded-raw-parameter-data",
     ] {
-        assert!(names.contains(&required), "missing documented shape seed: {required}");
+        assert!(
+            names.contains(&required),
+            "missing documented shape seed: {required}"
+        );
     }
 
     for placement in ["unknown-before", "unknown-between", "unknown-after"] {
