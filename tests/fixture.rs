@@ -426,6 +426,55 @@ fn pre_encoded_payloads_are_copied_exactly_and_share_each_units_trim() {
 }
 
 #[test]
+fn pre_encoded_payloads_use_each_elements_declared_substream_ids() {
+    let mut fixture = fixture::structure_only();
+    let declared: Vec<(u32, Vec<u32>)> = fixture
+        .descriptors
+        .audio_elements
+        .iter()
+        .map(|element| {
+            (
+                element.audio_element_id,
+                element.audio_substream_ids.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        declared,
+        vec![(401, vec![1]), (400, vec![0])],
+        "the regression requires descriptor order opposite to substream-id order"
+    );
+    fixture.frame_sources = vec![
+        FrameSource::PreEncoded(vec![EncodedTemporalUnit {
+            trimming: None,
+            substream_payloads: vec![vec![0xaa]],
+        }]),
+        FrameSource::PreEncoded(vec![EncodedTemporalUnit {
+            trimming: None,
+            substream_payloads: vec![vec![0xbb]],
+        }]),
+    ];
+
+    let parsed = parse_sequence(&fixture.encode().expect("pre-encoded units encode"))
+        .expect("the encoded fixture parses");
+    let frames: Vec<(u32, Vec<u8>)> = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioFrame(frame) => {
+                Some((frame.payload.substream_id, frame.payload.payload.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        frames,
+        vec![(1, vec![0xaa]), (0, vec![0xbb])],
+        "each source payload must stay attached to its Audio Element's declared substream id"
+    );
+}
+
+#[test]
 fn an_element_and_frame_source_count_mismatch_is_an_error() {
     let mut fixture = fixture::sample_identity();
     fixture.frame_sources.clear();

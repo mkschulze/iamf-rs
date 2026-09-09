@@ -349,10 +349,10 @@ impl Fixture {
     /// Deliberately not a test-only serialisation path: a harness that encoded
     /// its own fixture some other way would prove that the other way works.
     ///
-    /// Substream ids run consecutively across elements in descriptor order —
-    /// element 0 takes `0..n0`, element 1 takes `n0..n0+n1` — which is what the
-    /// elements' own `audio_substream_ids` declare, so the frames written and
-    /// the ids declared come from one source.
+    /// Every payload is paired positionally with its Audio Element's declared
+    /// `audio_substream_ids`. Descriptor order need not be substream-id order,
+    /// so the declarations themselves — not a synthetic global counter — are
+    /// the single source of frame ids.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         let elements = &self.descriptors.audio_elements;
         if elements.len() != self.frame_sources.len() {
@@ -446,11 +446,15 @@ impl Fixture {
                     ));
                 }
             }
-            prepared.push((element.audio_element_id, units));
+            prepared.push((
+                element.audio_element_id,
+                element.audio_substream_ids.as_slice(),
+                units,
+            ));
         }
 
-        if let Some((lead_id, lead_units)) = prepared.first() {
-            for (element_id, units) in prepared.iter().skip(1) {
+        if let Some((lead_id, _, lead_units)) = prepared.first() {
+            for (element_id, _, units) in prepared.iter().skip(1) {
                 if units.len() != lead_units.len() {
                     return Err(format!(
                         "{}: element {lead_id} has {} temporal units but element {element_id} has {}",
@@ -476,23 +480,23 @@ impl Fixture {
             .push_descriptors(&self.descriptors)
             .map_err(|e| format!("{}: push_descriptors: {e:?}", self.name))?;
 
-        let unit_count = prepared.first().map_or(0, |(_, units)| units.len());
+        let unit_count = prepared.first().map_or(0, |(_, _, units)| units.len());
         for index in 0..unit_count {
             let mut frames = Vec::new();
-            let mut next_substream_id = 0_u32;
 
-            for (_, units) in &prepared {
+            for (_, substream_ids, units) in &prepared {
                 let unit = units.get(index).ok_or_else(|| {
                     format!(
                         "{}: no temporal unit {index} after count validation",
                         self.name
                     )
                 })?;
-                for payload in &unit.substream_payloads {
+                for (substream_id, payload) in
+                    substream_ids.iter().copied().zip(&unit.substream_payloads)
+                {
                     frames.push(
-                        AudioFrame::new(next_substream_id, payload.clone()).into_obu(unit.trimming),
+                        AudioFrame::new(substream_id, payload.clone()).into_obu(unit.trimming),
                     );
-                    next_substream_id = next_substream_id.saturating_add(1);
                 }
             }
 
