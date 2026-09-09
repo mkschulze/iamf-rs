@@ -34,7 +34,7 @@ use crate::error::{Error, ErrorKind, Finding, Location, Result};
 
 /// `ipcm` — LPCM.
 pub const CODEC_ID_LPCM: [u8; 4] = *b"ipcm";
-/// `Opus` — Opus. Modelled as an opaque decoder config until Phase 3.
+/// `Opus` — Opus. Typed as [`OpusDecoderConfig`] when its prefix is complete.
 pub const CODEC_ID_OPUS: [u8; 4] = *b"Opus";
 /// `fLaC` — FLAC. Typed as [`FlacDecoderConfig`] when its prefix is complete.
 pub const CODEC_ID_FLAC: [u8; 4] = *b"fLaC";
@@ -47,6 +47,9 @@ pub const MAX_SAMPLES_PER_FRAME: u32 = 96_000;
 
 /// The sample rates `iamf-tools`' `ValidateSampleRate` admits.
 const VALID_SAMPLE_RATES: [u32; 5] = [16_000, 32_000, 44_100, 48_000, 96_000];
+
+const OPUS_DECODER_CONFIG_BYTES: usize = 11;
+const OPUS_SAMPLE_RATE: u32 = 48_000;
 
 /// A FLAC metadata header followed by its fixed-size STREAMINFO payload.
 const FLAC_DECODER_CONFIG_BYTES: usize = 38;
@@ -126,10 +129,23 @@ pub struct FlacDecoderConfig {
     pub md5_signature: [u8; 16],
 }
 
+/// The eleven IAMF Opus decoder-config bytes, with big-endian multibyte fields.
+/// Parsed values are retained even when they contradict IAMF constraints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpusDecoderConfig {
+    pub version: u8,
+    pub output_channel_count: u8,
+    /// Encoder lookahead measured in samples at the 48 kHz output clock.
+    pub pre_skip: u16,
+    pub input_sample_rate: u32,
+    /// The signed Q7.8 wire value; IAMF requires zero.
+    pub output_gain: i16,
+    pub mapping_family: u8,
+}
+
 /// The `decoder_config` blob, which is the whole remainder of the payload.
 ///
-/// `Raw` exists so a Codec Config for a codec Phase 1 does not model still
-/// round-trips byte-identically. Phase 3 adds `Flac` and `Opus` beside `Lpcm`.
+/// `Raw` preserves unsupported codecs and structurally short known configs.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecoderConfig {
@@ -137,6 +153,8 @@ pub enum DecoderConfig {
     Lpcm(LpcmDecoderConfig),
     /// `codec_id == "fLaC"` with a complete 38-byte STREAMINFO prefix.
     Flac(FlacDecoderConfig),
+    /// `codec_id == "Opus"` with a complete 11-byte prefix.
+    Opus(OpusDecoderConfig),
     /// Any other `codec_id`, preserved verbatim.
     Raw {
         /// The `codec_id` these bytes belong to.
@@ -193,7 +211,7 @@ impl CodecConfig {
     pub const fn lpcm_config(&self) -> Option<&LpcmDecoderConfig> {
         match &self.decoder_config {
             DecoderConfig::Lpcm(cfg) => Some(cfg),
-            DecoderConfig::Flac(_) | DecoderConfig::Raw { .. } => None,
+            DecoderConfig::Flac(_) | DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => None,
         }
     }
 
@@ -268,11 +286,57 @@ impl CodecConfig {
     pub const fn flac_config(&self) -> Option<&FlacDecoderConfig> {
         match &self.decoder_config {
             DecoderConfig::Flac(cfg) => Some(cfg),
-            DecoderConfig::Lpcm(_) | DecoderConfig::Raw { .. } => None,
+            DecoderConfig::Lpcm(_) | DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => None,
         }
     }
 
-    /// Report every modelled LPCM and FLAC semantic contradiction as a
+    /// Construct an IAMF Opus configuration with derived roll distance.
+    ///
+    /// `pre_skip` is the measured encoder lookahead. A zero value is retained
+    /// and diagnosed by [`Self::validate`].
+    ///
+    /// # Errors
+    ///
+    /// Rejects rates other than 48 kHz and zero samples per frame.
+    pub fn opus(
+        codec_config_id: u32,
+        num_samples_per_frame: u32,
+        sample_rate: u32,
+        pre_skip: u16,
+    ) -> Result<Self> {
+        if sample_rate != OPUS_SAMPLE_RATE {
+            return Err(Error::new(
+                ErrorKind::SampleRateNotSupportedByCodec,
+                Location::Field("sample_rate"),
+            ));
+        }
+        Ok(Self {
+            codec_config_id,
+            codec_id: CODEC_ID_OPUS,
+            num_samples_per_frame,
+            audio_roll_distance: required_opus_audio_roll_distance(num_samples_per_frame)?,
+            decoder_config: DecoderConfig::Opus(OpusDecoderConfig {
+                version: 1,
+                output_channel_count: 2,
+                pre_skip,
+                input_sample_rate: sample_rate,
+                output_gain: 0,
+                mapping_family: 0,
+            }),
+            trailing: Vec::new(),
+        })
+    }
+
+    /// The `OpusDecoderConfig`, when this is one.
+    #[must_use]
+    pub const fn opus_config(&self) -> Option<&OpusDecoderConfig> {
+        match &self.decoder_config {
+            DecoderConfig::Opus(cfg) => Some(cfg),
+            DecoderConfig::Lpcm(_) | DecoderConfig::Flac(_) | DecoderConfig::Raw { .. } => None,
+        }
+    }
+
+    /// Report every modelled LPCM, FLAC and Opus semantic contradiction as a
     /// Finding rather than rejecting or normalising parsed bytes.
     ///
     /// LPCM checks its format flag, sample size and selected sample rates. FLAC
@@ -283,6 +347,7 @@ impl CodecConfig {
     /// separately is what keeps foreign input reproducible.
     // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/lpcm_decoder_config.cc LpcmDecoderConfig::Validate
     // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/flac_decoder_config.cc FlacDecoderConfig::ReadAndValidate / ValidateEncodingRestrictions
+    // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/opus_decoder_config.cc ValidatePayload / ValidateAudioRollDistance
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
@@ -452,15 +517,68 @@ impl CodecConfig {
                 ));
             }
         }
-        let required = required_audio_roll_distance(&self.decoder_config);
-        if self.audio_roll_distance != required {
-            findings.push(field(
-                "audio_roll_distance",
-                format!(
-                    "audio_roll_distance is {}, expected {required} for this codec",
-                    self.audio_roll_distance
-                ),
-            ));
+        if let Some(opus) = self.opus_config() {
+            if !(1..=15).contains(&opus.version) {
+                findings.push(field(
+                    "version",
+                    format!("version is {}, outside the supported 1..=15", opus.version),
+                ));
+            }
+            if opus.output_channel_count != 2 {
+                findings.push(field(
+                    "output_channel_count",
+                    format!(
+                        "output_channel_count is {}, expected 2",
+                        opus.output_channel_count
+                    ),
+                ));
+            }
+            if opus.pre_skip == 0 {
+                findings.push(field(
+                    "pre_skip",
+                    "pre_skip is zero, expected measured non-zero encoder lookahead".to_owned(),
+                ));
+            }
+            if opus.input_sample_rate != OPUS_SAMPLE_RATE {
+                findings.push(field(
+                    "input_sample_rate",
+                    format!(
+                        "input_sample_rate is {}, expected {OPUS_SAMPLE_RATE}",
+                        opus.input_sample_rate
+                    ),
+                ));
+            }
+            if opus.output_gain != 0 {
+                findings.push(field(
+                    "output_gain",
+                    format!("output_gain is {}, expected 0", opus.output_gain),
+                ));
+            }
+            if opus.mapping_family != 0 {
+                findings.push(field(
+                    "mapping_family",
+                    format!("mapping_family is {}, expected 0", opus.mapping_family),
+                ));
+            }
+        }
+        let required = match &self.decoder_config {
+            // A zero frame size already has its own Finding above; no roll
+            // can be derived for it, so do not invent an expected value.
+            DecoderConfig::Opus(_) => {
+                required_opus_audio_roll_distance(self.num_samples_per_frame).ok()
+            }
+            _ => Some(required_audio_roll_distance(&self.decoder_config)),
+        };
+        if let Some(required) = required {
+            if self.audio_roll_distance != required {
+                findings.push(field(
+                    "audio_roll_distance",
+                    format!(
+                        "audio_roll_distance is {}, expected {required} for this codec",
+                        self.audio_roll_distance
+                    ),
+                ));
+            }
         }
         findings
     }
@@ -470,16 +588,50 @@ impl CodecConfig {
 ///
 /// This is the **encoder-path derivation** (DESC-02). The reader never calls
 /// it to replace a wire value; `validate()` calls it to name a mismatch (D-06).
+/// Other variants retain the legacy zero fallback. For Opus use
+/// [`required_opus_audio_roll_distance`], which also needs the frame size.
 // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/lpcm_decoder_config.h LpcmDecoderConfig::GetRequiredAudioRollDistance
 #[must_use]
 pub const fn required_audio_roll_distance(decoder_config: &DecoderConfig) -> i16 {
     match decoder_config {
         DecoderConfig::Lpcm(_) | DecoderConfig::Flac(_) => 0,
-        // Phase 1 models no other codec, and a roll distance it cannot derive
-        // is one it must not claim a value for. Reported as "expected 0" would
-        // be a lie for Opus (-32 at 48 kHz); Phase 3 replaces this arm.
-        DecoderConfig::Raw { .. } => 0,
+        DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => 0,
     }
+}
+
+/// Derive the Opus roll distance as `-ceil(3840 / num_samples_per_frame)`.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::ZeroSamplesPerFrame`] for zero. Checked arithmetic
+/// and signed conversion protect the calculation against overflow.
+// ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/opus_decoder_config.cc OpusDecoderConfig::GetRequiredAudioRollDistance
+pub fn required_opus_audio_roll_distance(num_samples_per_frame: u32) -> Result<i16> {
+    let zero = || {
+        Error::new(
+            ErrorKind::ZeroSamplesPerFrame,
+            Location::Field("num_samples_per_frame"),
+        )
+    };
+    let overflow = || {
+        Error::new(
+            ErrorKind::FramePlanOverflow,
+            Location::Field("num_samples_per_frame"),
+        )
+    };
+    let quotient = 3840_u32
+        .checked_div(num_samples_per_frame)
+        .ok_or_else(zero)?;
+    let remainder = 3840_u32
+        .checked_rem(num_samples_per_frame)
+        .ok_or_else(zero)?;
+    let ceiling = quotient
+        .checked_add(u32::from(remainder != 0))
+        .ok_or_else(overflow)?;
+    i16::try_from(ceiling)
+        .ok()
+        .and_then(i16::checked_neg)
+        .ok_or_else(overflow)
 }
 
 // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c iamf_codec_conf_new
@@ -504,6 +656,8 @@ pub fn read_codec_config(r: &mut BitCursor<'_>) -> Result<CodecConfig> {
         DecoderConfig::Lpcm(read_lpcm_decoder_config(r)?)
     } else if codec_id == CODEC_ID_FLAC && r.bytes_remaining() >= FLAC_DECODER_CONFIG_BYTES {
         DecoderConfig::Flac(read_flac_decoder_config(r)?)
+    } else if codec_id == CODEC_ID_OPUS && r.bytes_remaining() >= OPUS_DECODER_CONFIG_BYTES {
+        DecoderConfig::Opus(read_opus_decoder_config(r)?)
     } else {
         // Everything left, for a codec this phase does not model — or for an
         // `ipcm` config too short to be one, which stays reproducible rather
@@ -544,6 +698,7 @@ pub fn write_codec_config(w: &mut BitWriter, v: &CodecConfig) -> Result<()> {
     match &v.decoder_config {
         DecoderConfig::Lpcm(cfg) => write_lpcm_decoder_config(w, cfg)?,
         DecoderConfig::Flac(cfg) => write_flac_decoder_config(w, cfg)?,
+        DecoderConfig::Opus(cfg) => write_opus_decoder_config(w, cfg)?,
         DecoderConfig::Raw { bytes, .. } => w.write_bytes(bytes)?,
     }
     w.write_bytes(&v.trailing)
@@ -573,6 +728,31 @@ fn write_lpcm_decoder_config(w: &mut BitWriter, v: &LpcmDecoderConfig) -> Result
     w.write_unsigned(u64::from(v.sample_format_flags.value()), 8)?;
     w.write_unsigned(u64::from(v.sample_size), 8)?;
     w.write_unsigned(u64::from(v.sample_rate), 32)
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/opus_decoder_config.cc OpusDecoderConfig::ReadAndValidate
+// ref: libiamf@v1.1.0 code/src/iamf_dec/opus/IAMF_opus_decoder.c iamf_opus_init
+/// Read exactly eleven bytes, retaining all fields; multibyte values are big-endian.
+fn read_opus_decoder_config(r: &mut BitCursor<'_>) -> Result<OpusDecoderConfig> {
+    Ok(OpusDecoderConfig {
+        version: u8::try_from(r.read_unsigned(8)?).unwrap_or(0),
+        output_channel_count: u8::try_from(r.read_unsigned(8)?).unwrap_or(0),
+        pre_skip: u16::try_from(r.read_unsigned(16)?).unwrap_or(0),
+        input_sample_rate: u32::try_from(r.read_unsigned(32)?).unwrap_or(0),
+        output_gain: i16::try_from(r.read_signed(16)?).unwrap_or(0),
+        mapping_family: u8::try_from(r.read_unsigned(8)?).unwrap_or(0),
+    })
+}
+
+// ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/opus_decoder_config.cc OpusDecoderConfig::ValidateAndWrite
+/// Write the eleven IAMF bytes faithfully, with big-endian multibyte fields.
+fn write_opus_decoder_config(w: &mut BitWriter, v: &OpusDecoderConfig) -> Result<()> {
+    w.write_unsigned(u64::from(v.version), 8)?;
+    w.write_unsigned(u64::from(v.output_channel_count), 8)?;
+    w.write_unsigned(u64::from(v.pre_skip), 16)?;
+    w.write_unsigned(u64::from(v.input_sample_rate), 32)?;
+    w.write_signed(i64::from(v.output_gain), 16)?;
+    w.write_unsigned(u64::from(v.mapping_family), 8)
 }
 
 // ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/flac_decoder_config.cc FlacDecoderConfig::ReadAndValidate / ReadStreamInfo

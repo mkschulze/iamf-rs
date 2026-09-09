@@ -396,6 +396,22 @@ fn dump_codec_config(offset: usize, value: &CodecConfig) -> String {
                 hex_inline(&flac.md5_signature, flac.md5_signature.len()),
             ));
         }
+        DecoderConfig::Opus(opus) => {
+            out.push_str(&field(offset, "  version", opus.version));
+            out.push_str(&field(
+                offset,
+                "  output_channel_count",
+                opus.output_channel_count,
+            ));
+            out.push_str(&field(offset, "  pre_skip", opus.pre_skip));
+            out.push_str(&field(
+                offset,
+                "  input_sample_rate",
+                opus.input_sample_rate,
+            ));
+            out.push_str(&field(offset, "  output_gain", opus.output_gain));
+            out.push_str(&field(offset, "  mapping_family", opus.mapping_family));
+        }
         DecoderConfig::Raw { codec_id, bytes } => {
             out.push_str(&field(
                 offset,
