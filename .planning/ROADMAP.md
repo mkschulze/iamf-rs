@@ -108,7 +108,7 @@ Plans:
 
 Plans:
 
-- [ ] 03-01: Isolated codec-tool preflight and typed faithful FLAC STREAMINFO configuration
+- [x] 03-01: Isolated codec-tool preflight and typed faithful FLAC STREAMINFO configuration
 - [ ] 03-02: Codec-neutral fixture adapter, excluded FLAC fixture tooling, fixed-block corpus, and FLAC conformance
 - [ ] 03-03: Typed faithful Opus configuration, sample-rate rejection, and checked roll derivation
 - [ ] 03-04: Excluded Opus fixture generation with measured lookahead, exact packet count, and standalone decode oracle
@@ -157,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
-| 3. FLAC and Opus Framing | 0/8 | Not started | - |
+| 3. FLAC and Opus Framing | 1/8 | In progress | 2026-09-09 |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
 ---
