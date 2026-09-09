@@ -91,13 +91,260 @@ impl ParsedSequence {
     /// Semantic findings over the flat wire-order model.
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
-        Vec::new()
+        let mut findings = Vec::new();
+        let mut codec_ids: Vec<(u32, usize)> = Vec::new();
+        let mut element_ids: Vec<(u32, usize)> = Vec::new();
+        let mut presentation_ids: Vec<(u32, usize)> = Vec::new();
+        let mut parameter_ids: Vec<(u32, usize)> = Vec::new();
+        let mut registry = ParamDefinitionRegistry::new();
+
+        // Pass one: local syntax-preserving findings, followed immediately by
+        // duplicate findings when the later wire occurrence is encountered.
+        for (index, obu) in self.obus.iter().enumerate() {
+            match obu {
+                SequenceObu::IaSequenceHeader(obu) => {
+                    findings.extend(obu.payload.validate());
+                }
+                SequenceObu::CodecConfig(obu) => {
+                    findings.extend(obu.payload.validate());
+                    push_later_duplicate(
+                        &mut findings,
+                        &mut codec_ids,
+                        obu.payload.codec_config_id,
+                        index,
+                        "codec_config_id",
+                    );
+                }
+                SequenceObu::AudioElement(obu) => {
+                    findings.extend(obu.payload.validate());
+                    push_later_duplicate(
+                        &mut findings,
+                        &mut element_ids,
+                        obu.payload.audio_element_id,
+                        index,
+                        "audio_element_id",
+                    );
+                    observe_parameter_duplicates(
+                        &mut findings,
+                        &mut parameter_ids,
+                        &mut registry,
+                        index,
+                        |registry| registry.observe_audio_element(&obu.payload),
+                    );
+                }
+                SequenceObu::MixPresentation(obu) => {
+                    findings.extend(obu.payload.validate());
+                    push_later_duplicate(
+                        &mut findings,
+                        &mut presentation_ids,
+                        obu.payload.mix_presentation_id,
+                        index,
+                        "mix_presentation_id",
+                    );
+                    observe_parameter_duplicates(
+                        &mut findings,
+                        &mut parameter_ids,
+                        &mut registry,
+                        index,
+                        |registry| {
+                            registry.observe_mix_presentation(&obu.payload);
+                            Ok(())
+                        },
+                    );
+                }
+                SequenceObu::ParameterBlock(obu) => {
+                    findings.extend(obu.payload.validate());
+                }
+                SequenceObu::AudioFrame(obu) => {
+                    findings.extend(obu.payload.validate(obu.header.obu_type));
+                }
+                SequenceObu::TemporalDelimiter(_) | SequenceObu::Unknown(_) => {}
+            }
+        }
+
+        // Pass two: resolve every referring OBU against first-wire bindings.
+        // These lookup vectors preserve the sequence rather than rebuilding a
+        // DescriptorSet (whose writer sorting would destroy this order).
+        let codec_configs: Vec<&CodecConfig> = self
+            .obus
+            .iter()
+            .filter_map(|obu| match obu {
+                SequenceObu::CodecConfig(obu) => Some(&obu.payload),
+                _ => None,
+            })
+            .collect();
+        let audio_elements: Vec<&AudioElement> = self
+            .obus
+            .iter()
+            .filter_map(|obu| match obu {
+                SequenceObu::AudioElement(obu) => Some(&obu.payload),
+                _ => None,
+            })
+            .collect();
+
+        for obu in &self.obus {
+            match obu {
+                SequenceObu::AudioElement(obu) => {
+                    if !codec_configs
+                        .iter()
+                        .any(|config| config.codec_config_id == obu.payload.codec_config_id)
+                    {
+                        findings.push(Finding {
+                            at: Location::Field("codec_config_id"),
+                            message: format!(
+                                "audio element {} references codec_config_id {}, which no Codec \
+                                 Config in this sequence carries",
+                                obu.payload.audio_element_id, obu.payload.codec_config_id
+                            ),
+                        });
+                    }
+                }
+                SequenceObu::MixPresentation(obu) => {
+                    for sub_mix in &obu.payload.sub_mixes {
+                        for element in &sub_mix.elements {
+                            if !audio_elements.iter().any(|candidate| {
+                                candidate.audio_element_id == element.audio_element_id
+                            }) {
+                                findings.push(Finding {
+                                    at: Location::Field("audio_element_id"),
+                                    message: format!(
+                                        "mix presentation {} references audio_element_id {}, \
+                                         which no Audio Element in this sequence carries",
+                                        obu.payload.mix_presentation_id, element.audio_element_id
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                SequenceObu::ParameterBlock(obu) => {
+                    if registry.get(obu.payload.parameter_id).is_none() {
+                        findings.push(Finding {
+                            at: Location::Field("parameter_id"),
+                            message: format!(
+                                "parameter block references parameter_id {}, which no definition \
+                                 in this sequence carries",
+                                obu.payload.parameter_id
+                            ),
+                        });
+                    }
+                }
+                SequenceObu::AudioFrame(obu) => {
+                    if !audio_elements.iter().any(|element| {
+                        element
+                            .audio_substream_ids
+                            .contains(&obu.payload.substream_id)
+                    }) {
+                        findings.extend(obu.payload.validate_against_element(&[]));
+                    }
+                }
+                SequenceObu::IaSequenceHeader(_)
+                | SequenceObu::CodecConfig(_)
+                | SequenceObu::TemporalDelimiter(_)
+                | SequenceObu::Unknown(_) => {}
+            }
+        }
+
+        findings
     }
 
     /// Canonical temporal-unit ranges into [`Self::obus`].
     #[must_use]
     pub fn temporal_unit_ranges(&self) -> Vec<core::ops::Range<usize>> {
-        Vec::new()
+        let uses_delimiters = self
+            .obus
+            .iter()
+            .any(|obu| matches!(obu, SequenceObu::TemporalDelimiter(_)));
+        let mut ranges = Vec::new();
+        let mut start = None;
+        let mut frame_ids = Vec::new();
+        let mut saw_frame = false;
+
+        for (index, obu) in self.obus.iter().enumerate() {
+            let is_temporal = matches!(
+                obu,
+                SequenceObu::ParameterBlock(_)
+                    | SequenceObu::TemporalDelimiter(_)
+                    | SequenceObu::AudioFrame(_)
+            );
+            let boundary = if matches!(obu, SequenceObu::TemporalDelimiter(_)) {
+                start.is_some()
+            } else if uses_delimiters {
+                false
+            } else {
+                match obu {
+                    SequenceObu::ParameterBlock(_) => saw_frame,
+                    SequenceObu::AudioFrame(frame) => {
+                        frame_ids.contains(&frame.payload.substream_id)
+                    }
+                    _ => false,
+                }
+            };
+
+            if boundary {
+                if let Some(range_start) = start {
+                    ranges.push(range_start..index);
+                }
+                start = Some(index);
+                frame_ids.clear();
+                saw_frame = false;
+            } else if start.is_none() && is_temporal {
+                start = Some(index);
+            }
+
+            if let SequenceObu::AudioFrame(frame) = obu {
+                saw_frame = true;
+                frame_ids.push(frame.payload.substream_id);
+            }
+        }
+
+        if let Some(range_start) = start {
+            ranges.push(range_start..self.obus.len());
+        }
+        ranges
+    }
+}
+
+fn push_later_duplicate(
+    findings: &mut Vec<Finding>,
+    seen: &mut Vec<(u32, usize)>,
+    id: u32,
+    index: usize,
+    field: &'static str,
+) {
+    for (_, first_index) in seen.iter().filter(|(seen_id, _)| *seen_id == id) {
+        findings.push(Finding {
+            at: Location::Field(field),
+            message: format!(
+                "{field} {id} appears at OBU indices {first_index} and {index}; lookup binds to \
+                 index {first_index}, the first in wire order"
+            ),
+        });
+    }
+    seen.push((id, index));
+}
+
+fn observe_parameter_duplicates<F>(
+    findings: &mut Vec<Finding>,
+    seen: &mut Vec<(u32, usize)>,
+    registry: &mut ParamDefinitionRegistry,
+    obu_index: usize,
+    observe: F,
+) where
+    F: FnOnce(&mut ParamDefinitionRegistry) -> Result<()>,
+{
+    let previous_len = registry.len();
+    if observe(registry).is_err() {
+        return;
+    }
+    for entry in registry.entries().iter().skip(previous_len) {
+        push_later_duplicate(
+            findings,
+            seen,
+            entry.definition.parameter_id,
+            obu_index,
+            "parameter_id",
+        );
     }
 }
 

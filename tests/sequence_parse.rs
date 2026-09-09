@@ -172,8 +172,12 @@ fn descriptor_validation_reports_duplicate_nested_parameter_ids() {
 }
 
 fn parsed_round_trip(sequence: &ParsedSequence) -> ParsedSequence {
-    let bytes = write_parsed_sequence(Vec::new(), sequence).expect("flat sequence writes");
-    parse_sequence(&bytes).expect("written flat sequence parses")
+    let written = write_parsed_sequence(Vec::new(), sequence);
+    assert!(written.is_ok(), "flat sequence writes: {written:?}");
+    let bytes = written.unwrap_or_default();
+    let parsed = parse_sequence(&bytes);
+    assert!(parsed.is_ok(), "written flat sequence parses: {parsed:?}");
+    parsed.unwrap_or_default()
 }
 
 fn mode_1_block(parameter_id: u32) -> Obu<ParameterBlock> {
@@ -202,10 +206,22 @@ fn empty_and_descriptor_only_inputs_parse_without_synthesis() {
     let bytes = support::descriptor_bytes(&published_descriptor_set());
     let parsed = parse_sequence(&bytes).expect("descriptor prologue parses");
     assert_eq!(parsed.obus.len(), 4);
-    assert!(matches!(parsed.obus[0], SequenceObu::IaSequenceHeader(_)));
-    assert!(matches!(parsed.obus[1], SequenceObu::CodecConfig(_)));
-    assert!(matches!(parsed.obus[2], SequenceObu::AudioElement(_)));
-    assert!(matches!(parsed.obus[3], SequenceObu::MixPresentation(_)));
+    assert!(matches!(
+        parsed.obus.first(),
+        Some(SequenceObu::IaSequenceHeader(_))
+    ));
+    assert!(matches!(
+        parsed.obus.get(1),
+        Some(SequenceObu::CodecConfig(_))
+    ));
+    assert!(matches!(
+        parsed.obus.get(2),
+        Some(SequenceObu::AudioElement(_))
+    ));
+    assert!(matches!(
+        parsed.obus.get(3),
+        Some(SequenceObu::MixPresentation(_))
+    ));
     assert!(parsed.temporal_unit_ranges().is_empty());
     assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
 }
@@ -313,7 +329,7 @@ fn a_valid_prefix_plus_truncated_suffix_returns_no_partial_model_and_absolute_of
 #[test]
 fn flat_validation_reports_local_then_duplicate_then_reference_findings_in_wire_order() {
     let mut invalid_header = support::published_sequence_header();
-    invalid_header.payload.primary_profile = 9;
+    invalid_header.payload.ia_code = 0;
     let mut first_config = support::published_codec_config();
     first_config.payload.codec_config_id = 7;
     let mut duplicate_config = first_config.clone();
@@ -336,11 +352,27 @@ fn flat_validation_reports_local_then_duplicate_then_reference_findings_in_wire_
         .map(|finding| finding.message)
         .collect();
 
-    assert!(messages[0].contains("primary_profile"), "{messages:?}");
-    assert!(messages[1].contains("codec_config_id 7"), "{messages:?}");
-    assert!(messages[2].contains("codec_config_id 999"), "{messages:?}");
+    assert_eq!(messages.len(), 4, "{messages:?}");
     assert!(
-        messages[3].contains("audio_substream_id 77"),
+        messages.first().is_some_and(|m| m.contains("ia_code")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .get(1)
+            .is_some_and(|m| m.contains("codec_config_id 7")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .get(2)
+            .is_some_and(|m| m.contains("codec_config_id 999")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .get(3)
+            .is_some_and(|m| m.contains("audio_substream_id 77")),
         "{messages:?}"
     );
 }
@@ -402,8 +434,9 @@ fn raw_unknown_payload_is_indivisible_and_preserves_header_flags() {
     let bytes = writer.finish().expect("byte aligned");
 
     let parsed = parse_sequence(&bytes).expect("unknown OBU parses");
-    let SequenceObu::Unknown(unknown) = &parsed.obus[0] else {
-        panic!("reserved type dispatches as Unknown")
+    let unknown = match parsed.obus.first() {
+        Some(SequenceObu::Unknown(unknown)) => unknown,
+        _ => panic!("reserved type dispatches as Unknown"),
     };
     assert_eq!(unknown.header, header);
     assert_eq!(unknown.payload, vec![0xaa, 0xbb, 0xcc]);
