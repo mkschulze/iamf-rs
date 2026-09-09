@@ -104,13 +104,18 @@ Plans:
 
 **Research**: Yes — run `cargo deny check licenses` on a throwaway branch that merely *adds* the candidate codec crates before the approach is committed (the wrapper crate's own licence, whatever it vendors, and its build-dependencies are three separate questions); verify `claxon` builds on edition 2024
 **Scope pressure to resist**: sample-rate mismatch is the single most likely first DSP breach. The answer is a typed error, never a resampler
-**Plans**: 3 plans
+**Plans**: 8 plans
 
 Plans:
 
-- [ ] 03-01: Throwaway-branch licence pre-check, then FLAC STREAMINFO `decoder_config` and its conformance run
-- [ ] 03-02: Opus `OpusHead` `decoder_config`, derived roll distance, and the priming-driven non-zero `trim_at_start`
-- [ ] 03-03: Typed sample-rate rejection and dependency hygiene — dev-dependency-only codec crates, committed Opus packet fixtures
+- [ ] 03-01: Isolated codec-tool preflight and typed faithful FLAC STREAMINFO configuration
+- [ ] 03-02: Codec-neutral fixture adapter, excluded FLAC fixture tooling, fixed-block corpus, and FLAC conformance
+- [ ] 03-03: Typed faithful Opus configuration, sample-rate rejection, and checked roll derivation
+- [ ] 03-04: Excluded Opus fixture generation with measured lookahead, exact packet count, and standalone decode oracle
+- [ ] 03-05: Opus packet/trim integration through the shared conformance gate
+- [ ] 03-06: Shipping dependency-boundary canaries and scoped codec-tool licence policy
+- [ ] 03-07: Offline parser/property/fuzz regression closure and immutable artifact proof
+- [ ] 03-08: Four-target CI and pinned reference-evidence closure
 
 ### Phase 4: Parallax-Facing API
 
@@ -152,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
-| 3. FLAC and Opus Framing | 0/3 | Not started | - |
+| 3. FLAC and Opus Framing | 0/8 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
 ---
