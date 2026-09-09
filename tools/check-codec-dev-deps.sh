@@ -92,10 +92,38 @@ cargo deny check advisories bans sources
 cargo metadata --locked --format-version 1 >metadata.json
 cargo tree --edges normal,build >tree-normal-build.txt
 
+metadata_package() {
+    local package_name="$1"
+
+    jq -er --arg package_name "${package_name}" '
+        [.packages[]
+         | select(.name == $package_name)
+         | {version, license}]
+        | if length != 1 then
+              error("expected exactly one resolved package named " + $package_name)
+          elif .[0].license == null then
+              error("resolved package has no declared license: " + $package_name)
+          else
+              .[0] | [.version, .license] | @tsv
+          end
+    ' metadata.json
+}
+
+CLAXON_PACKAGE="$(metadata_package claxon)"
+FLACENC_PACKAGE="$(metadata_package flacenc)"
+OPUS_PACKAGE="$(metadata_package opus)"
+OPUSIC_SYS_PACKAGE="$(metadata_package opusic-sys)"
+
+IFS=$'\t' read -r CLAXON_VERSION CLAXON_LICENSE <<<"${CLAXON_PACKAGE}"
+IFS=$'\t' read -r FLACENC_VERSION FLACENC_LICENSE <<<"${FLACENC_PACKAGE}"
+IFS=$'\t' read -r OPUS_VERSION OPUS_LICENSE <<<"${OPUS_PACKAGE}"
+IFS=$'\t' read -r OPUSIC_SYS_VERSION OPUSIC_SYS_LICENSE <<<"${OPUSIC_SYS_PACKAGE}"
+
 TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 CARGO_VERSION="$(cargo +1.85.0 --version)"
 RUSTC_VERSION="$(rustc +1.85.0 --version)"
 DENY_VERSION="$(cargo deny --version)"
+JQ_VERSION="$(jq --version)"
 
 cat >"${REPO_ROOT}/CODEC-DEPENDENCY-PREFLIGHT.md" <<EOF
 # Codec dependency preflight
@@ -113,16 +141,22 @@ exit. It does not edit \`Cargo.toml\` or \`Cargo.lock\`.
 - \`${CARGO_VERSION}\`
 - \`${RUSTC_VERSION}\`
 - \`${DENY_VERSION}\`
+- \`${JQ_VERSION}\` (extracts resolved package fields from locked metadata)
 - Temporary package: \`${PREFLIGHT_DIR}\` (removed after this run)
 
 ## Candidate resolution and policy result
 
 | Candidate | Resolved version | Licence | Configuration | Result |
 | --- | --- | --- | --- | --- |
-| \`claxon\` | 0.4.3 | Apache-2.0 | exact pin | PASS |
-| \`flacenc\` | 0.5.1 | Apache-2.0 | exact pin; \`default-features = false\` | PASS |
-| \`opus\` | 0.4.0 | MIT OR Apache-2.0 | exact pin | PASS |
-| \`opusic-sys\` (transitive from \`opus\`) | 0.7.5 | BSD-3-Clause | bundled default build | PASS under copied policy |
+| \`claxon\` | ${CLAXON_VERSION} | ${CLAXON_LICENSE} | exact pin | PASS |
+| \`flacenc\` | ${FLACENC_VERSION} | ${FLACENC_LICENSE} | exact pin; \`default-features = false\` | PASS |
+| \`opus\` | ${OPUS_VERSION} | ${OPUS_LICENSE} | exact pin | PASS |
+| \`opusic-sys\` (transitive from \`opus\`) | ${OPUSIC_SYS_VERSION} | ${OPUSIC_SYS_LICENSE} | bundled default build | PASS under copied policy |
+
+Versions and licences in this table are extracted from the generated locked
+\`metadata.json\`; extraction requires exactly one resolved package with each
+candidate name and a declared licence, otherwise the script stops before it
+can write PASS evidence.
 
 The \`flacenc\` default feature set (\`log\`, \`par\`, and \`serde\`) is
 disabled. Its pure-Rust graph still has a \`build.rs\`; it is a test-tool

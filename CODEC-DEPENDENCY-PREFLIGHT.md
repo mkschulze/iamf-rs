@@ -1,7 +1,7 @@
 # Codec dependency preflight
 
 **Status:** PASS
-**Executed:** 2026-09-09T13:56:26Z
+**Executed:** 2026-09-09T14:00:04Z
 
 This is CODEC-06 evidence recorded before adding any codec crate to this
 repository. The preflight creates a disposable Cargo package outside the
@@ -13,7 +13,8 @@ exit. It does not edit `Cargo.toml` or `Cargo.lock`.
 - `cargo 1.85.0 (d73d2caf9 2024-12-31)`
 - `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 - `cargo-deny 0.20.2`
-- Temporary package: `/private/var/folders/8z/1xzmsslj11g7rv7hf1g73j340000gn/T/iamf-codec-preflight.7a8Gp7` (removed after this run)
+- `jq-1.8.2` (extracts resolved package fields from locked metadata)
+- Temporary package: `/private/var/folders/8z/1xzmsslj11g7rv7hf1g73j340000gn/T/iamf-codec-preflight.LKOVWT` (removed after this run)
 
 ## Candidate resolution and policy result
 
@@ -21,8 +22,13 @@ exit. It does not edit `Cargo.toml` or `Cargo.lock`.
 | --- | --- | --- | --- | --- |
 | `claxon` | 0.4.3 | Apache-2.0 | exact pin | PASS |
 | `flacenc` | 0.5.1 | Apache-2.0 | exact pin; `default-features = false` | PASS |
-| `opus` | 0.4.0 | MIT OR Apache-2.0 | exact pin | PASS |
+| `opus` | 0.4.0 | MIT/Apache-2.0 | exact pin | PASS |
 | `opusic-sys` (transitive from `opus`) | 0.7.5 | BSD-3-Clause | bundled default build | PASS under copied policy |
+
+Versions and licences in this table are extracted from the generated locked
+`metadata.json`; extraction requires exactly one resolved package with each
+candidate name and a declared licence, otherwise the script stops before it
+can write PASS evidence.
 
 The `flacenc` default feature set (`log`, `par`, and `serde`) is
 disabled. Its pure-Rust graph still has a `build.rs`; it is a test-tool
