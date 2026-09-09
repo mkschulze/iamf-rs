@@ -4,10 +4,29 @@
 # dev-dependency graph.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_BASE="${TMPDIR:-/tmp}"
-TMP_BASE="${TMP_BASE%/}"
+if [[ ! -d "${TMP_BASE}" ]]; then
+    printf 'temporary base is not a directory: %s\n' "${TMP_BASE}" >&2
+    exit 1
+fi
+TMP_BASE="$(cd -P "${TMP_BASE}" && pwd)"
+
+case "${TMP_BASE}" in
+    "${REPO_ROOT}"|"${REPO_ROOT}"/*)
+        printf 'refusing temporary base inside repository: %s\n' "${TMP_BASE}" >&2
+        exit 1
+        ;;
+esac
+
 PREFLIGHT_DIR="$(mktemp -d "${TMP_BASE}/iamf-codec-preflight.XXXXXX")"
+
+if [[ ! -d "${PREFLIGHT_DIR}" || -L "${PREFLIGHT_DIR}" ]]; then
+    printf 'mktemp did not create a safe directory: %s\n' "${PREFLIGHT_DIR}" >&2
+    exit 1
+fi
+
+PREFLIGHT_DIR="$(cd -P "${PREFLIGHT_DIR}" && pwd)"
 
 case "${PREFLIGHT_DIR}" in
     "${TMP_BASE}"/iamf-codec-preflight.*) ;;
@@ -21,6 +40,13 @@ if [[ ! -d "${PREFLIGHT_DIR}" || -L "${PREFLIGHT_DIR}" ]]; then
     printf 'mktemp did not create a safe directory: %s\n' "${PREFLIGHT_DIR}" >&2
     exit 1
 fi
+
+case "${PREFLIGHT_DIR}" in
+    "${REPO_ROOT}"|"${REPO_ROOT}"/*)
+        printf 'refusing temporary directory inside repository: %s\n' "${PREFLIGHT_DIR}" >&2
+        exit 1
+        ;;
+esac
 
 cleanup() {
     rm -rf -- "${PREFLIGHT_DIR}"
