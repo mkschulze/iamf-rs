@@ -4,17 +4,17 @@ milestone: v1
 current_phase: 02
 current_phase_name: Parser, Round-Trip and Fuzzing
 status: in_progress
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-09-09T01:12:01.679Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-09-09T01:30:47.130Z"
 last_activity: 2026-09-09
-last_activity_desc: Plan 02-01 completed — contextual parameter registry and data parsing
+last_activity_desc: Plan 02-02 completed — reserved-field fidelity and literal migration
 state_head: 4d81cd0
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 17
-  completed_plans: 11
-  percent: 65
+  completed_plans: 12
+  percent: 71
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 02 (Parser, Round-Trip and Fuzzing) — IN PROGRESS
-Plan: 1 of 7
-Status: Plan 02-01 complete; ready for 02-02
-Last activity: 2026-09-09 — Context-rich registry and contextual parameter data completed
+Plan: 2 of 7
+Status: Plan 02-02 complete; ready for 02-03
+Last activity: 2026-09-09 — Reserved-field fidelity and literal migration completed
 
-Progress: [█░░░░░░░░░] 14% of Phase 02 plans
+Progress: [███░░░░░░░] 29% of Phase 02 plans
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [█░░░░░░░░░] 14% of Phase 02 plans
 | Phase 01 P09 | 4min | 3 tasks | 2 files |
 | Phase 01 P10 | 34min | 4 tasks | 5 files |
 | Phase 02 P01 | 16min | 2 tasks | 7 files |
+| Phase 02 P02 | 14min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Parameter Block readers require an explicit ordered ParamDefinitionRegistry carrying descriptor-owned parse context.
 - [Phase 02]: Registry lookup follows emitted wire order and binds duplicate parameter IDs to the first definition.
 - [Phase 02]: Reserved demixing modes and high Recon Gain bits are preserved and diagnosed rather than rejected or normalized.
+- [Phase 02]: Each reserved group is stored at its nearest exact wire structure and emitted unchanged.
+- [Phase 02]: Non-zero reserved syntax remains structurally permissive and is diagnosed only through validate().
 
 ### Pending Todos
 
@@ -145,6 +148,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-09T01:12:01.675Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-09-09T01:30:47.127Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None

@@ -151,7 +151,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
-| 2. Parser, Round-Trip and Fuzzing | 1/7 | In Progress | - |
+| 2. Parser, Round-Trip and Fuzzing | 2/7 | In Progress | - |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
