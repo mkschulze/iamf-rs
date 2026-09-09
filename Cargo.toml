@@ -61,12 +61,9 @@ required-features = ["fuzzing"]
 # shipped — `cargo tree -e normal,no-proc-macro` still lists exactly `iamf` and
 # `thiserror`.
 
-# No `[features]` table, deliberately (D-22). Phase 1 has nothing to gate: no
-# codec crates until Phase 3 (dev-only), `bitstream-io` is a dev-dependency
-# (D-01), `thiserror` is unconditional (D-02). PROJECT.md's "one crate,
-# feature-gated encode/decode" is a Phase 4 intention, not a Phase 1
-# instruction. A cfg matrix would also multiply the four-target byte-identity
-# gate that D-16 makes mandatory on every PR.
+# Phase 2 adds only the `fuzzing` feature. It exposes the bounded structural
+# generator and its optional `arbitrary` dependency to the excluded fuzz
+# workspace; default production builds retain Phase 1's linked graph.
 
 [lints.rust]
 # Phase 1 has no FFI and never will need one; `forbid` (not `deny`) so no

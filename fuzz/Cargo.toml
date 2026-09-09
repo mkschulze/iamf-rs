@@ -4,6 +4,7 @@ version = "0.0.0"
 publish = false
 edition = "2024"
 rust-version = "1.85"
+license = "MIT OR Apache-2.0"
 
 [package.metadata]
 cargo-fuzz = true
@@ -16,7 +17,7 @@ roundtrip-model = ["iamf/fuzzing"]
 
 [dependencies]
 libfuzzer-sys = "=0.4.13" # MIT OR Apache-2.0 AND NCSA — scoped to this excluded workspace
-iamf = { path = "..", default-features = false }
+iamf = { path = "..", version = "=0.1.0", default-features = false }
 
 [[bin]]
 name = "parse_sequence"
