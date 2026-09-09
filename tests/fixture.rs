@@ -258,7 +258,11 @@ fn the_sample_identity_fixture_forces_a_non_zero_end_trim_that_differs_from_the_
     assert_ne!(trimming.at_end, trimming.at_start);
     // Every earlier frame trims nothing at all.
     for index in 0..last {
-        assert_eq!(plan.trimming_for(index), None, "frame {index} trims nothing");
+        assert_eq!(
+            plan.trimming_for(index),
+            None,
+            "frame {index} trims nothing"
+        );
     }
 }
 
@@ -326,9 +330,7 @@ fn the_endianness_fixture_stores_its_first_sample_most_significant_byte_first() 
     // finding the exact two bytes anywhere in the file is enough to prove the
     // order, and the byte-level offsets are covered by the golden.
     assert!(
-        bytes
-            .windows(2)
-            .any(|window| window == expected.as_slice()),
+        bytes.windows(2).any(|window| window == expected.as_slice()),
         "the big-endian bytes {expected:02x?} of the first sample {first_sample} do not appear \
          in the encoded file"
     );
@@ -343,11 +345,12 @@ fn the_structure_only_fixture_has_two_audio_elements() {
     let fixture = fixture::structure_only();
     assert_eq!(fixture.descriptors.audio_elements.len(), 2);
     assert_eq!(fixture.descriptors.codec_configs.len(), 1);
-    assert!(
-        fixture.descriptors.validate().is_empty(),
-        "the structure fixture has findings: {:?}",
-        fixture.descriptors.validate()
-    );
+    let findings = fixture.descriptors.validate();
+    assert_eq!(findings.len(), 3, "unexpected findings: {findings:?}");
+    assert!(findings.iter().all(|finding| {
+        finding.message.contains("parameter_id 100")
+            && finding.message.contains("first in bitstream order")
+    }));
 }
 
 #[test]
@@ -383,10 +386,7 @@ fn the_structure_only_fixture_writes_its_audio_elements_ascending_by_id() {
     assert_eq!(declared, vec![401, 400], "declared in descending order");
 
     let bytes = fixture.encode().expect("it encodes");
-    let first = bytes
-        .windows(1)
-        .len()
-        .min(bytes.len());
+    let first = bytes.windows(1).len().min(bytes.len());
     let _ = first;
     // The two Audio Element OBUs, in the order they were written.
     let boundaries = find_obu_boundaries(&bytes).expect("the OBU chain walks");
@@ -440,12 +440,15 @@ fn the_structure_only_fixture_carries_at_least_six_obus_with_two_audio_elements(
 // ---------------------------------------------------------------------------
 
 #[test]
-fn every_fixture_encodes_and_validates_clean() {
+fn every_fixture_encodes_with_only_the_intentional_shared_parameter_id_findings() {
     for fixture in fixture::all() {
         let findings = fixture.descriptors.validate();
         assert!(
-            findings.is_empty(),
-            "{} has descriptor findings: {findings:?}",
+            findings.iter().all(|finding| {
+                finding.message.contains("parameter_id 100")
+                    && finding.message.contains("first in bitstream order")
+            }),
+            "{} has unexpected descriptor findings: {findings:?}",
             fixture.name
         );
         let bytes = fixture.encode().unwrap_or_else(|e| {
@@ -475,9 +478,8 @@ fn every_fixture_walks_its_obu_chain_to_exactly_its_own_length() {
 /// for GUARD-10's byte-level double-encode meaning anything.
 #[test]
 fn every_fixture_builds_identically_twice() {
-    let build = |index: usize| -> Fixture {
-        fixture::all().into_iter().nth(index).expect("a fixture")
-    };
+    let build =
+        |index: usize| -> Fixture { fixture::all().into_iter().nth(index).expect("a fixture") };
     for index in 0..fixture::all().len() {
         let first = build(index);
         let second = build(index);
@@ -486,7 +488,11 @@ fn every_fixture_builds_identically_twice() {
             "{} builds two different descriptor sets",
             first.name
         );
-        assert_eq!(first.pcm, second.pcm, "{} builds two different signals", first.name);
+        assert_eq!(
+            first.pcm, second.pcm,
+            "{} builds two different signals",
+            first.name
+        );
     }
 }
 
@@ -549,7 +555,10 @@ fn the_diagnostic_reports_a_plain_difference_when_no_permutation_explains_it() {
         message.contains("no channel permutation explains it"),
         "got {message:?}"
     );
-    assert!(message.contains("frame 1"), "it locates the frame: {message}");
+    assert!(
+        message.contains("frame 1"),
+        "it locates the frame: {message}"
+    );
     assert!(message.contains("ch1"), "it locates the channel: {message}");
 }
 

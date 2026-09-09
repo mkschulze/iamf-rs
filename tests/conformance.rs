@@ -696,6 +696,7 @@ fn probe_fixture(name: &'static str, sample_size: u8, flags: SampleFormatFlags) 
             // A 5.1 fixture needs two.
             layouts: vec![LayoutWithLoudness {
                 layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
                 loudness: Loudness::new(-6144, -1536),
             }],
         }],
@@ -1056,9 +1057,8 @@ fn assert_conformant(descriptors: &DescriptorSet, pcm: &[i32]) -> Result<GateRep
             assert_limiter_is_transparent(&trip, fixture.name);
             if trip.differing != 0 {
                 // D-19: report a candidate permutation, never apply one.
-                let diagnosis =
-                    describe_channel_mismatch(pcm, &trip.decoded, spec.layout)
-                        .unwrap_or_else(|| "PCM differs".to_owned());
+                let diagnosis = describe_channel_mismatch(pcm, &trip.decoded, spec.layout)
+                    .unwrap_or_else(|| "PCM differs".to_owned());
                 return Err(format!(
                     "CONF-05 FAILED for {}: {} of {} samples differ after a round trip through \
                      the pinned libiamf.\n{diagnosis}",
@@ -1158,9 +1158,8 @@ fn assert_signal_is_distinguishable(pcm: &[i32], spec: ElementSpec) -> Result<()
         return Err("CONF-02: the signal is silent, so nothing about it is observable".to_owned());
     }
     let channels = spec.channels.max(1);
-    let channel_of = |index: usize| -> Vec<i32> {
-        pcm.iter().skip(index).step_by(channels).copied().collect()
-    };
+    let channel_of =
+        |index: usize| -> Vec<i32> { pcm.iter().skip(index).step_by(channels).copied().collect() };
     for a in 0..channels {
         let left = channel_of(a);
         if left.iter().all(|value| *value == 0) {
@@ -1225,9 +1224,11 @@ fn assert_trim_is_forced(pcm: &[i32], spec: ElementSpec) -> Result<u32, String> 
         ));
     }
     if trimming.at_end == trimming.at_start {
-        return Err("CONF-03: the two trim values are equal, so a swapped write order is \
+        return Err(
+            "CONF-03: the two trim values are equal, so a swapped write order is \
                     invisible"
-            .to_owned());
+                .to_owned(),
+        );
     }
     Ok(plan.trim_at_end)
 }
@@ -1236,8 +1237,8 @@ fn assert_trim_is_forced(pcm: &[i32], spec: ElementSpec) -> Result<u32, String> 
 /// the descriptors in the reference's write order, and the boundary walk landing
 /// exactly on `bytes.len()` (OBU-08).
 fn assert_structure_is_observable(bytes: &[u8]) -> Result<String, String> {
-    let boundaries =
-        find_obu_boundaries(bytes).map_err(|e| format!("CONF-04: the OBU chain does not walk: {e:?}"))?;
+    let boundaries = find_obu_boundaries(bytes)
+        .map_err(|e| format!("CONF-04: the OBU chain does not walk: {e:?}"))?;
     if boundaries.last().copied() != Some(bytes.len()) {
         return Err(format!(
             "CONF-04: the final OBU boundary is {:?}, not bytes.len() = {}. A boundary that \
@@ -1695,7 +1696,10 @@ fn parse_ledger(text: &str) -> Result<Vec<LedgerRow>, String> {
 /// `0x1a`, `0X1A` or `26`.
 fn parse_offset(text: &str) -> Option<usize> {
     let cleaned = text.trim().trim_matches('`').replace('_', "");
-    if let Some(hex) = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")) {
+    if let Some(hex) = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+    {
         usize::from_str_radix(hex, 16).ok()
     } else {
         cleaned.parse().ok()
@@ -1705,10 +1709,15 @@ fn parse_offset(text: &str) -> Option<usize> {
 /// `0x1a`, `1a` or `26`.
 fn parse_byte(text: &str) -> Option<u8> {
     let cleaned = text.trim().trim_matches('`').replace('_', "");
-    if let Some(hex) = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")) {
+    if let Some(hex) = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+    {
         u8::from_str_radix(hex, 16).ok()
     } else {
-        u8::from_str_radix(&cleaned, 16).ok().or_else(|| cleaned.parse().ok())
+        u8::from_str_radix(&cleaned, 16)
+            .ok()
+            .or_else(|| cleaned.parse().ok())
     }
 }
 
@@ -1794,7 +1803,9 @@ fn proto_profile(wire: u8) -> Result<&'static str, String> {
 
 /// The proto name of a loudspeaker layout, and its channel labels in the
 /// decoder's documented output order.
-fn proto_layout(layout: LoudspeakerLayout) -> Result<(&'static str, &'static [&'static str]), String> {
+fn proto_layout(
+    layout: LoudspeakerLayout,
+) -> Result<(&'static str, &'static [&'static str]), String> {
     match layout {
         LoudspeakerLayout::Stereo => Ok((
             "LOUDSPEAKER_LAYOUT_STEREO",
@@ -1859,7 +1870,8 @@ fn textproto_for(fixture: &Fixture, wav_filename: &str) -> Result<String, String
         .elements
         .first()
         .ok_or_else(|| "the sub-mix has no element".to_owned())?;
-    let plan = iamf::packing::SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
+    let plan =
+        iamf::packing::SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
     let (proto_layout_name, labels) = proto_layout(spec.layout)?;
     let trim = assert_trim_is_forced(fixture.single_pcm(), spec)?;
 
@@ -2226,17 +2238,28 @@ fn an_empty_ledger_passes_only_against_an_empty_diff() {
 #[test]
 fn the_ledger_comparison_is_order_insensitive() {
     let rows = |mut order: Vec<usize>| -> Vec<LedgerRow> {
-        order.drain(..).map(|offset| LedgerRow {
-            offset,
-            field: format!("f{offset}"),
-            ours: 1,
-            theirs: 2,
-            why: "explained".to_owned(),
-        }).collect()
+        order
+            .drain(..)
+            .map(|offset| LedgerRow {
+                offset,
+                field: format!("f{offset}"),
+                ours: 1,
+                theirs: 2,
+                why: "explained".to_owned(),
+            })
+            .collect()
     };
     let diff = vec![
-        DiffRow { offset: 5, ours: 1, theirs: 2 },
-        DiffRow { offset: 9, ours: 1, theirs: 2 },
+        DiffRow {
+            offset: 5,
+            ours: 1,
+            theirs: 2,
+        },
+        DiffRow {
+            offset: 9,
+            ours: 1,
+            theirs: 2,
+        },
     ];
     assert!(compare_to_ledger(&diff, &rows(vec![5, 9])).is_ok());
     assert!(compare_to_ledger(&diff, &rows(vec![9, 5])).is_ok());

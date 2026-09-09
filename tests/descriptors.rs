@@ -670,14 +670,22 @@ fn rendering_and_layout_reserved_groups_round_trip_at_their_exact_widths() {
         .get(0x28..0x78)
         .expect("the file is longer")
         .to_vec();
-    bytes[0x3b] = 0x2d; // stereo mode(2)=0, reserved(6)=0x2d
-    bytes[0x4a] = 0x83; // Sound System A(2+4), reserved(2)=3
+    *bytes.get_mut(0x3b).expect("rendering byte exists") = 0x2d;
+    *bytes.get_mut(0x4a).expect("layout byte exists") = 0x83;
 
     let mut reader = BitCursor::new(&bytes);
     let parsed = read_obu_with(&mut reader, read_mix_presentation).expect("reserved values parse");
     let sub_mix = parsed.payload.sub_mixes.first().expect("one sub-mix");
-    assert_eq!(sub_mix.elements[0].rendering_config.reserved, 0x2d);
-    assert_eq!(sub_mix.layouts[0].reserved, 0x03);
+    assert_eq!(
+        sub_mix
+            .elements
+            .first()
+            .expect("one element")
+            .rendering_config
+            .reserved,
+        0x2d
+    );
+    assert_eq!(sub_mix.layouts.first().expect("one layout").reserved, 0x03);
     assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
 
     let findings = parsed.payload.validate();
@@ -695,16 +703,13 @@ fn rendering_and_layout_reserved_groups_round_trip_at_their_exact_widths() {
 
 #[test]
 fn dump_exposes_every_owned_reserved_value() {
-    let mut bytes = hex!(
-        "08 13 01 1b 02 01 03 01 01 04 05 d5 b3 ab 32 1a 01 01 ab 12 34"
-    )
-    .to_vec();
+    let mut bytes = hex!("08 13 01 1b 02 01 03 01 01 04 05 d5 b3 ab 32 1a 01 01 ab 12 34").to_vec();
     let mut mix = TEST_000003
         .get(0x28..0x78)
         .expect("the file is longer")
         .to_vec();
-    mix[0x3b] = 0x2d;
-    mix[0x4a] = 0x83;
+    *mix.get_mut(0x3b).expect("rendering byte exists") = 0x2d;
+    *mix.get_mut(0x4a).expect("layout byte exists") = 0x83;
     bytes.extend_from_slice(&mix);
 
     let dump = dump_annotated(&bytes).expect("reserved vectors dump");
@@ -1002,5 +1007,11 @@ fn the_120_byte_descriptor_prologue_of_test_000003_is_reproduced_byte_exact() {
     );
     let findings = published_descriptor_set().validate();
     assert_eq!(findings.len(), 1, "unexpected findings: {findings:?}");
-    assert!(findings[0].message.contains("parameter_id 100"));
+    assert!(
+        findings
+            .first()
+            .expect("one duplicate finding")
+            .message
+            .contains("parameter_id 100")
+    );
 }

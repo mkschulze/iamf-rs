@@ -26,6 +26,7 @@ offset    field                             value
 0000001a  obu_redundant_copy                false
 0000001a  audio_element_id                  300
 0000001a  audio_element_type                0 (channel-based)
+0000001a  audio_element_reserved            0
 0000001a  codec_config_id                   200
 0000001a  num_substreams                    4
 0000001a    audio_substream_id[0]           0
@@ -34,11 +35,13 @@ offset    field                             value
 0000001a    audio_substream_id[3]           3
 0000001a  num_parameters                    0
 0000001a  num_layers                        1
+0000001a  scalable_channel_layout_reserved  0
 0000001a    layer[0] loudspeaker_layout     2 (Ch5_1)
 0000001a    layer[0] substream_count        4
 0000001a    layer[0] coupled_substream_count  2
 0000001a    layer[0] output_gain_is_present  false
 0000001a    layer[0] recon_gain_is_present  false
+0000001a    layer[0] reserved               0
 0000001a  | 08 0f ac 02 00 c8 01 04 00 01 02 03 00 20 20 04  |................|
 0000002a  | 02                                               |.|
 
@@ -53,23 +56,28 @@ offset    field                             value
 0000002b    sub_mix[0] element[0] audio_element_id  300
 0000002b    sub_mix[0] element[0] annotation[0]  "bed_5_1"
 0000002b    sub_mix[0] element[0] headphones_rendering_mode  0
+0000002b    sub_mix[0] element[0] rendering_config_reserved  0
 0000002b    sub_mix[0] element[0] rendering_config_extension  0 bytes
 0000002b    sub_mix[0] element[0] element_mix_gain parameter_id  100
 0000002b    sub_mix[0] element[0] element_mix_gain parameter_rate  48000
 0000002b    sub_mix[0] element[0] element_mix_gain param_definition_mode  true
+0000002b    sub_mix[0] element[0] element_mix_gain param_definition_reserved  0
 0000002b    sub_mix[0] element[0] element_mix_gain default_mix_gain  0.00000000 (0)
 0000002b    sub_mix[0] output_mix_gain parameter_id  100
 0000002b    sub_mix[0] output_mix_gain parameter_rate  48000
 0000002b    sub_mix[0] output_mix_gain param_definition_mode  true
+0000002b    sub_mix[0] output_mix_gain param_definition_reserved  0
 0000002b    sub_mix[0] output_mix_gain default_mix_gain  0.00000000 (0)
 0000002b    sub_mix[0] num_layouts          2
 0000002b    sub_mix[0] layout[0] layout_type  2
 0000002b    sub_mix[0] layout[0] sound_system  1 (B0_5_0)
+0000002b    sub_mix[0] layout[0] reserved   0
 0000002b    sub_mix[0] layout[0] info_type  0
 0000002b    sub_mix[0] layout[0] integrated_loudness  -24.00000000 (-6144)
 0000002b    sub_mix[0] layout[0] digital_peak  -6.00000000 (-1536)
 0000002b    sub_mix[0] layout[1] layout_type  2
 0000002b    sub_mix[0] layout[1] sound_system  0 (A0_2_0)
+0000002b    sub_mix[0] layout[1] reserved   0
 0000002b    sub_mix[0] layout[1] info_type  0
 0000002b    sub_mix[0] layout[1] integrated_loudness  -23.00000000 (-5888)
 0000002b    sub_mix[0] layout[1] digital_peak  -5.50000000 (-1408)

@@ -167,6 +167,7 @@ fn twenty_nine_audio_elements_are_a_typed_error() {
 fn scene_element(id: u32, channels: u8) -> AudioElement {
     AudioElement {
         audio_element_id: id,
+        reserved: 0,
         audio_element_type: AudioElementType::scene_based_for_test(AmbisonicsConfig::Mono(
             AmbisonicsMonoConfig {
                 output_channel_count: channels,

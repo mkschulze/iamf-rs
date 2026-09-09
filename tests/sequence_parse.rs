@@ -48,7 +48,9 @@ fn descriptor_observation_preserves_nested_wire_order() {
         AudioElementParam::Demixing {
             definition: definition(11),
             default_dmixp_mode: 0,
+            default_reserved: 0,
             default_w: 0,
+            default_w_reserved: 0,
         },
         AudioElementParam::ReconGain {
             definition: definition(12),
@@ -73,7 +75,9 @@ fn registry_lookup_follows_the_audio_element_order_emitted_by_the_writer() {
     later.params = vec![AudioElementParam::Demixing {
         definition: definition(55),
         default_dmixp_mode: 0,
+        default_reserved: 0,
         default_w: 0,
+        default_w_reserved: 0,
     }];
     let mut earlier = later.clone();
     earlier.audio_element_id = 10;
@@ -127,14 +131,14 @@ fn recon_gain_context_has_exactly_one_presence_flag_per_channel_layer() {
     element.params = vec![AudioElementParam::ReconGain {
         definition: definition(12),
     }];
-    let AudioElementType::ChannelBased(config) = &mut element.audio_element_type
-    else {
+    let AudioElementType::ChannelBased(config) = &mut element.audio_element_type else {
         unreachable!("published fixture is channel based");
     };
     config.scalable_channel_layout.layers = vec![
         ChannelAudioLayerConfig::new(LoudspeakerLayout::Stereo, 1, 1),
         ChannelAudioLayerConfig {
             recon_gain_is_present: true,
+            reserved: 0,
             ..ChannelAudioLayerConfig::new(LoudspeakerLayout::Ch5_1, 3, 1)
         },
     ];

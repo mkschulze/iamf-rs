@@ -49,11 +49,12 @@ use crate::bits::BitCursor;
 use crate::error::Result;
 use crate::model::layout::LoudspeakerLayout;
 use crate::obu::{
-    AudioElement, AudioElementParam, AudioElementType, CodecConfig, DecoderConfig, IaSequenceHeader,
-    Layout, LayoutWithLoudness, Loudness, MixGainParamDefinition, MixPresentation, ObuHeader,
-    ObuType, ParamDefinition, SubMix, TypeSpecific, find_obu_boundaries, read_audio_element,
-    read_audio_frame, read_codec_config, read_ia_sequence_header, read_mix_presentation,
-    read_obu_header, read_obu_with, read_obu_with_header, substream_id_for,
+    AudioElement, AudioElementParam, AudioElementType, CodecConfig, DecoderConfig,
+    IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, MixGainParamDefinition,
+    MixPresentation, ObuHeader, ObuType, ParamDefinition, SubMix, TypeSpecific,
+    find_obu_boundaries, read_audio_element, read_audio_frame, read_codec_config,
+    read_ia_sequence_header, read_mix_presentation, read_obu_header, read_obu_with,
+    read_obu_with_header, substream_id_for,
 };
 
 /// How many payload bytes of an Audio Frame are shown.
@@ -94,7 +95,10 @@ pub fn dump_annotated(bytes: &[u8]) -> Result<String> {
     );
 
     for (index, start) in boundaries.iter().take(obu_count).enumerate() {
-        let end = boundaries.get(index.saturating_add(1)).copied().unwrap_or(*start);
+        let end = boundaries
+            .get(index.saturating_add(1))
+            .copied()
+            .unwrap_or(*start);
         let obu = bytes.get(*start..end).unwrap_or_default();
         out.push('\n');
         out.push_str(&dump_one_obu(*start, obu));
@@ -124,13 +128,21 @@ fn dump_one_obu(offset: usize, obu: &[u8]) -> String {
         obu_size,
         obu.len()
     ));
-    out.push_str(&field(offset, "obu_redundant_copy", header.obu_redundant_copy));
+    out.push_str(&field(
+        offset,
+        "obu_redundant_copy",
+        header.obu_redundant_copy,
+    ));
     match header.type_specific {
         TypeSpecific::Trimming(Some(trimming)) => {
             out.push_str(&field(offset, "obu_trimming_status_flag", true));
             // END before START, which is the wire order and the one thing a
             // fixture with equal trims could never catch.
-            out.push_str(&field(offset, "num_samples_to_trim_at_end", trimming.at_end));
+            out.push_str(&field(
+                offset,
+                "num_samples_to_trim_at_end",
+                trimming.at_end,
+            ));
             out.push_str(&field(
                 offset,
                 "num_samples_to_trim_at_start",
@@ -220,7 +232,11 @@ fn dump_payload(offset: usize, obu: &[u8], header: &ObuHeader) -> String {
             match read_obu_with_header(&mut cursor, read_audio_frame) {
                 Ok(parsed) => {
                     let implicit = substream_id_for(header.obu_type);
-                    out.push_str(&field(offset, "audio_substream_id", parsed.payload.substream_id));
+                    out.push_str(&field(
+                        offset,
+                        "audio_substream_id",
+                        parsed.payload.substream_id,
+                    ));
                     out.push_str(&field(
                         offset,
                         "  id source",
@@ -348,12 +364,17 @@ fn dump_audio_element(offset: usize, value: &AudioElement) -> String {
     out.push_str(&field(
         offset,
         "audio_element_type",
-        format!("{} ({})", value.audio_element_type.value(), match &value.audio_element_type {
-            AudioElementType::ChannelBased(_) => "channel-based",
-            AudioElementType::SceneBased(_) => "scene-based",
-            AudioElementType::Reserved { .. } => "reserved",
-        }),
+        format!(
+            "{} ({})",
+            value.audio_element_type.value(),
+            match &value.audio_element_type {
+                AudioElementType::ChannelBased(_) => "channel-based",
+                AudioElementType::SceneBased(_) => "scene-based",
+                AudioElementType::Reserved { .. } => "reserved",
+            }
+        ),
     ));
+    out.push_str(&field(offset, "audio_element_reserved", value.reserved));
     out.push_str(&field(offset, "codec_config_id", value.codec_config_id));
     out.push_str(&field(
         offset,
@@ -361,7 +382,11 @@ fn dump_audio_element(offset: usize, value: &AudioElement) -> String {
         value.audio_substream_ids.len(),
     ));
     for (index, id) in value.audio_substream_ids.iter().enumerate() {
-        out.push_str(&field(offset, &format!("  audio_substream_id[{index}]"), id));
+        out.push_str(&field(
+            offset,
+            &format!("  audio_substream_id[{index}]"),
+            id,
+        ));
     }
     out.push_str(&field(offset, "num_parameters", value.params.len()));
     for (index, param) in value.params.iter().enumerate() {
@@ -370,16 +395,39 @@ fn dump_audio_element(offset: usize, value: &AudioElement) -> String {
             &format!("  param_definition_type[{index}]"),
             param.param_definition_type(),
         ));
-        if let AudioElementParam::Demixing { definition, .. }
-        | AudioElementParam::ReconGain { definition } = param
-        {
-            out.push_str(&dump_param_definition(offset, "    ", definition));
+        match param {
+            AudioElementParam::Demixing {
+                definition,
+                default_dmixp_mode,
+                default_reserved,
+                default_w,
+                default_w_reserved,
+            } => {
+                out.push_str(&dump_param_definition(offset, "    ", definition));
+                out.push_str(&field(offset, "    default_dmixp_mode", default_dmixp_mode));
+                out.push_str(&field(
+                    offset,
+                    "    default_demixing_reserved",
+                    default_reserved,
+                ));
+                out.push_str(&field(offset, "    default_w", default_w));
+                out.push_str(&field(offset, "    default_w_reserved", default_w_reserved));
+            }
+            AudioElementParam::ReconGain { definition } => {
+                out.push_str(&dump_param_definition(offset, "    ", definition));
+            }
+            AudioElementParam::Extension { .. } => {}
         }
     }
 
     if let AudioElementType::ChannelBased(config) = &value.audio_element_type {
         let layers = &config.scalable_channel_layout.layers;
         out.push_str(&field(offset, "num_layers", layers.len()));
+        out.push_str(&field(
+            offset,
+            "scalable_channel_layout_reserved",
+            config.scalable_channel_layout.reserved,
+        ));
         for (index, layer) in layers.iter().enumerate() {
             let prefix = format!("  layer[{index}]");
             out.push_str(&field(
@@ -411,11 +459,21 @@ fn dump_audio_element(offset: usize, value: &AudioElement) -> String {
                 &format!("{prefix} recon_gain_is_present"),
                 layer.recon_gain_is_present(),
             ));
+            out.push_str(&field(
+                offset,
+                &format!("{prefix} reserved"),
+                layer.reserved,
+            ));
             if let Some(gain) = layer.output_gain.as_ref() {
                 out.push_str(&field(
                     offset,
                     &format!("{prefix} output_gain"),
                     format!("flags={} gain={}", gain.flags, gain.gain),
+                ));
+                out.push_str(&field(
+                    offset,
+                    &format!("{prefix} output_gain_reserved"),
+                    gain.reserved,
                 ));
             }
         }
@@ -483,6 +541,11 @@ fn dump_sub_mix(offset: usize, index: usize, sub_mix: &SubMix) -> String {
         ));
         out.push_str(&field(
             offset,
+            &format!("{element_prefix} rendering_config_reserved"),
+            element.rendering_config.reserved,
+        ));
+        out.push_str(&field(
+            offset,
             &format!("{element_prefix} rendering_config_extension"),
             format!("{} bytes", element.rendering_config.extension.len()),
         ));
@@ -539,6 +602,11 @@ fn dump_param_definition(offset: usize, prefix: &str, definition: &ParamDefiniti
         &format!("{prefix}param_definition_mode"),
         definition.param_definition_mode(),
     ));
+    out.push_str(&field(
+        offset,
+        &format!("{prefix}param_definition_reserved"),
+        definition.reserved,
+    ));
     if let Some(duration) = definition.duration_fields.as_ref() {
         out.push_str(&field(
             offset,
@@ -573,6 +641,11 @@ fn dump_layout(offset: usize, prefix: &str, layout: &LayoutWithLoudness) -> Stri
             format!("{} ({system:?})", system.value()),
         ));
     }
+    out.push_str(&field(
+        offset,
+        &format!("{prefix} reserved"),
+        layout.reserved,
+    ));
     out.push_str(&dump_loudness(offset, prefix, &layout.loudness));
     out
 }
@@ -721,7 +794,10 @@ fn hex_inline(bytes: &[u8], limit: usize) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     if bytes.len() > shown.len() {
-        text.push_str(&format!(" … (+{} more)", bytes.len().saturating_sub(shown.len())));
+        text.push_str(&format!(
+            " … (+{} more)",
+            bytes.len().saturating_sub(shown.len())
+        ));
     }
     text
 }

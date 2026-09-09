@@ -230,7 +230,10 @@ pub fn first_layout(element: &AudioElement) -> Result<LoudspeakerLayout, String>
 }
 
 /// The spec one Audio Element implies, resolved through the descriptor set.
-pub fn spec_for(descriptors: &DescriptorSet, element: &AudioElement) -> Result<ElementSpec, String> {
+pub fn spec_for(
+    descriptors: &DescriptorSet,
+    element: &AudioElement,
+) -> Result<ElementSpec, String> {
     let config = descriptors
         .codec_config_by_id(element.codec_config_id)
         .ok_or_else(|| {
@@ -316,9 +319,13 @@ impl Fixture {
         }
 
         let lead = spec_of_first(&self.descriptors)?;
-        let total_samples =
-            u64::try_from(self.single_pcm().len().checked_div(lead.channels.max(1)).unwrap_or(0))
-                .unwrap_or(0);
+        let total_samples = u64::try_from(
+            self.single_pcm()
+                .len()
+                .checked_div(lead.channels.max(1))
+                .unwrap_or(0),
+        )
+        .unwrap_or(0);
         let plan =
             plan_frames(total_samples, lead.num_samples_per_frame).map_err(|e| format!("{e:?}"))?;
 
@@ -337,10 +344,12 @@ impl Fixture {
                     lead.num_samples_per_frame
                 ));
             }
-            let substreams = SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
-            let pcm = self.pcm.get(index).ok_or_else(|| {
-                format!("{}: no PCM for element index {index}", self.name)
-            })?;
+            let substreams =
+                SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
+            let pcm = self
+                .pcm
+                .get(index)
+                .ok_or_else(|| format!("{}: no PCM for element index {index}", self.name))?;
             let stored = store_interleaved(pcm, spec.sample_size, spec.big_endian);
             let frame_bytes = usize::try_from(spec.num_samples_per_frame)
                 .unwrap_or(0)
@@ -360,7 +369,9 @@ impl Fixture {
             let mut next_substream_id = 0_u32;
 
             for (spec, substreams, stored, frame_bytes) in &prepared {
-                let start = usize::try_from(index).unwrap_or(0).saturating_mul(*frame_bytes);
+                let start = usize::try_from(index)
+                    .unwrap_or(0)
+                    .saturating_mul(*frame_bytes);
                 let end = start.saturating_add(*frame_bytes).min(stored.len());
                 let mut chunk = stored.get(start..end).unwrap_or_default().to_vec();
                 // The final frame is short and is zero-padded to a whole frame
@@ -518,6 +529,7 @@ pub fn sample_identity() -> Fixture {
                 // The comparison target.
                 LayoutWithLoudness {
                     layout: Layout::SoundSystem(SoundSystem::B0_5_0),
+                    reserved: 0,
                     // -24.0 LUFS and -6.0 dBFS in Q7.8.
                     loudness: Loudness::new(-6144, -1536),
                 },
@@ -525,6 +537,7 @@ pub fn sample_identity() -> Fixture {
                 // swapping the two layouts changes the bytes.
                 LayoutWithLoudness {
                     layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                    reserved: 0,
                     // -23.0 LUFS and -5.5 dBFS in Q7.8.
                     loudness: Loudness::new(-5888, -1408),
                 },
@@ -576,6 +589,7 @@ pub fn endianness() -> Fixture {
             // One layout, which is both the target and the mandatory stereo one.
             layouts: vec![LayoutWithLoudness {
                 layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
                 loudness: Loudness::new(-6144, -1536),
             }],
         }],
@@ -648,6 +662,7 @@ pub fn structure_only() -> Fixture {
             output_mix_gain: mix_gain,
             layouts: vec![LayoutWithLoudness {
                 layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
                 loudness: Loudness::new(-6144, -1536),
             }],
         }],
