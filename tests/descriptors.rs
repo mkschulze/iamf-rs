@@ -16,16 +16,17 @@
 
 use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
-use iamf::error::ErrorKind;
+use iamf::error::{ErrorKind, Location};
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::model::by_id;
 use iamf::obu::{
-    AnchorElement, AnchoredLoudness, AudioElement, AudioElementType, ChannelAudioLayerConfig,
-    CodecConfig, DecoderConfig, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness,
-    LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader, ObuType, SampleFormatFlags,
-    ScalableChannelLayoutConfig, read_audio_element, read_codec_config, read_ia_sequence_header,
-    read_mix_presentation, read_obu_with, write_audio_element, write_codec_config,
-    write_ia_sequence_header, write_mix_presentation, write_obu_with,
+    AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, AudioElementType,
+    ChannelAudioLayerConfig, CodecConfig, DecoderConfig, IaSequenceHeader, Layout,
+    LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader, ObuType,
+    OutputGain, SampleFormatFlags, ScalableChannelLayoutConfig, read_audio_element,
+    read_codec_config, read_ia_sequence_header, read_mix_presentation, read_obu_with,
+    write_audio_element, write_codec_config, write_ia_sequence_header, write_mix_presentation,
+    write_obu_with,
 };
 
 /// The published `test_000003` configuration, shared with `tests/sequence.rs`.
@@ -354,6 +355,68 @@ fn audio_element_matches_the_vendored_reference_file_at_0x1a() {
 }
 
 #[test]
+fn every_audio_element_reserved_group_round_trips_without_normalization() {
+    // Hand-computed packing: every reserved group is non-zero and adjacent to
+    // a differently-sized live field, so a width or ordering mistake changes
+    // this vector rather than merely changing a model assertion.
+    let bytes = hex!(
+        "08 13 01 1b 02 01 03 01 01 04 05 d5 b3 ab 32 1a 01 01 ab 12 34"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_audio_element).expect("reserved values parse");
+
+    assert_eq!(parsed.payload.reserved, 0x1b);
+    let AudioElementParam::Demixing {
+        definition,
+        default_reserved,
+        default_w_reserved,
+        ..
+    } = parsed.payload.params.first().expect("one demixing definition")
+    else {
+        panic!("expected demixing definition");
+    };
+    assert_eq!(definition.reserved, 0x55);
+    assert_eq!(*default_reserved, 0x13);
+    assert_eq!(*default_w_reserved, 0x0b);
+
+    let AudioElementType::ChannelBased(config) = &parsed.payload.audio_element_type else {
+        panic!("expected channel-based element");
+    };
+    assert_eq!(config.scalable_channel_layout.reserved, 0x12);
+    let layer = config
+        .scalable_channel_layout
+        .layers
+        .first()
+        .expect("one layer");
+    assert_eq!(layer.reserved, 0x02);
+    assert_eq!(
+        layer.output_gain,
+        Some(OutputGain {
+            flags: 0x2a,
+            reserved: 0x03,
+            gain: 0x1234,
+        })
+    );
+
+    assert_eq!(obu_bytes(&parsed, write_audio_element), bytes);
+    let findings = parsed.payload.validate();
+    for field in [
+        "audio_element.reserved",
+        "param_definition.reserved",
+        "default_demixing_info_parameter_data.reserved",
+        "default_w.reserved",
+        "scalable_channel_layout_config.reserved",
+        "channel_audio_layer_config.reserved",
+        "output_gain.reserved",
+    ] {
+        assert!(
+            findings.iter().any(|finding| finding.at == Location::Field(field)),
+            "missing finding for {field}: {findings:?}"
+        );
+    }
+}
+
+#[test]
 fn audio_element_type_occupies_the_top_three_bits_of_one_byte() {
     let bytes = obu_bytes(&published_audio_element(), write_audio_element);
     assert_eq!(bytes.get(4), Some(&0x00), "channel-based is 0x00");
@@ -581,6 +644,31 @@ fn the_layout_byte_packs_sound_system_a_as_0x80() {
     let bytes = obu_bytes(&published_mix_presentation(), write_mix_presentation);
     assert_eq!(bytes.get(0x4a), Some(&0x80));
     assert_eq!(bytes.get(0x4b), Some(&0x00), "info_type 0");
+}
+
+#[test]
+fn rendering_and_layout_reserved_groups_round_trip_at_their_exact_widths() {
+    let mut bytes = TEST_000003
+        .get(0x28..0x78)
+        .expect("the file is longer")
+        .to_vec();
+    bytes[0x3b] = 0x2d; // stereo mode(2)=0, reserved(6)=0x2d
+    bytes[0x4a] = 0x83; // Sound System A(2+4), reserved(2)=3
+
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_mix_presentation).expect("reserved values parse");
+    let sub_mix = parsed.payload.sub_mixes.first().expect("one sub-mix");
+    assert_eq!(sub_mix.elements[0].rendering_config.reserved, 0x2d);
+    assert_eq!(sub_mix.layouts[0].reserved, 0x03);
+    assert_eq!(obu_bytes(&parsed, write_mix_presentation), bytes);
+
+    let findings = parsed.payload.validate();
+    assert!(findings.iter().any(|finding| {
+        finding.at == Location::Field("rendering_config.reserved")
+    }));
+    assert!(findings.iter().any(|finding| {
+        finding.at == Location::Field("layout.reserved")
+    }));
 }
 
 #[test]
