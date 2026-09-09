@@ -439,6 +439,7 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
     Ok(ParsedSequence { obus })
 }
 
+// ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc ObuSequencerBase::PickAndPlace
 /// Write a parsed sequence faithfully in its stored flat order.
 pub fn write_parsed_sequence<W: Write>(mut sink: W, sequence: &ParsedSequence) -> Result<W> {
     let mut writer = BitWriter::new();
