@@ -52,7 +52,9 @@ pub fn canonical_parsed_strategy() -> impl Strategy<Value = ParsedSequence> {
                 if shape >= 4 {
                     let header = ObuHeader::new(ObuType::Reserved(27))
                         .with_extension(vec![0x91, 0x00, 0xfe]);
-                    let at = position % parsed.obus.len().saturating_add(1);
+                    let at = position
+                        .checked_rem(parsed.obus.len().saturating_add(1))
+                        .unwrap_or(0);
                     parsed.obus.insert(
                         at,
                         SequenceObu::Unknown(UnknownObu {
@@ -265,7 +267,9 @@ fn rich_unit(index: usize, delimiters: bool, frame_payload: &[u8], gain: i16) ->
     .map(|payload| Obu::new(ObuHeader::new(ObuType::ParameterBlock), payload))
     .collect::<Vec<_>>();
     if index == 0 {
-        blocks[0].trailing = vec![0xde, 0xad];
+        if let Some(first) = blocks.first_mut() {
+            first.trailing = vec![0xde, 0xad];
+        }
     }
     TemporalUnit {
         temporal_delimiter: delimiters.then_some(TemporalDelimiter),

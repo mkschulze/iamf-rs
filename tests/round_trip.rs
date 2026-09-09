@@ -88,7 +88,7 @@ fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
     );
 
     assert!(matches!(
-        parsed.obus.get(0),
+        parsed.obus.first(),
         Some(SequenceObu::IaSequenceHeader(_))
     ));
     assert!(matches!(
@@ -117,46 +117,54 @@ fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
         Some(SequenceObu::AudioFrame(_))
     ));
 
-    let SequenceObu::AudioElement(element) = &parsed.obus[2] else {
+    let Some(SequenceObu::AudioElement(element)) = parsed.obus.get(2) else {
         panic!("index 2 is the known Audio Element sentinel");
     };
-    let SequenceObu::CodecConfig(codec) = &parsed.obus[1] else {
+    let Some(SequenceObu::CodecConfig(codec)) = parsed.obus.get(1) else {
         panic!("index 1 is the known Codec Config sentinel");
     };
     assert_eq!(codec.trailing, [0xc3, 0xd4]);
     assert_eq!(element.trailing, [0xa1, 0xb2]);
-    let SequenceObu::MixPresentation(presentation) = &parsed.obus[3] else {
+    let Some(SequenceObu::MixPresentation(presentation)) = parsed.obus.get(3) else {
         panic!("index 3 is the known Mix Presentation sentinel");
     };
     assert_eq!(presentation.trailing, [0x71, 0x72]);
-    let AudioElementParam::Extension {
+    let Some(AudioElementParam::Extension {
         param_definition_type,
         bytes: definition_bytes,
-    } = &element.payload.params[2]
+    }) = element.payload.params.get(2)
     else {
         panic!("third definition is the raw extension definition");
     };
     assert_eq!(*param_definition_type, 7);
     assert_eq!(definition_bytes, &[0x0c, 0x80, 0xf7, 0x02, 0xc5]);
 
-    let SequenceObu::ParameterBlock(raw_block) = &parsed.obus[6] else {
+    let Some(SequenceObu::ParameterBlock(raw_block)) = parsed.obus.get(6) else {
         panic!("index 6 is the raw Parameter Block sentinel");
     };
     assert_eq!(raw_block.payload.subblocks.len(), 2);
     assert_eq!(
-        raw_block.payload.subblocks[0].data,
-        ParameterData::Raw(vec![0x44, 0x55])
+        raw_block
+            .payload
+            .subblocks
+            .first()
+            .map(|subblock| &subblock.data),
+        Some(&ParameterData::Raw(vec![0x44, 0x55]))
     );
     assert_eq!(
-        raw_block.payload.subblocks[1].data,
-        ParameterData::Raw(Vec::new())
+        raw_block
+            .payload
+            .subblocks
+            .get(1)
+            .map(|subblock| &subblock.data),
+        Some(&ParameterData::Raw(Vec::new()))
     );
-    let SequenceObu::ParameterBlock(known_trailing) = &parsed.obus[4] else {
+    let Some(SequenceObu::ParameterBlock(known_trailing)) = parsed.obus.get(4) else {
         panic!("index 4 is the known trailing-byte sentinel");
     };
     assert_eq!(known_trailing.trailing, [0xde, 0xad]);
 
-    let SequenceObu::Unknown(unknown) = &parsed.obus[9] else {
+    let Some(SequenceObu::Unknown(unknown)) = parsed.obus.get(9) else {
         panic!("index 9 is the unknown OBU sentinel");
     };
     assert_eq!(
@@ -171,8 +179,8 @@ fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
         vec![0, 8, 26, 65, 126, 134, 143, 152, 173, 181, 190, 194, 199]
     );
     assert_eq!(
-        &bytes[181..190],
-        &[0xd9, 0x07, 0x03, 0x91, 0x00, 0xfe, 0xde, 0xad, 0xbe]
+        bytes.get(181..190),
+        Some(&[0xd9, 0x07, 0x03, 0x91, 0x00, 0xfe, 0xde, 0xad, 0xbe][..])
     );
 }
 
