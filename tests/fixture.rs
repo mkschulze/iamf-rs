@@ -14,12 +14,16 @@ mod fixture;
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::model::{Profile, select_minimum_profile};
-use iamf::obu::{Layout, ObuType, find_obu_boundaries, plan_frames, read_obu_header};
+use iamf::obu::{
+    Layout, ObuType, Trimming, TypeSpecific, find_obu_boundaries, plan_frames, read_obu_header,
+};
 use iamf::packing::SubstreamPlan;
+use iamf::sequence::{SequenceObu, parse_sequence};
 
 use fixture::{
-    CHANNELS_5_1, EXPECTED_TRIM_AT_END, FRAME_SIZE, Fixture, SAMPLE_FRAMES, SAMPLE_RATE,
-    describe_channel_mismatch, peak_for, ramp_pcm, ramp_sample, store_sample,
+    CHANNELS_5_1, EXPECTED_TRIM_AT_END, EncodedTemporalUnit, FRAME_SIZE, Fixture, FixtureCodec,
+    FrameSource, SAMPLE_FRAMES, SAMPLE_RATE, describe_channel_mismatch, peak_for, ramp_pcm,
+    ramp_sample, store_sample,
 };
 
 /// The `ObuType` of every OBU in a byte slice, in order.
@@ -155,8 +159,9 @@ fn the_sample_identity_fixture_is_5_1_at_48_khz_24_bit_little_endian() {
     assert_eq!(spec.channels, 6);
     assert_eq!(spec.sample_rate, SAMPLE_RATE);
     assert_eq!(spec.sample_size, 24, "three bytes per sample");
-    assert!(
-        !spec.big_endian,
+    assert_eq!(
+        spec.codec,
+        FixtureCodec::Lpcm { big_endian: false },
         "little-endian, per waiver W-1: libiamf@v1.1.0's reads24be misreads 24-bit big-endian. \
          DESC-03's endianness sense lives on the endianness fixture and on \
          store_sample_writes_the_declared_byte_order."
@@ -306,8 +311,9 @@ fn the_endianness_fixture_is_stereo_16_bit_big_endian() {
     let spec = fixture.spec().expect("its spec resolves");
     assert_eq!(spec.layout, LoudspeakerLayout::Stereo);
     assert_eq!(spec.sample_size, 16);
-    assert!(
-        spec.big_endian,
+    assert_eq!(
+        spec.codec,
+        FixtureCodec::Lpcm { big_endian: true },
         "sample_format_flags == 0 is BIG-endian (DESC-03), and reads16be in the pinned libiamf \
          uses readu16be and is correct — which is why the endianness sense lives here"
     );
@@ -333,6 +339,136 @@ fn the_endianness_fixture_stores_its_first_sample_most_significant_byte_first() 
         bytes.windows(2).any(|window| window == expected.as_slice()),
         "the big-endian bytes {expected:02x?} of the first sample {first_sample} do not appear \
          in the encoded file"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Codec-neutral frame sources
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lpcm_frame_sources_preserve_the_committed_phase_1_bytes() {
+    let produced = fixture::sample_identity().encode().expect("it encodes");
+    let committed = include_bytes!("fixtures/golden/phase1_sample_identity.iamf");
+    assert_eq!(
+        produced, committed,
+        "routing LPCM through FrameSource must not change a single Phase 1 byte"
+    );
+}
+
+#[test]
+fn pre_encoded_payloads_are_copied_exactly_and_share_each_units_trim() {
+    let first_trim = Some(Trimming {
+        at_end: 7,
+        at_start: 3,
+    });
+    let units = vec![
+        EncodedTemporalUnit {
+            trimming: first_trim,
+            substream_payloads: vec![
+                vec![0x10, 0x00, 0xff],
+                vec![0x21],
+                vec![0x32, 0x33],
+                vec![0x43, 0x44, 0x45, 0x46],
+            ],
+        },
+        EncodedTemporalUnit {
+            trimming: None,
+            substream_payloads: vec![
+                vec![0x50],
+                vec![0x61, 0x62],
+                vec![0x73, 0x74, 0x75],
+                vec![0x86, 0x87, 0x88, 0x89],
+            ],
+        },
+    ];
+    let expected_payloads: Vec<Vec<u8>> = units
+        .iter()
+        .flat_map(|unit| unit.substream_payloads.iter().cloned())
+        .collect();
+    let mut fixture = fixture::sample_identity();
+    fixture.frame_sources = vec![FrameSource::PreEncoded(units)];
+
+    let parsed = parse_sequence(&fixture.encode().expect("pre-encoded units encode"))
+        .expect("the encoded fixture parses");
+    let frames: Vec<_> = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioFrame(frame) => Some(frame),
+            _ => None,
+        })
+        .collect();
+    let actual_payloads: Vec<Vec<u8>> = frames
+        .iter()
+        .map(|frame| frame.payload.payload.clone())
+        .collect();
+    assert_eq!(
+        actual_payloads, expected_payloads,
+        "opaque bytes are copied"
+    );
+
+    assert_eq!(frames.len(), 8);
+    for frame in frames.iter().take(4) {
+        assert_eq!(
+            frame.header.type_specific,
+            TypeSpecific::Trimming(first_trim),
+            "every substream in temporal unit 0 carries the same trim"
+        );
+    }
+    for frame in frames.iter().skip(4) {
+        assert_eq!(
+            frame.header.type_specific,
+            TypeSpecific::Trimming(None),
+            "every substream in temporal unit 1 carries the same trim"
+        );
+    }
+}
+
+#[test]
+fn an_element_and_frame_source_count_mismatch_is_an_error() {
+    let mut fixture = fixture::sample_identity();
+    fixture.frame_sources.clear();
+    let error = fixture.encode().expect_err("one element needs one source");
+    assert!(
+        error.contains("1 Audio Elements but 0 frame sources"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn temporal_unit_count_mismatches_between_elements_are_errors() {
+    let one_unit = EncodedTemporalUnit {
+        trimming: None,
+        substream_payloads: vec![vec![0x11]],
+    };
+    let mut fixture = fixture::structure_only();
+    fixture.frame_sources = vec![
+        FrameSource::PreEncoded(vec![one_unit.clone()]),
+        FrameSource::PreEncoded(vec![one_unit.clone(), one_unit]),
+    ];
+    let error = fixture
+        .encode()
+        .expect_err("all element sources need the same unit count");
+    assert!(
+        error.contains("element 401 has 1 temporal units") && error.contains("element 400 has 2"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn a_pre_encoded_substream_count_mismatch_is_an_error() {
+    let mut fixture = fixture::sample_identity();
+    fixture.frame_sources = vec![FrameSource::PreEncoded(vec![EncodedTemporalUnit {
+        trimming: None,
+        substream_payloads: vec![vec![0x10], vec![0x20], vec![0x30]],
+    }])];
+    let error = fixture
+        .encode()
+        .expect_err("5.1 declares four substreams per temporal unit");
+    assert!(
+        error.contains("element 300 temporal unit 0 has 3 substream payloads but declares 4"),
+        "unexpected error: {error}"
     );
 }
 
@@ -489,8 +625,13 @@ fn every_fixture_builds_identically_twice() {
             first.name
         );
         assert_eq!(
-            first.pcm, second.pcm,
+            first.expected_pcm, second.expected_pcm,
             "{} builds two different signals",
+            first.name
+        );
+        assert_eq!(
+            first.frame_sources, second.frame_sources,
+            "{} builds two different frame sources",
             first.name
         );
     }

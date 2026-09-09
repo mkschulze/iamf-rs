@@ -89,7 +89,7 @@ use iamf::obu::{
 use iamf::obu::{ObuType, find_obu_boundaries, plan_frames, read_obu_header};
 
 use fixture::{
-    ElementSpec, Fixture, describe_channel_mismatch, peak_for, ramp_pcm, spec_of_first,
+    ElementSpec, Fixture, FixtureCodec, FrameSource, describe_channel_mismatch, peak_for, ramp_pcm,
     store_interleaved, store_sample,
 };
 
@@ -703,6 +703,7 @@ fn probe_fixture(name: &'static str, sample_size: u8, flags: SampleFormatFlags) 
         trailing: Vec::new(),
     };
 
+    let pcm = ramp_pcm(fixture::SAMPLE_FRAMES, 2, peak_for(sample_size));
     Fixture {
         name,
         descriptors: DescriptorSet {
@@ -711,7 +712,8 @@ fn probe_fixture(name: &'static str, sample_size: u8, flags: SampleFormatFlags) 
             audio_elements: vec![element],
             mix_presentations: vec![presentation],
         },
-        pcm: vec![ramp_pcm(fixture::SAMPLE_FRAMES, 2, peak_for(sample_size))],
+        expected_pcm: vec![pcm.clone()],
+        frame_sources: vec![FrameSource::LpcmInterleaved(pcm)],
     }
 }
 
@@ -926,7 +928,7 @@ fn the_wav_writer_and_reader_round_trip() {
             sample_rate: 48_000,
             sample_size,
             num_samples_per_frame: 128,
-            big_endian: false,
+            codec: FixtureCodec::Lpcm { big_endian: false },
             layout: LoudspeakerLayout::Ch5_1,
             channels: 6,
         };
@@ -965,16 +967,14 @@ impl GateReport {
     }
 }
 
-/// **CONF-01.** Assert that `descriptors` + `pcm` produce a conformant IA
-/// Sequence, clause by clause.
+/// **CONF-01.** Assert that `fixture` produces a conformant IA Sequence,
+/// clause by clause.
 ///
 /// A **function, not a test body**, and that is the whole requirement: Phase 3
-/// reuses it unchanged for FLAC and Opus. So it takes the configuration and the
-/// PCM as arguments and contains no codec-specific constant — the sample rate,
-/// sample size, frame size and output layout it hands the reference are all read
-/// back out of the Codec Config it just wrote. A single hard-coded `48000` here
-/// would make it an LPCM-shaped function pretending to be a general one, and the
-/// failure would not surface until Phase 3.
+/// reuses it for FLAC and Opus. It takes the codec-neutral fixture and contains
+/// no codec-specific packet handling — sample rate, sample size, frame size and
+/// output layout are read back out of the Codec Config it just wrote, while the
+/// comparison PCM is the fixture's independently derived oracle.
 ///
 /// # Clause order is load-bearing
 ///
@@ -1001,27 +1001,15 @@ impl GateReport {
 ///
 /// Returns the first clause failure as a message naming the clause. Panicking
 /// assertions are used only for the invariants a caller could not act on.
-fn assert_conformant(descriptors: &DescriptorSet, pcm: &[i32]) -> Result<GateReport, String> {
+fn assert_conformant(fixture: &Fixture) -> Result<GateReport, String> {
     let mut report = GateReport::default();
 
     // ---- clause 0 — the reference is the pinned one (D-13) -----------------
     assert_reference_manifest_matches()?;
     report.note("clause 0 (D-13 manifest)", "reference pin confirmed");
 
-    let spec = spec_of_first(descriptors)?;
-    let tag = descriptors
-        .mix_presentations
-        .first()
-        .and_then(|p| p.localized_presentation_annotations.first())
-        .map(|name| String::from_utf8_lossy(name).into_owned())
-        .unwrap_or_else(|| "fixture".to_owned());
-    let fixture = Fixture {
-        // Leaked once per call and only in a test binary; the alternative is
-        // threading a lifetime through `Fixture` for a label.
-        name: Box::leak(tag.clone().into_boxed_str()),
-        descriptors: descriptors.clone(),
-        pcm: vec![pcm.to_vec()],
-    };
+    let spec = fixture.spec()?;
+    let pcm = fixture.single_pcm();
     let bytes = fixture.encode()?;
 
     // ---- CONF-02 — the signal is non-silent and per-channel-distinguishable -
@@ -1035,10 +1023,12 @@ fn assert_conformant(descriptors: &DescriptorSet, pcm: &[i32]) -> Result<GateRep
     );
 
     // ---- CONF-03 — the length forces a non-zero, differing end trim ---------
-    let trim = assert_trim_is_forced(pcm, spec)?;
+    let (trim_at_end, trim_at_start) = assert_fixture_trim_is_forced(fixture, spec)?;
     report.note(
         "CONF-03 (trim)",
-        &format!("trim_at_end = {trim}, trim_at_start = 0, and the two differ"),
+        &format!(
+            "trim_at_end = {trim_at_end}, trim_at_start = {trim_at_start}, and the two differ"
+        ),
     );
 
     // ---- CONF-04 — structure is observable in our own output ---------------
@@ -1053,7 +1043,7 @@ fn assert_conformant(descriptors: &DescriptorSet, pcm: &[i32]) -> Result<GateRep
         }
         Some(decoder) => {
             let dir = scratch_dir(fixture.name);
-            let trip = round_trip(&decoder, &fixture, &dir);
+            let trip = round_trip(&decoder, fixture, &dir);
             assert_limiter_is_transparent(&trip, fixture.name);
             if trip.differing != 0 {
                 // D-19: report a candidate permutation, never apply one.
@@ -1081,7 +1071,7 @@ fn assert_conformant(descriptors: &DescriptorSet, pcm: &[i32]) -> Result<GateRep
     // ---- CONF-06 — iamf-tools' stricter parser accepts the file ------------
     if iamf_tools_available() {
         let dir = scratch_dir(&format!("{}-conf06", fixture.name));
-        let observed = run_decoder_main(&bytes, &dir, expected_temporal_units(pcm, spec)?)?;
+        let observed = run_decoder_main(&bytes, &dir, expected_temporal_units(fixture, spec)?)?;
         report.note("CONF-06 (iamf-tools parser)", &observed);
     } else {
         skip_no_container("CONF-06");
@@ -1233,6 +1223,80 @@ fn assert_trim_is_forced(pcm: &[i32], spec: ElementSpec) -> Result<u32, String> 
     Ok(plan.trim_at_end)
 }
 
+/// Codec-neutral CONF-03: LPCM retains the Phase 1 arithmetic above; committed
+/// access units prove the same retained-length equation from their explicit
+/// first/start and final/end trims.
+fn assert_fixture_trim_is_forced(
+    fixture: &Fixture,
+    spec: ElementSpec,
+) -> Result<(u32, u32), String> {
+    let source = fixture
+        .frame_sources
+        .first()
+        .ok_or_else(|| "CONF-03: the fixture has no frame source".to_owned())?;
+    match source {
+        FrameSource::LpcmInterleaved(pcm) => {
+            assert_trim_is_forced(pcm, spec).map(|at_end| (at_end, 0))
+        }
+        FrameSource::PreEncoded(units) => {
+            let first = units
+                .first()
+                .ok_or_else(|| "CONF-03: the committed source has no temporal units".to_owned())?;
+            let last = units.last().ok_or_else(|| {
+                "CONF-03: the committed source has no final temporal unit".to_owned()
+            })?;
+            let at_start = first.trimming.map_or(0, |trim| trim.at_start);
+            let at_end = last.trimming.map_or(0, |trim| trim.at_end);
+            if at_start == 0 && at_end == 0 {
+                return Err(
+                    "CONF-03: committed access units force neither start nor end trimming"
+                        .to_owned(),
+                );
+            }
+            if at_start >= spec.num_samples_per_frame || at_end >= spec.num_samples_per_frame {
+                return Err(format!(
+                    "CONF-03: trims ({at_end} end, {at_start} start) are not less than the \
+                     frame size {}",
+                    spec.num_samples_per_frame
+                ));
+            }
+            if at_end == at_start {
+                return Err(
+                    "CONF-03: the two trim values are equal, so a swapped write order is \
+                     invisible"
+                        .to_owned(),
+                );
+            }
+
+            let unit_count = u64::try_from(units.len())
+                .map_err(|e| format!("CONF-03: temporal-unit count does not fit u64: {e}"))?;
+            let capacity = unit_count
+                .checked_mul(u64::from(spec.num_samples_per_frame))
+                .ok_or_else(|| "CONF-03: temporal-unit capacity overflows u64".to_owned())?;
+            let retained = capacity
+                .checked_sub(u64::from(at_start))
+                .and_then(|value| value.checked_sub(u64::from(at_end)))
+                .ok_or_else(|| "CONF-03: trimming exceeds encoded capacity".to_owned())?;
+            let expected = u64::try_from(
+                fixture
+                    .single_pcm()
+                    .len()
+                    .checked_div(spec.channels.max(1))
+                    .unwrap_or(0),
+            )
+            .map_err(|e| format!("CONF-03: expected sample count does not fit u64: {e}"))?;
+            if retained != expected {
+                return Err(format!(
+                    "CONF-03: {unit_count} units × {} samples − {at_start} start − {at_end} end \
+                     retains {retained} frames, expected {expected}",
+                    spec.num_samples_per_frame
+                ));
+            }
+            Ok((at_end, at_start))
+        }
+    }
+}
+
 /// **CONF-04.** Structure is observable in our own output: at least six OBUs,
 /// the descriptors in the reference's write order, and the boundary walk landing
 /// exactly on `bytes.len()` (OBU-08).
@@ -1318,12 +1382,19 @@ fn assert_structure_is_observable(bytes: &[u8]) -> Result<String, String> {
 }
 
 /// How many temporal units a fixture carries — one per frame.
-fn expected_temporal_units(pcm: &[i32], spec: ElementSpec) -> Result<u64, String> {
-    let frames = u64::try_from(pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0))
-        .map_err(|e| format!("sample count does not fit u64: {e}"))?;
-    plan_frames(frames, spec.num_samples_per_frame)
-        .map(|plan| plan.frame_count)
-        .map_err(|e| format!("plan_frames: {e:?}"))
+fn expected_temporal_units(fixture: &Fixture, spec: ElementSpec) -> Result<u64, String> {
+    match fixture.frame_sources.first() {
+        Some(FrameSource::LpcmInterleaved(pcm)) => {
+            let frames = u64::try_from(pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0))
+                .map_err(|e| format!("sample count does not fit u64: {e}"))?;
+            plan_frames(frames, spec.num_samples_per_frame)
+                .map(|plan| plan.frame_count)
+                .map_err(|e| format!("plan_frames: {e:?}"))
+        }
+        Some(FrameSource::PreEncoded(units)) => u64::try_from(units.len())
+            .map_err(|e| format!("temporal-unit count does not fit u64: {e}")),
+        None => Err("the fixture has no frame source".to_owned()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1411,7 +1482,7 @@ fn run_decoder_main(bytes: &[u8], dir: &Path, expected_units: u64) -> Result<Str
 #[test]
 fn the_sample_identity_fixture_is_conformant() {
     let fixture = fixture::sample_identity();
-    match assert_conformant(&fixture.descriptors, fixture.single_pcm()) {
+    match assert_conformant(&fixture) {
         Ok(report) => report.print(fixture.name),
         Err(message) => panic!("{message}"),
     }
@@ -1426,7 +1497,7 @@ fn the_sample_identity_fixture_is_conformant() {
 #[test]
 fn the_endianness_fixture_is_conformant() {
     let fixture = fixture::endianness();
-    match assert_conformant(&fixture.descriptors, fixture.single_pcm()) {
+    match assert_conformant(&fixture) {
         Ok(report) => report.print(fixture.name),
         Err(message) => panic!("{message}"),
     }
@@ -1463,7 +1534,7 @@ fn the_structure_only_fixture_passes_the_strict_parser() {
     let fixture = fixture::structure_only();
     let bytes = fixture.encode().expect("the structure fixture encodes");
     let spec = fixture.spec().expect("its spec resolves");
-    let units = expected_temporal_units(fixture.single_pcm(), spec).expect("its unit count");
+    let units = expected_temporal_units(&fixture, spec).expect("its unit count");
     let dir = scratch_dir("structure-conf06");
     match run_decoder_main(&bytes, &dir, units) {
         Ok(observed) => println!("[{}] CONF-06: {observed}", fixture.name),
@@ -1875,10 +1946,14 @@ fn textproto_for(fixture: &Fixture, wav_filename: &str) -> Result<String, String
     let (proto_layout_name, labels) = proto_layout(spec.layout)?;
     let trim = assert_trim_is_forced(fixture.single_pcm(), spec)?;
 
-    let endianness = if spec.big_endian {
-        "LPCM_BIG_ENDIAN"
-    } else {
-        "LPCM_LITTLE_ENDIAN"
+    let endianness = match spec.codec {
+        FixtureCodec::Lpcm { big_endian: true } => "LPCM_BIG_ENDIAN",
+        FixtureCodec::Lpcm { big_endian: false } => "LPCM_LITTLE_ENDIAN",
+        other => {
+            return Err(format!(
+                "CONF-07's iamf-tools textproto companion supports LPCM, got {other:?}"
+            ));
+        }
     };
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
 

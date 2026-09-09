@@ -35,10 +35,10 @@
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::model::{DescriptorSet, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, AudioElementType, AudioFrame, ChannelAudioLayerConfig, CodecConfig,
-    IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
+    AudioElement, AudioElementType, AudioFrame, CODEC_ID_OPUS, ChannelAudioLayerConfig,
+    CodecConfig, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
     MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
-    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, plan_frames,
+    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming, plan_frames,
 };
 use iamf::packing::{SubstreamPlan, pack_channels_to_substreams};
 use iamf::sequence::{SequenceWriter, TemporalUnit};
@@ -198,11 +198,18 @@ pub fn store_interleaved(samples: &[i32], sample_size: u8, big_endian: bool) -> 
 /// hands the reference come from the Codec Config it just wrote, so nothing is
 /// LPCM-specific by construction and Phase 3 reuses the harness unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixtureCodec {
+    Lpcm { big_endian: bool },
+    Flac,
+    Opus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ElementSpec {
     pub sample_rate: u32,
     pub sample_size: u8,
     pub num_samples_per_frame: u32,
-    pub big_endian: bool,
+    pub codec: FixtureCodec,
     pub layout: LoudspeakerLayout,
     pub channels: usize,
 }
@@ -242,16 +249,39 @@ pub fn spec_for(
                 element.codec_config_id, element.audio_element_id
             )
         })?;
-    let lpcm = config
-        .lpcm_config()
-        .ok_or_else(|| format!("Codec Config {} is not LPCM", config.codec_config_id))?;
+    let (sample_rate, sample_size, codec) = if let Some(lpcm) = config.lpcm_config() {
+        (
+            lpcm.sample_rate,
+            lpcm.sample_size,
+            FixtureCodec::Lpcm {
+                big_endian: matches!(lpcm.sample_format_flags, SampleFormatFlags::BigEndian),
+            },
+        )
+    } else if let Some(flac) = config.flac_config() {
+        (
+            flac.sample_rate,
+            flac.bits_per_sample.saturating_add(1),
+            FixtureCodec::Flac,
+        )
+    } else if config.codec_id == CODEC_ID_OPUS {
+        // IAMF Opus always decodes on a 48 kHz clock and the committed oracle
+        // is signed 16-bit PCM. The typed config lands in Plan 03; selecting
+        // these output properties by FourCC keeps this adapter compatible with
+        // both today's Raw form and that typed form without inspecting packets.
+        (48_000, 16, FixtureCodec::Opus)
+    } else {
+        return Err(format!(
+            "Codec Config {} uses unsupported codec {:?}",
+            config.codec_config_id, config.codec_id
+        ));
+    };
     let layout = first_layout(element)?;
     let plan = SubstreamPlan::for_layout(layout).map_err(|e| format!("{e:?}"))?;
     Ok(ElementSpec {
-        sample_rate: lpcm.sample_rate,
-        sample_size: lpcm.sample_size,
+        sample_rate,
+        sample_size,
         num_samples_per_frame: config.num_samples_per_frame,
-        big_endian: matches!(lpcm.sample_format_flags, SampleFormatFlags::BigEndian),
+        codec,
         layout,
         channels: plan.channel_count(),
     })
@@ -270,21 +300,37 @@ pub fn spec_of_first(descriptors: &DescriptorSet) -> Result<ElementSpec, String>
 // A fixture, and the single encode path
 // ---------------------------------------------------------------------------
 
-/// One fixture: its descriptors and the interleaved PCM of each Audio Element,
-/// in descriptor order.
+/// One already-encoded temporal unit, with opaque payloads in substream order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodedTemporalUnit {
+    pub trimming: Option<Trimming>,
+    pub substream_payloads: Vec<Vec<u8>>,
+}
+
+/// The source of one Audio Element's frames, in descriptor order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameSource {
+    LpcmInterleaved(Vec<i32>),
+    PreEncoded(Vec<EncodedTemporalUnit>),
+}
+
+/// One fixture: its descriptors, independently decoded comparison PCM, and
+/// frame source for each Audio Element, all in descriptor order.
 #[derive(Debug, Clone)]
 pub struct Fixture {
     /// A stable name, used for scratch directories and failure messages.
     pub name: &'static str,
     pub descriptors: DescriptorSet,
-    /// One interleaved PCM buffer per Audio Element, in descriptor order.
-    pub pcm: Vec<Vec<i32>>,
+    /// Independently derived interleaved comparison PCM buffers.
+    pub expected_pcm: Vec<Vec<i32>>,
+    /// One frame source per Audio Element, in descriptor order.
+    pub frame_sources: Vec<FrameSource>,
 }
 
 impl Fixture {
     /// The single Audio Element's PCM, for a one-element fixture.
     pub fn single_pcm(&self) -> &[i32] {
-        self.pcm.first().map_or(&[], Vec::as_slice)
+        self.expected_pcm.first().map_or(&[], Vec::as_slice)
     }
 
     /// The single Audio Element's spec.
@@ -309,30 +355,21 @@ impl Fixture {
     /// the ids declared come from one source.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         let elements = &self.descriptors.audio_elements;
-        if elements.len() != self.pcm.len() {
+        if elements.len() != self.frame_sources.len() {
             return Err(format!(
-                "{}: {} Audio Elements but {} PCM buffers",
+                "{}: {} Audio Elements but {} frame sources",
                 self.name,
                 elements.len(),
-                self.pcm.len()
+                self.frame_sources.len()
             ));
         }
 
         let lead = spec_of_first(&self.descriptors)?;
-        let total_samples = u64::try_from(
-            self.single_pcm()
-                .len()
-                .checked_div(lead.channels.max(1))
-                .unwrap_or(0),
-        )
-        .unwrap_or(0);
-        let plan =
-            plan_frames(total_samples, lead.num_samples_per_frame).map_err(|e| format!("{e:?}"))?;
-
-        // Per element: its spec, its substream plan, its stored bytes and the
-        // byte length of one frame. Resolved once, outside the frame loop.
+        // Per element: materialize the units once. LPCM retains the Phase 1
+        // storage, padding and BCG packing byte-for-byte. Only PreEncoded takes
+        // the opaque bypass and its bytes are never inspected or transformed.
         let mut prepared = Vec::with_capacity(elements.len());
-        for (index, element) in elements.iter().enumerate() {
+        for (element, source) in elements.iter().zip(&self.frame_sources) {
             let spec = spec_for(&self.descriptors, element)?;
             if spec.num_samples_per_frame != lead.num_samples_per_frame {
                 return Err(format!(
@@ -346,16 +383,92 @@ impl Fixture {
             }
             let substreams =
                 SubstreamPlan::for_layout(spec.layout).map_err(|e| format!("{e:?}"))?;
-            let pcm = self
-                .pcm
-                .get(index)
-                .ok_or_else(|| format!("{}: no PCM for element index {index}", self.name))?;
-            let stored = store_interleaved(pcm, spec.sample_size, spec.big_endian);
-            let frame_bytes = usize::try_from(spec.num_samples_per_frame)
-                .unwrap_or(0)
-                .saturating_mul(spec.channels)
-                .saturating_mul(spec.bytes_per_sample());
-            prepared.push((spec, substreams, stored, frame_bytes));
+            let units = match source {
+                FrameSource::LpcmInterleaved(pcm) => {
+                    let big_endian = match spec.codec {
+                        FixtureCodec::Lpcm { big_endian } => big_endian,
+                        other => {
+                            return Err(format!(
+                                "{}: element {} uses {other:?}, so LPCM samples cannot supply it",
+                                self.name, element.audio_element_id
+                            ));
+                        }
+                    };
+                    let total_samples =
+                        u64::try_from(pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0))
+                            .unwrap_or(0);
+                    let plan = plan_frames(total_samples, spec.num_samples_per_frame)
+                        .map_err(|e| format!("{e:?}"))?;
+                    let stored = store_interleaved(pcm, spec.sample_size, big_endian);
+                    let frame_bytes = usize::try_from(spec.num_samples_per_frame)
+                        .unwrap_or(0)
+                        .saturating_mul(spec.channels)
+                        .saturating_mul(spec.bytes_per_sample());
+                    let mut units =
+                        Vec::with_capacity(usize::try_from(plan.frame_count).unwrap_or(0));
+                    for index in 0..plan.frame_count {
+                        let start = usize::try_from(index)
+                            .unwrap_or(0)
+                            .saturating_mul(frame_bytes);
+                        let end = start.saturating_add(frame_bytes).min(stored.len());
+                        let mut chunk = stored.get(start..end).unwrap_or_default().to_vec();
+                        // The final frame remains caller-padded exactly as in
+                        // Phase 1; SequenceWriter never invents samples.
+                        chunk.resize(frame_bytes, 0);
+                        let substream_payloads = pack_channels_to_substreams(
+                            &substreams,
+                            &chunk,
+                            spec.channels,
+                            spec.bytes_per_sample(),
+                        )
+                        .map_err(|e| {
+                            format!("{}: pack_channels_to_substreams: {e:?}", self.name)
+                        })?;
+                        units.push(EncodedTemporalUnit {
+                            trimming: plan.trimming_for(index),
+                            substream_payloads,
+                        });
+                    }
+                    units
+                }
+                FrameSource::PreEncoded(units) => units.clone(),
+            };
+
+            for (index, unit) in units.iter().enumerate() {
+                let declared = element.audio_substream_ids.len();
+                if unit.substream_payloads.len() != declared {
+                    return Err(format!(
+                        "{}: element {} temporal unit {index} has {} substream payloads but \
+                         declares {declared}",
+                        self.name,
+                        element.audio_element_id,
+                        unit.substream_payloads.len()
+                    ));
+                }
+            }
+            prepared.push((element.audio_element_id, units));
+        }
+
+        if let Some((lead_id, lead_units)) = prepared.first() {
+            for (element_id, units) in prepared.iter().skip(1) {
+                if units.len() != lead_units.len() {
+                    return Err(format!(
+                        "{}: element {lead_id} has {} temporal units but element {element_id} has {}",
+                        self.name,
+                        lead_units.len(),
+                        units.len()
+                    ));
+                }
+                for (index, (lead_unit, unit)) in lead_units.iter().zip(units).enumerate() {
+                    if unit.trimming != lead_unit.trimming {
+                        return Err(format!(
+                            "{}: temporal unit {index} has different trimming for elements \
+                             {lead_id} and {element_id}",
+                            self.name
+                        ));
+                    }
+                }
+            }
         }
 
         let mut writer = SequenceWriter::new(Vec::new());
@@ -363,34 +476,22 @@ impl Fixture {
             .push_descriptors(&self.descriptors)
             .map_err(|e| format!("{}: push_descriptors: {e:?}", self.name))?;
 
-        for index in 0..plan.frame_count {
-            let trimming = plan.trimming_for(index);
+        let unit_count = prepared.first().map_or(0, |(_, units)| units.len());
+        for index in 0..unit_count {
             let mut frames = Vec::new();
             let mut next_substream_id = 0_u32;
 
-            for (spec, substreams, stored, frame_bytes) in &prepared {
-                let start = usize::try_from(index)
-                    .unwrap_or(0)
-                    .saturating_mul(*frame_bytes);
-                let end = start.saturating_add(*frame_bytes).min(stored.len());
-                let mut chunk = stored.get(start..end).unwrap_or_default().to_vec();
-                // The final frame is short and is zero-padded to a whole frame
-                // **by the caller**, which is why it carries the end trim. The
-                // writer never invents sample values — that would be signal
-                // processing, and PROJECT.md names a resampler as the first
-                // likely DSP breach.
-                chunk.resize(*frame_bytes, 0);
-
-                let payloads = pack_channels_to_substreams(
-                    substreams,
-                    &chunk,
-                    spec.channels,
-                    spec.bytes_per_sample(),
-                )
-                .map_err(|e| format!("{}: pack_channels_to_substreams: {e:?}", self.name))?;
-
-                for payload in payloads {
-                    frames.push(AudioFrame::new(next_substream_id, payload).into_obu(trimming));
+            for (_, units) in &prepared {
+                let unit = units.get(index).ok_or_else(|| {
+                    format!(
+                        "{}: no temporal unit {index} after count validation",
+                        self.name
+                    )
+                })?;
+                for payload in &unit.substream_payloads {
+                    frames.push(
+                        AudioFrame::new(next_substream_id, payload.clone()).into_obu(unit.trimming),
+                    );
                     next_substream_id = next_substream_id.saturating_add(1);
                 }
             }
@@ -555,7 +656,8 @@ pub fn sample_identity() -> Fixture {
             audio_elements: vec![element],
             mix_presentations: vec![presentation],
         },
-        pcm: vec![pcm],
+        expected_pcm: vec![pcm.clone()],
+        frame_sources: vec![FrameSource::LpcmInterleaved(pcm)],
     }
 }
 
@@ -605,7 +707,8 @@ pub fn endianness() -> Fixture {
             audio_elements: vec![element],
             mix_presentations: vec![presentation],
         },
-        pcm: vec![pcm],
+        expected_pcm: vec![pcm.clone()],
+        frame_sources: vec![FrameSource::LpcmInterleaved(pcm)],
     }
 }
 
@@ -681,7 +784,11 @@ pub fn structure_only() -> Fixture {
             audio_elements: vec![second, first],
             mix_presentations: vec![presentation],
         },
-        pcm: vec![pcm_a, pcm_b],
+        expected_pcm: vec![pcm_a.clone(), pcm_b.clone()],
+        frame_sources: vec![
+            FrameSource::LpcmInterleaved(pcm_a),
+            FrameSource::LpcmInterleaved(pcm_b),
+        ],
     }
 }
 
