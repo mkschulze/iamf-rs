@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::Location;
 use iamf::obu::{
-    AudioElementParam, DecoderConfig, DurationFields, FlacDecoderConfig, ParamDefinition,
-    ParameterData, ReconGainElement, ReconGainInfoParameterData, read_codec_config, read_obu_with,
-    write_codec_config, write_obu_with,
+    AudioElementParam, DecoderConfig, DurationFields, FlacDecoderConfig, OpusDecoderConfig,
+    ParamDefinition, ParameterData, ReconGainElement, ReconGainInfoParameterData,
+    read_codec_config, read_obu_with, write_codec_config, write_obu_with,
 };
 use iamf::sequence::{SequenceObu, parse_sequence, write_parsed_sequence};
 use reference_expectations::{
-    NEGATIVE_EXPECTATIONS, NegativeDisposition, POSITIVE_EXPECTATIONS, RAW_CODEC_EXPECTATIONS,
+    NEGATIVE_EXPECTATIONS, NegativeDisposition, OPUS_CODEC_EXPECTATIONS, POSITIVE_EXPECTATIONS,
 };
 use sha2::{Digest, Sha256};
 
@@ -183,56 +183,91 @@ fn named_negative_dispositions_are_exact() {
 }
 
 #[test]
-fn every_still_opaque_decoder_config_remains_raw_at_its_exact_boundary() {
-    for expectation in RAW_CODEC_EXPECTATIONS {
+fn every_reference_opus_config_is_typed_and_a_ten_byte_prefix_stays_raw() {
+    for expectation in OPUS_CODEC_EXPECTATIONS {
         let bytes = fixture_bytes(expectation.path);
-        let sequence = parse_sequence(&bytes).expect("raw-codec fixture parses");
-        let config = sequence
+        let sequence = parse_sequence(&bytes).expect("Opus fixture parses");
+        let config_obu = sequence
             .obus
             .iter()
             .find_map(|obu| match obu {
-                SequenceObu::CodecConfig(obu) => Some(&obu.payload),
+                SequenceObu::CodecConfig(obu) => Some(obu),
                 _ => None,
             })
             .expect("fixture carries a Codec Config");
-        let DecoderConfig::Raw {
-            codec_id,
-            bytes: raw,
-        } = &config.decoder_config
-        else {
-            panic!(
-                "{}: non-LPCM config was interpreted early",
-                expectation.path
-            );
-        };
+        let config = &config_obu.payload;
         assert_eq!(
             config.codec_id, expectation.fourcc,
             "{}: FourCC",
             expectation.path
         );
         assert_eq!(
-            *codec_id, expectation.fourcc,
-            "{}: raw owner FourCC",
+            config.opus_config(),
+            Some(&OpusDecoderConfig {
+                version: 1,
+                output_channel_count: 2,
+                pre_skip: expectation.pre_skip,
+                input_sample_rate: 48_000,
+                output_gain: 0,
+                mapping_family: 0,
+            }),
+            "{}: all six pinned Opus fields",
+            expectation.path
+        );
+        assert_eq!(config.codec_config_id, expectation.codec_config_id);
+        assert_eq!(
+            config.num_samples_per_frame,
+            expectation.num_samples_per_frame
+        );
+        assert_eq!(config.audio_roll_distance, expectation.audio_roll_distance);
+        assert!(config.trailing.is_empty());
+        assert!(config_obu.trailing.is_empty());
+        assert!(config.validate().is_empty());
+
+        let end = expectation.offset.saturating_add(expectation.len);
+        let full_prefix = bytes
+            .get(expectation.offset..end)
+            .expect("eleven pinned Opus bytes");
+        assert_eq!(
+            full_prefix.len(),
+            11,
+            "{}: Opus codec length",
             expectation.path
         );
         assert_eq!(
-            raw.len(),
-            expectation.len,
-            "{}: raw codec length",
-            expectation.path
-        );
-        assert_eq!(
-            sha256_hex(raw),
+            sha256_hex(full_prefix),
             expectation.sha256,
-            "{}: raw codec digest",
+            "{}: unchanged decoder-config digest",
             expectation.path
         );
-        assert_eq!(
-            bytes.get(expectation.offset..expectation.offset.saturating_add(expectation.len)),
-            Some(raw.as_slice()),
-            "{}: raw codec byte position",
-            expectation.path
-        );
+        let full_obu = bytes
+            .get(8..end)
+            .expect("complete Codec Config OBU follows eight-byte sequence header");
+        let mut writer = BitWriter::new();
+        write_obu_with(&mut writer, config_obu, write_codec_config).expect("typed Opus rewrites");
+        assert_eq!(writer.finish().expect("whole-byte OBU"), full_obu);
+
+        let mut short_obu = full_obu.to_vec();
+        let size = short_obu.get_mut(1).expect("OBU has a one-byte size");
+        *size = size.checked_sub(1).expect("remove one decoder-config byte");
+        assert_eq!(short_obu.pop(), Some(0));
+        let mut reader = BitCursor::new(&short_obu);
+        let parsed =
+            read_obu_with(&mut reader, read_codec_config).expect("ten-byte Opus remains raw");
+        let DecoderConfig::Raw {
+            codec_id,
+            bytes: raw,
+        } = &parsed.payload.decoder_config
+        else {
+            panic!("{}: ten-byte Opus became typed", expectation.path);
+        };
+        assert_eq!(*codec_id, expectation.fourcc);
+        assert_eq!(raw, full_prefix.get(..10).expect("ten-byte prefix"));
+        assert!(parsed.payload.trailing.is_empty());
+        assert!(parsed.trailing.is_empty());
+        let mut writer = BitWriter::new();
+        write_obu_with(&mut writer, &parsed, write_codec_config).expect("raw Opus rewrites");
+        assert_eq!(writer.finish().expect("whole-byte OBU"), short_obu);
     }
 }
 

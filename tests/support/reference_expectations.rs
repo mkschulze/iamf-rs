@@ -11,12 +11,16 @@ pub struct PositiveExpectation {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct RawCodecExpectation {
+pub struct OpusCodecExpectation {
     pub path: &'static str,
     pub fourcc: [u8; 4],
     pub offset: usize,
     pub len: usize,
     pub sha256: &'static str,
+    pub codec_config_id: u32,
+    pub num_samples_per_frame: u32,
+    pub audio_roll_distance: i16,
+    pub pre_skip: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +106,7 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "test_000059.iamf",
-        "bd2158ca94e75367d940e835f9c121de9e84c566c5442dde001e1765b9efa823"
+        "14a01678cc7687c8fc839baa65b0cef5369ba2bbc0a10f7835d4ab11fd145937"
     ),
     positive!(
         "test_000060.iamf",
@@ -166,7 +170,7 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "test_000124.iamf",
-        "8f637e9a02659decd87572257e7a6eafd02a05dcc9d5143808151ccfc70716cb"
+        "153257eae43ba539d41c095cc684facb0edba6a70edb9e27c33836be118baedc"
     ),
     positive!(
         "test_000130.iamf",
@@ -182,7 +186,7 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "iamf-tools/noise_1024samp_5p1_opus.iamf",
-        "e8868378e38768fb21f956214c479be30d9bddcf99b4b0a450d37d1c787588ed"
+        "356ea4c2c4880f8bbf5d6dd0744d8b574ad0d55bec7c1099e2c27401bf6453d4"
     ),
     positive!(
         "iamf-tools/noise_1024samp_stereo_flac.iamf",
@@ -190,11 +194,11 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "iamf-tools/noise_3s_stereo_opus.iamf",
-        "ce3b61f47fb58a3e44d154d5e5125a03dd4fdd74ca1bac167d999fc3da6d249b"
+        "be45f7474824c6be1cacb606bebb002a42d8b0dca7b65609f9e44f0e00727e55"
     ),
     positive!(
         "iamf-tools/tones_100ms_3OA_stereo_opus.iamf",
-        "1d2c2106f298e87ae3943f79247a0bddac8649b9c132c40b4f1162c704d010bd"
+        "4fca1060e8a6df5233283f3ed5c2603533477b40d2882ef505162693ccd3e947"
     ),
 ];
 
@@ -216,40 +220,63 @@ pub const NEGATIVE_EXPECTATIONS: &[NegativeExpectation] = &[
     },
 ];
 
-pub const RAW_CODEC_EXPECTATIONS: &[RawCodecExpectation] = &[
-    RawCodecExpectation {
+// Field values are pinned by the paired textprotos and independently inspected
+// big-endian fixture bytes. Prefix positions, lengths and digests are unchanged
+// from the Phase 2 raw ledger; complete prefixes are now asserted as typed Opus.
+pub const OPUS_CODEC_EXPECTATIONS: &[OpusCodecExpectation] = &[
+    OpusCodecExpectation {
         path: "test_000059.iamf",
         fourcc: *b"Opus",
         offset: 20,
         len: 11,
         sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+        codec_config_id: 200,
+        num_samples_per_frame: 960,
+        audio_roll_distance: -4,
+        pre_skip: 312,
     },
-    RawCodecExpectation {
+    OpusCodecExpectation {
         path: "test_000124.iamf",
         fourcc: *b"Opus",
         offset: 20,
         len: 11,
         sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+        codec_config_id: 200,
+        num_samples_per_frame: 960,
+        audio_roll_distance: -4,
+        pre_skip: 312,
     },
-    RawCodecExpectation {
+    OpusCodecExpectation {
         path: "iamf-tools/noise_1024samp_5p1_opus.iamf",
         fourcc: *b"Opus",
         offset: 19,
         len: 11,
         sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+        codec_config_id: 0,
+        num_samples_per_frame: 960,
+        audio_roll_distance: -4,
+        pre_skip: 312,
     },
-    RawCodecExpectation {
+    OpusCodecExpectation {
         path: "iamf-tools/noise_3s_stereo_opus.iamf",
         fourcc: *b"Opus",
         offset: 18,
         len: 11,
         sha256: "62111fe8161f0727d8dac66e5e5e8a61751fda1b1d1df24211e6d9e91791f758",
+        codec_config_id: 0,
+        num_samples_per_frame: 120,
+        audio_roll_distance: -32,
+        pre_skip: 120,
     },
-    RawCodecExpectation {
+    OpusCodecExpectation {
         path: "iamf-tools/tones_100ms_3OA_stereo_opus.iamf",
         fourcc: *b"Opus",
         offset: 19,
         len: 11,
         sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+        codec_config_id: 0,
+        num_samples_per_frame: 960,
+        audio_roll_distance: -4,
+        pre_skip: 312,
     },
 ];
