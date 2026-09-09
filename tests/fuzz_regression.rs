@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::panic)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
