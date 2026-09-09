@@ -3,6 +3,7 @@
 #[path = "support/sequence_cases.rs"]
 mod sequence_cases;
 
+use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::obu::{
@@ -15,6 +16,7 @@ use iamf::sequence::{
 use proptest::prelude::*;
 use sequence_cases::{
     canonical_case_strategy, canonical_parsed_strategy, flac_codec_config_strategy,
+    opus_codec_config_strategy,
 };
 
 proptest! {
@@ -62,6 +64,43 @@ proptest! {
         write_obu_with(&mut rewritten, &parsed, write_codec_config).expect("parsed FLAC writes");
         prop_assert_eq!(rewritten.finish().expect("rewritten OBU is aligned"), bytes);
     }
+
+    #[test]
+    fn typed_opus_codec_configs_round_trip(codec in opus_codec_config_strategy()) {
+        let obu = Obu::new(ObuHeader::new(ObuType::CodecConfig), codec.clone());
+        let mut writer = BitWriter::new();
+        write_obu_with(&mut writer, &obu, write_codec_config).expect("valid Opus writes");
+        let bytes = writer.finish().expect("Opus OBU is byte-aligned");
+
+        let mut reader = BitCursor::new(&bytes);
+        let parsed = read_obu_with(&mut reader, read_codec_config).expect("own Opus parses");
+        prop_assert_eq!(&parsed.payload, &codec);
+
+        let mut rewritten = BitWriter::new();
+        write_obu_with(&mut rewritten, &parsed, write_codec_config).expect("parsed Opus writes");
+        prop_assert_eq!(rewritten.finish().expect("rewritten OBU is aligned"), bytes);
+    }
+}
+
+#[test]
+fn foreign_typed_opus_config_round_trips_without_normalization() {
+    let foreign = hex!(
+        "00 14 02 4f 70 75 73 c0 07 00 00
+         00 01 00 00 00 00 ac 44 00 01 01"
+    );
+    let mut reader = BitCursor::new(&foreign);
+    let parsed = read_obu_with(&mut reader, read_codec_config)
+        .expect("complete foreign Opus syntax is preserved as typed data");
+
+    assert!(parsed.payload.opus_config().is_some());
+    assert!(!parsed.payload.validate().is_empty());
+
+    let mut writer = BitWriter::new();
+    write_obu_with(&mut writer, &parsed, write_codec_config).expect("foreign Opus writes");
+    assert_eq!(
+        writer.finish().expect("foreign Opus OBU is aligned"),
+        foreign
+    );
 }
 
 #[test]

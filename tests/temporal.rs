@@ -20,9 +20,9 @@ use iamf::obu::{
     ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock, ReconGainElement,
     ReconGainInfoParameterData, TemporalDelimiter, Trimming, TypeSpecific, obu_type_for,
     plan_frames, read_audio_frame, read_obu_with, read_obu_with_header, read_parameter_block,
-    read_temporal_delimiter, substream_id_for, validate_temporal_unit, write_audio_frame,
-    write_obu, write_obu_with, write_obu_with_header, write_parameter_block,
-    write_temporal_delimiter,
+    read_temporal_delimiter, required_opus_audio_roll_distance, substream_id_for,
+    validate_temporal_unit, write_audio_frame, write_obu, write_obu_with, write_obu_with_header,
+    write_parameter_block, write_temporal_delimiter,
 };
 
 /// The vendored reference file the whole suite is measured against.
@@ -101,6 +101,20 @@ fn the_trimmed_final_audio_frame_reproduces_offset_0x7d32() {
         bytes,
         slice_of_reference(TRIMMED_FRAME, 517),
         "the whole OBU reproduces offsets 0x7D32..0x7F37 of test_000003.iamf"
+    );
+}
+
+#[test]
+fn unequal_opus_end_and_start_trim_are_written_end_before_start() {
+    let obu = AudioFrame::new(0, vec![0xaa]).into_obu(Some(Trimming {
+        at_end: 17,
+        at_start: 312,
+    }));
+
+    assert_eq!(
+        frame_bytes(&obu),
+        hex!("32 04 11 b8 02 aa"),
+        "END trim 17 precedes START trim 312, whose ULEB128 is b8 02"
     );
 }
 
@@ -233,6 +247,34 @@ fn a_substream_id_the_element_does_not_declare_is_a_finding_not_a_parse_failure(
 // ---------------------------------------------------------------------------
 // The frame planner (TIME-03)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn opus_roll_distance_matches_every_pinned_ceiling_boundary() {
+    for (num_samples_per_frame, expected) in [
+        (1, -3840),
+        (120, -32),
+        (960, -4),
+        (3839, -2),
+        (3840, -1),
+        (3841, -1),
+        (96_000, -1),
+    ] {
+        assert_eq!(
+            required_opus_audio_roll_distance(num_samples_per_frame),
+            Ok(expected),
+            "roll is -ceil(3840 / {num_samples_per_frame})"
+        );
+    }
+}
+
+#[test]
+fn opus_roll_distance_rejects_zero_before_dividing() {
+    let error = required_opus_audio_roll_distance(0)
+        .expect_err("zero samples per frame cannot be a divisor");
+
+    assert_eq!(error.kind(), &ErrorKind::ZeroSamplesPerFrame);
+    assert_eq!(error.at(), Location::Field("num_samples_per_frame"));
+}
 
 #[test]
 fn a_non_multiple_sample_count_produces_exactly_one_trimmed_frame_at_the_end() {

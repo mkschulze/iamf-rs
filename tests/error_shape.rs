@@ -14,6 +14,7 @@
 //! a coordinated breaking change across two repositories, not a refactor —
 //! which is why the shape is asserted here rather than left to review.
 
+use iamf::obu::CodecConfig;
 use iamf::{Error, ErrorKind, Finding, Location};
 
 // ---------------------------------------------------------------------------
@@ -162,6 +163,16 @@ fn codec_capability_errors_are_exact_compact_kinds() {
     assert!(size_of::<Error>() <= 32);
 }
 
+#[test]
+fn fresh_opus_rejects_44_1_khz_with_the_published_typed_error() {
+    let error = CodecConfig::opus(2, 960, 44_100, 312)
+        .expect_err("the IAMF Opus output clock is fixed at 48 kHz");
+
+    assert_eq!(error.kind(), &ErrorKind::SampleRateNotSupportedByCodec);
+    assert_eq!(error.at(), Location::Field("sample_rate"));
+    assert!(size_of::<Error>() <= 32);
+}
+
 // ---------------------------------------------------------------------------
 // Finding — D-09's "all findings, each naming its field path".
 // ---------------------------------------------------------------------------
@@ -194,7 +205,8 @@ fn an_empty_finding_list_is_the_nothing_wrong_answer() {
 #[test]
 fn spec_version_is_the_pinned_iamf_version() {
     assert_eq!(
-        iamf::SPEC_VERSION, "1.1.0",
+        iamf::SPEC_VERSION,
+        "1.1.0",
         "libiamf's pinned release implements IAMF v1.1.0, and libiamf \
          accepting our output is the Core Value. The constant is never an \
          Option and never empty."

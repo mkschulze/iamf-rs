@@ -24,10 +24,10 @@ use iamf::obu::{
     AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, AudioElementType,
     ChannelAudioLayerConfig, CodecConfig, DecoderConfig, FlacDecoderConfig, IaSequenceHeader,
     Layout, LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader,
-    ObuType, OutputGain, SampleFormatFlags, ScalableChannelLayoutConfig, read_audio_element,
-    read_codec_config, read_ia_sequence_header, read_mix_presentation, read_obu_with,
-    write_audio_element, write_codec_config, write_ia_sequence_header, write_mix_presentation,
-    write_obu_with,
+    ObuType, OpusDecoderConfig, OutputGain, SampleFormatFlags, ScalableChannelLayoutConfig,
+    read_audio_element, read_codec_config, read_ia_sequence_header, read_mix_presentation,
+    read_obu_with, write_audio_element, write_codec_config, write_ia_sequence_header,
+    write_mix_presentation, write_obu_with,
 };
 
 /// The published `test_000003` configuration, shared with `tests/sequence.rs`.
@@ -510,6 +510,162 @@ fn dump_exposes_every_flac_streaminfo_field() {
         "bits_per_sample",
         "total_samples_in_stream",
         "md5_signature",
+    ] {
+        assert!(dump.contains(field), "dump omitted `{field}`:\n{dump}");
+    }
+}
+
+#[test]
+fn canonical_opus_config_is_exactly_the_eleven_iamf_bytes() {
+    let expected = hex!(
+        "00 14 02 4f 70 75 73 c0 07 ff fc
+         01 02 01 38 00 00 bb 80 00 00 00"
+    );
+    let payload = CodecConfig::opus(2, 960, 48_000, 312).expect("canonical Opus config");
+    let obu = Obu::new(ObuHeader::new(ObuType::CodecConfig), payload);
+
+    let bytes = obu_bytes(&obu, write_codec_config);
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        bytes.get(11..),
+        Some(hex!("01 02 01 38 00 00 bb 80 00 00 00").as_slice())
+    );
+    assert_eq!(bytes.get(13..15), Some(hex!("01 38").as_slice()));
+    assert_eq!(bytes.get(15..19), Some(hex!("00 00 bb 80").as_slice()));
+    assert_eq!(bytes.get(19..21), Some(hex!("00 00").as_slice()));
+    assert!(
+        !bytes
+            .windows(b"OpusHead".len())
+            .any(|window| window == b"OpusHead"),
+        "IAMF carries only the 11 field bytes, never the Ogg ASCII marker"
+    );
+
+    let mut reader = BitCursor::new(&expected);
+    let parsed = read_obu_with(&mut reader, read_codec_config).expect("the hand vector parses");
+    let opus: &OpusDecoderConfig = parsed
+        .payload
+        .opus_config()
+        .expect("an eleven-byte Opus config is typed");
+    assert_eq!(parsed.payload.codec_config_id, 2);
+    assert_eq!(parsed.payload.num_samples_per_frame, 960);
+    assert_eq!(parsed.payload.audio_roll_distance, -4);
+    assert_eq!(opus.version, 1);
+    assert_eq!(opus.output_channel_count, 2);
+    assert_eq!(opus.pre_skip, 312);
+    assert_eq!(opus.input_sample_rate, 48_000);
+    assert_eq!(opus.output_gain, 0);
+    assert_eq!(opus.mapping_family, 0);
+    assert!(parsed.payload.lpcm_config().is_none());
+    assert!(parsed.payload.flac_config().is_none());
+    assert!(parsed.payload.trailing.is_empty());
+    assert!(parsed.trailing.is_empty());
+}
+
+#[test]
+fn a_ten_byte_opus_decoder_config_stays_raw_and_byte_exact() {
+    let bytes = hex!(
+        "00 13 02 4f 70 75 73 c0 07 ff fc
+         01 02 01 38 00 00 bb 80 00 00"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)
+        .expect("short known syntax remains reproducible raw data");
+
+    match &parsed.payload.decoder_config {
+        DecoderConfig::Raw {
+            codec_id,
+            bytes: raw,
+        } => {
+            assert_eq!(codec_id, b"Opus");
+            assert_eq!(raw, &hex!("01 02 01 38 00 00 bb 80 00 00"));
+        }
+        other => panic!("10 bytes must not become typed Opus: {other:?}"),
+    }
+    assert!(parsed.payload.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+}
+
+#[test]
+fn complete_opus_prefix_claims_only_eleven_bytes_and_preserves_trailing() {
+    let bytes = hex!(
+        "00 16 02 4f 70 75 73 c0 07 ff fc
+         01 02 01 38 00 00 bb 80 00 00 00 aa bb"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed =
+        read_obu_with(&mut reader, read_codec_config).expect("complete Opus prefix parses");
+
+    assert!(parsed.payload.opus_config().is_some());
+    assert_eq!(parsed.payload.trailing, [0xaa, 0xbb]);
+    assert!(parsed.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+}
+
+#[test]
+fn parsed_opus_contradictions_are_preserved_and_all_diagnosed() {
+    let bytes = hex!(
+        "00 14 02 4f 70 75 73 c0 07 00 00
+         00 01 00 00 00 00 ac 44 00 01 01"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)
+        .expect("foreign Opus contradictions are data, not parse errors");
+    let opus = parsed
+        .payload
+        .opus_config()
+        .expect("the complete prefix is typed");
+
+    assert_eq!(opus.version, 0);
+    assert_eq!(opus.output_channel_count, 1);
+    assert_eq!(opus.pre_skip, 0);
+    assert_eq!(opus.input_sample_rate, 44_100);
+    assert_eq!(opus.output_gain, 1);
+    assert_eq!(opus.mapping_family, 1);
+    assert_eq!(parsed.payload.audio_roll_distance, 0);
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+
+    let findings = parsed.payload.validate();
+    let joined = findings
+        .iter()
+        .map(|finding| finding.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for field in [
+        "version",
+        "output_channel_count",
+        "pre_skip",
+        "input_sample_rate",
+        "output_gain",
+        "mapping_family",
+        "audio_roll_distance",
+    ] {
+        assert!(
+            joined.contains(field),
+            "no finding named `{field}`:\n{joined}"
+        );
+    }
+    assert_eq!(
+        findings.len(),
+        7,
+        "every independent contradiction is reported"
+    );
+}
+
+#[test]
+fn dump_exposes_every_opus_decoder_config_field() {
+    let bytes = hex!(
+        "00 14 02 4f 70 75 73 c0 07 ff fc
+         01 02 01 38 00 00 bb 80 00 00 00"
+    );
+    let dump = dump_annotated(&bytes).expect("Opus vector dumps");
+
+    for field in [
+        "version",
+        "output_channel_count",
+        "pre_skip",
+        "input_sample_rate",
+        "output_gain",
+        "mapping_family",
     ] {
         assert!(dump.contains(field), "dump omitted `{field}`:\n{dump}");
     }

@@ -80,6 +80,12 @@ pub fn flac_codec_config_strategy() -> impl Strategy<Value = CodecConfig> {
         })
 }
 
+pub fn opus_codec_config_strategy() -> impl Strategy<Value = CodecConfig> {
+    (any::<u32>(), 1_u32..=96_000, 1_u16..=u16::MAX).prop_map(|(id, frame_size, pre_skip)| {
+        CodecConfig::opus(id, frame_size, 48_000, pre_skip).expect("strategy generates valid Opus")
+    })
+}
+
 pub fn minimal_descriptors() -> DescriptorSet {
     DescriptorSet::new(IaSequenceHeader::new(0, 0))
 }
