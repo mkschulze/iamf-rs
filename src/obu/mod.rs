@@ -51,7 +51,8 @@ pub use audio_element::{
 };
 pub use boundaries::find_obu_boundaries;
 pub use param_definition::{
-    DurationFields, ParamDefinition, read_param_definition, write_param_definition,
+    DurationFields, ParamDefinition, ParamDefinitionRegistry, ParameterDataContext,
+    RegisteredParamDefinition, read_param_definition, write_param_definition,
 };
 pub use codec_config::{
     CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig, DecoderConfig,

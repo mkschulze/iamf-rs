@@ -138,6 +138,29 @@ impl DescriptorSet {
             "mix_presentation_id",
         ));
 
+        if let Ok(registry) = crate::obu::ParamDefinitionRegistry::from_descriptors(self) {
+            for (index, entry) in registry.entries().iter().enumerate() {
+                for (other_index, other) in registry
+                    .entries()
+                    .iter()
+                    .enumerate()
+                    .skip(index.saturating_add(1))
+                {
+                    if entry.definition.parameter_id == other.definition.parameter_id {
+                        findings.push(Finding {
+                            at: Location::Field("parameter_id"),
+                            message: format!(
+                                "parameter_id {} appears at nested definition indices {index} and \
+                                 {other_index}; lookup binds to index {index}, the first in \
+                                 bitstream order",
+                                entry.definition.parameter_id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
         for element in &self.audio_elements {
             if self.codec_config_by_id(element.codec_config_id).is_none() {
                 findings.push(Finding {

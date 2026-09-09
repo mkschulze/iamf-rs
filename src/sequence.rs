@@ -45,9 +45,9 @@ use crate::bits::BitWriter;
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::{DescriptorSet, write_descriptors};
 use crate::obu::{
-    AudioFrame, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionType, ParameterBlock,
-    TemporalDelimiter, write_audio_frame, write_obu_with_header, write_parameter_block,
-    write_temporal_delimiter,
+    AudioFrame, Obu, ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock,
+    RegisteredParamDefinition, TemporalDelimiter, write_audio_frame, write_obu_with_header,
+    write_parameter_block, write_temporal_delimiter,
 };
 
 /// One temporal unit: everything between one presentation instant and the
@@ -131,7 +131,7 @@ pub struct SequenceWriter<W: Write> {
     /// Every `ParamDefinition` the descriptors published, so a Parameter Block
     /// can be written against the definition that governs it without the
     /// caller supplying a second copy.
-    definitions: Vec<GoverningDefinition>,
+    definitions: ParamDefinitionRegistry,
     /// Bytes handed to the sink so far — the position a sink error reports at.
     bytes_written: u64,
 }
@@ -144,7 +144,7 @@ impl<W: Write> SequenceWriter<W> {
             sink,
             state: State::Fresh,
             scratch: BitWriter::new(),
-            definitions: Vec::new(),
+            definitions: ParamDefinitionRegistry::new(),
             bytes_written: 0,
         }
     }
@@ -178,7 +178,7 @@ impl<W: Write> SequenceWriter<W> {
             State::Poisoned => return Err(self.poisoned_error()),
         }
 
-        self.definitions = collect_param_definitions(descriptors);
+        self.definitions = ParamDefinitionRegistry::from_descriptors(descriptors)?;
 
         self.scratch.clear();
         write_descriptors(&mut self.scratch, descriptors)?;
@@ -229,7 +229,12 @@ impl<W: Write> SequenceWriter<W> {
             // this path is not taken at all for LPCM.
             let governing = self.definition_for(block.payload.parameter_id)?.clone();
             self.emit_preflighted_obu(block, |w, _header, payload| {
-                write_parameter_block(w, &governing.definition, governing.kind, payload)
+                write_parameter_block(
+                    w,
+                    &governing.definition,
+                    governing.context.param_definition_type(),
+                    payload,
+                )
             })?;
         }
 
@@ -290,7 +295,12 @@ impl<W: Write> SequenceWriter<W> {
         for block in &unit.parameter_blocks {
             let governing = self.definition_for(block.payload.parameter_id)?.clone();
             self.serialize_obu(block, |w, _header, payload| {
-                write_parameter_block(w, &governing.definition, governing.kind, payload)
+                write_parameter_block(
+                    w,
+                    &governing.definition,
+                    governing.context.param_definition_type(),
+                    payload,
+                )
             })?;
         }
         for frame in &unit.audio_frames {
@@ -300,10 +310,9 @@ impl<W: Write> SequenceWriter<W> {
     }
 
     /// The `ParamDefinition` governing `parameter_id`, or a typed error.
-    fn definition_for(&self, parameter_id: u32) -> Result<&GoverningDefinition> {
+    fn definition_for(&self, parameter_id: u32) -> Result<&RegisteredParamDefinition> {
         self.definitions
-            .iter()
-            .find(|governing| governing.definition.parameter_id == parameter_id)
+            .get(parameter_id)
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::NoGoverningParamDefinition,
@@ -377,58 +386,6 @@ impl<W: Write> SequenceWriter<W> {
         }
         Ok(())
     }
-}
-
-/// Every `ParamDefinition` the descriptor set publishes, in descriptor order.
-///
-/// A `Vec`, scanned linearly, for the reason `crate::model::by_id` is: the wire
-/// can carry two definitions with one `parameter_id`, and a map would make that
-/// a silent overwrite. The first published wins, which is what a decoder
-/// reading forward binds to.
-#[derive(Debug, Clone)]
-struct GoverningDefinition {
-    definition: ParamDefinition,
-    kind: ParamDefinitionType,
-}
-
-fn collect_param_definitions(descriptors: &DescriptorSet) -> Vec<GoverningDefinition> {
-    let mut definitions = Vec::new();
-    for element in &descriptors.audio_elements {
-        for param in &element.params {
-            match param {
-                crate::obu::AudioElementParam::Demixing { definition, .. } => {
-                    definitions.push(GoverningDefinition {
-                        definition: definition.clone(),
-                        kind: ParamDefinitionType::Demixing,
-                    });
-                }
-                crate::obu::AudioElementParam::ReconGain { definition } => {
-                    definitions.push(GoverningDefinition {
-                        definition: definition.clone(),
-                        kind: ParamDefinitionType::ReconGain,
-                    });
-                }
-                // An extension carries its bytes verbatim and no modelled
-                // definition, so there is nothing to publish.
-                crate::obu::AudioElementParam::Extension { .. } => {}
-            }
-        }
-    }
-    for presentation in &descriptors.mix_presentations {
-        for sub_mix in &presentation.sub_mixes {
-            for element in &sub_mix.elements {
-                definitions.push(GoverningDefinition {
-                    definition: element.element_mix_gain.definition.clone(),
-                    kind: ParamDefinitionType::MixGain,
-                });
-            }
-            definitions.push(GoverningDefinition {
-                definition: sub_mix.output_mix_gain.definition.clone(),
-                kind: ParamDefinitionType::MixGain,
-            });
-        }
-    }
-    definitions
 }
 
 // ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc ObuSequencerBase::PickAndPlace

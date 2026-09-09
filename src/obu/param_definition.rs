@@ -17,6 +17,176 @@
 
 use crate::bits::{BitCursor, BitWriter};
 use crate::error::{Error, ErrorKind, Location, Result};
+use crate::model::DescriptorSet;
+
+use super::audio_element::{AudioElement, AudioElementParam, AudioElementType};
+use super::mix_presentation::MixPresentation;
+
+/// Descriptor-resident information needed to decode one parameter-data
+/// subblock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParameterDataContext {
+    /// Mix Gain parameter data.
+    MixGain,
+    /// Demixing parameter data.
+    Demixing,
+    /// Recon Gain data, including the Audio Element layer gates that decide
+    /// which layers occupy bytes in a Parameter Block.
+    ReconGain {
+        /// One entry per channel layer, in wire order.
+        recon_gain_is_present: Vec<bool>,
+    },
+    /// Length-bounded extension data for an unknown definition type.
+    Reserved(u32),
+}
+
+impl ParameterDataContext {
+    /// The definition type represented by this context.
+    #[must_use]
+    pub const fn param_definition_type(&self) -> super::parameter_block::ParamDefinitionType {
+        match self {
+            Self::MixGain => super::parameter_block::ParamDefinitionType::MixGain,
+            Self::Demixing => super::parameter_block::ParamDefinitionType::Demixing,
+            Self::ReconGain { .. } => super::parameter_block::ParamDefinitionType::ReconGain,
+            Self::Reserved(value) => super::parameter_block::ParamDefinitionType::Reserved(*value),
+        }
+    }
+}
+
+/// One definition and the context supplied by its descriptor owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredParamDefinition {
+    /// The shared parameter-definition fields.
+    pub definition: ParamDefinition,
+    /// The data syntax and any owner-specific gates.
+    pub context: ParameterDataContext,
+}
+
+/// Every parameter definition in descriptor wire order.
+///
+/// Duplicate IDs are retained. Lookup deliberately scans from the front so a
+/// duplicate binds to the first wire definition without turning this lookup
+/// structure into an output-order source.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ParamDefinitionRegistry {
+    entries: Vec<RegisteredParamDefinition>,
+}
+
+impl ParamDefinitionRegistry {
+    /// An empty registry.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Append one definition in descriptor wire order.
+    pub fn register(&mut self, definition: ParamDefinition, context: ParameterDataContext) {
+        self.entries.push(RegisteredParamDefinition {
+            definition,
+            context,
+        });
+    }
+
+    /// Observe every definition owned by an Audio Element.
+    ///
+    /// Unknown definition types begin with the same shared prefix. Their
+    /// explicit byte length makes that prefix safe to decode here while
+    /// leaving the extension bytes themselves untouched in the model.
+    pub fn observe_audio_element(&mut self, element: &AudioElement) -> Result<()> {
+        let recon_gain_is_present = match &element.audio_element_type {
+            AudioElementType::ChannelBased(config) => config
+                .scalable_channel_layout
+                .layers
+                .iter()
+                .map(|layer| layer.recon_gain_is_present())
+                .collect(),
+            AudioElementType::SceneBased(_) | AudioElementType::Reserved { .. } => Vec::new(),
+        };
+
+        for param in &element.params {
+            match param {
+                AudioElementParam::Demixing { definition, .. } => {
+                    self.register(definition.clone(), ParameterDataContext::Demixing);
+                }
+                AudioElementParam::ReconGain { definition } => self.register(
+                    definition.clone(),
+                    ParameterDataContext::ReconGain {
+                        recon_gain_is_present: recon_gain_is_present.clone(),
+                    },
+                ),
+                AudioElementParam::Extension {
+                    param_definition_type,
+                    bytes,
+                } => {
+                    let mut reader = BitCursor::new(bytes);
+                    let definition = read_param_definition(&mut reader)?;
+                    self.register(
+                        definition,
+                        ParameterDataContext::Reserved(*param_definition_type),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Observe all element and output Mix Gain definitions in wire order.
+    pub fn observe_mix_presentation(&mut self, presentation: &MixPresentation) {
+        for sub_mix in &presentation.sub_mixes {
+            for element in &sub_mix.elements {
+                self.register(
+                    element.element_mix_gain.definition.clone(),
+                    ParameterDataContext::MixGain,
+                );
+            }
+            self.register(
+                sub_mix.output_mix_gain.definition.clone(),
+                ParameterDataContext::MixGain,
+            );
+        }
+    }
+
+    /// Build a registry in the same Audio Element then Mix Presentation order
+    /// used by the descriptor bitstream.
+    pub fn from_descriptors(descriptors: &DescriptorSet) -> Result<Self> {
+        let mut registry = Self::new();
+        for element in &descriptors.audio_elements {
+            registry.observe_audio_element(element)?;
+        }
+        for presentation in &descriptors.mix_presentations {
+            registry.observe_mix_presentation(presentation);
+        }
+        Ok(registry)
+    }
+
+    /// The first definition carrying `parameter_id`.
+    #[must_use]
+    pub fn get(&self, parameter_id: u32) -> Option<&RegisteredParamDefinition> {
+        self.entries
+            .iter()
+            .find(|entry| entry.definition.parameter_id == parameter_id)
+    }
+
+    /// All definitions, including duplicates, in descriptor wire order.
+    #[must_use]
+    pub fn entries(&self) -> &[RegisteredParamDefinition] {
+        &self.entries
+    }
+
+    /// Number of definitions, including duplicates.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no definition has been registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 
 /// The `duration` / `constant_subblock_duration` / subblock block, present on
 /// the wire **only** when `param_definition_mode == 0`.
