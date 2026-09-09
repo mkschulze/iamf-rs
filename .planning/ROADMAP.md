@@ -77,14 +77,17 @@ strictly ordered verification-gap closure waves):
 
 **Research**: No — the parser mirrors the writer one-for-one and the fuzzing setup is fully specified in STACK.md §4 and ARCHITECTURE.md. Mechanical once Phase 1 is verified; skip `--research-phase`
 **Note**: "Phase 1 encoder, Phase 2 parser" does not mean no reader code before Phase 2 — land the reader alongside the writer per OBU type wherever it is cheap in Phase 1. Phase 2 is about the *sequence*-level parser, the registry, the round-trip property and the fuzzer
-**Plans**: 4 plans
+**Plans**: 7 plans
 
 Plans:
 
-- [ ] 02-01: Sequence-level parser and `ParamDefinitionRegistry` as an explicit argument
-- [ ] 02-02: Round-trip properties both directions, plus verbatim preservation of unknown OBU types and unknown parameter data
-- [ ] 02-03: Parse the committed `iamf-tools` fixtures and assert the descriptors are understood
-- [ ] 02-04: Independent `fuzz/` workspace, both targets, committed seeded corpus, and the stable-toolchain cross-target regression test
+- [ ] 02-01: Context-rich `ParamDefinitionRegistry` and complete Phase 2 Parameter Data parsing
+- [ ] 02-02: Preserve and migrate every reserved field currently discarded by known readers
+- [ ] 02-03: Transactional sequence parser, flat-order validation, and canonical temporal grouping
+- [ ] 02-04: Round-trip properties in both directions with exact unknown-data position fidelity
+- [ ] 02-05: Independently derive and assert field-level expectations for the committed reference corpus
+- [ ] 02-06: Independent `fuzz/` workspace, shared bounded model generator, and exactly two fuzz targets
+- [ ] 02-07: Committed seeded corpora, four-target stable replay, and bounded nightly fuzzing
 
 ### Phase 3: FLAC and Opus Framing
 
