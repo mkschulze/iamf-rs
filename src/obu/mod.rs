@@ -57,7 +57,7 @@ pub use param_definition::{
 };
 pub use codec_config::{
     CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig, DecoderConfig,
-    LpcmDecoderConfig, MAX_SAMPLES_PER_FRAME, SampleFormatFlags, read_codec_config,
+    FlacDecoderConfig, LpcmDecoderConfig, MAX_SAMPLES_PER_FRAME, SampleFormatFlags, read_codec_config,
     required_audio_roll_distance, write_codec_config,
 };
 pub use header::{ObuHeader, ObuType, Trimming, TypeSpecific, read_obu_header, write_obu};

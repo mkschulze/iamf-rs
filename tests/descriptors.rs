@@ -22,9 +22,9 @@ use iamf::model::by_id;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
     AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, AudioElementType,
-    ChannelAudioLayerConfig, CodecConfig, DecoderConfig, IaSequenceHeader, Layout,
-    LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader, ObuType,
-    OutputGain, SampleFormatFlags, ScalableChannelLayoutConfig, read_audio_element,
+    ChannelAudioLayerConfig, CodecConfig, DecoderConfig, FlacDecoderConfig, IaSequenceHeader,
+    Layout, LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader,
+    ObuType, OutputGain, SampleFormatFlags, ScalableChannelLayoutConfig, read_audio_element,
     read_codec_config, read_ia_sequence_header, read_mix_presentation, read_obu_with,
     write_audio_element, write_codec_config, write_ia_sequence_header, write_mix_presentation,
     write_obu_with,
@@ -306,6 +306,203 @@ fn codec_config_validate_reports_all_six_out_of_range_conditions() {
         messages.len() >= 6,
         "validate() returns ALL findings in one run (D-09): {messages:?}"
     );
+}
+
+#[test]
+fn canonical_flac_streaminfo_matches_the_hand_vector_and_exposes_every_field() {
+    let expected = hex!(
+        "00 2f 01 66 4c 61 43 80 01 00 00
+         80 00 00 22 00 80 00 80 00 00 00 00 00 00
+         0b b8 02 f0 00 00 00 00
+         00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    );
+    let payload = CodecConfig::flac(1, 128, 48_000, 16).expect("canonical FLAC config");
+    let obu = Obu::new(ObuHeader::new(ObuType::CodecConfig), payload);
+
+    assert_eq!(obu_bytes(&obu, write_codec_config), expected);
+
+    let mut reader = BitCursor::new(&expected);
+    let parsed = read_obu_with(&mut reader, read_codec_config).expect("the hand vector parses");
+    assert_eq!(parsed.payload.codec_config_id, 1);
+    assert_eq!(parsed.payload.num_samples_per_frame, 128);
+    assert_eq!(parsed.payload.audio_roll_distance, 0);
+    assert_eq!(
+        parsed.payload.flac_config(),
+        Some(&FlacDecoderConfig {
+            last_metadata_block: true,
+            metadata_block_type: 0,
+            metadata_data_block_length: 34,
+            minimum_block_size: 128,
+            maximum_block_size: 128,
+            minimum_frame_size: 0,
+            maximum_frame_size: 0,
+            sample_rate: 48_000,
+            number_of_channels: 1,
+            bits_per_sample: 15,
+            total_samples_in_stream: 0,
+            md5_signature: [0; 16],
+        })
+    );
+    assert!(parsed.payload.lpcm_config().is_none());
+    assert!(parsed.payload.trailing.is_empty());
+    assert!(parsed.trailing.is_empty());
+}
+
+#[test]
+fn a_thirty_seven_byte_flac_decoder_config_stays_raw_and_byte_exact() {
+    let bytes = hex!(
+        "00 2e 01 66 4c 61 43 80 01 00 00
+         80 00 00 22 00 80 00 80 00 00 00 00 00 00
+         0b b8 02 f0 00 00 00 00
+         00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)
+        .expect("short known syntax remains reproducible raw data");
+
+    match &parsed.payload.decoder_config {
+        DecoderConfig::Raw {
+            codec_id,
+            bytes: raw,
+        } => {
+            assert_eq!(codec_id, b"fLaC");
+            assert_eq!(raw.len(), 37);
+        }
+        other => panic!("37 bytes must not become typed FLAC: {other:?}"),
+    }
+    assert!(parsed.payload.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+}
+
+#[test]
+fn complete_flac_prefix_claims_only_thirty_eight_bytes_and_preserves_trailing() {
+    let bytes = hex!(
+        "00 31 01 66 4c 61 43 80 01 00 00
+         80 00 00 22 00 80 00 80 00 00 00 00 00 00
+         0b b8 02 f0 00 00 00 00
+         00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+         aa bb"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed =
+        read_obu_with(&mut reader, read_codec_config).expect("complete FLAC prefix parses");
+
+    assert!(parsed.payload.flac_config().is_some());
+    assert_eq!(parsed.payload.trailing, [0xaa, 0xbb]);
+    assert!(parsed.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+}
+
+#[test]
+fn parsed_flac_contradictions_are_preserved_and_all_diagnosed() {
+    let bytes = hex!(
+        "00 2f 01 66 4c 61 43 80 01 00 01
+         01 00 00 21 00 7f 00 81 00 00 01 00 00 02
+         00 00 00 20 00 00 00 01
+         01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)
+        .expect("foreign FLAC contradictions are data, not parse errors");
+    let flac = parsed
+        .payload
+        .flac_config()
+        .expect("the complete prefix is typed");
+
+    assert!(!flac.last_metadata_block);
+    assert_eq!(flac.metadata_block_type, 1);
+    assert_eq!(flac.metadata_data_block_length, 33);
+    assert_eq!(flac.minimum_block_size, 127);
+    assert_eq!(flac.maximum_block_size, 129);
+    assert_eq!(flac.minimum_frame_size, 1);
+    assert_eq!(flac.maximum_frame_size, 2);
+    assert_eq!(flac.sample_rate, 0);
+    assert_eq!(flac.number_of_channels, 0);
+    assert_eq!(flac.bits_per_sample, 2);
+    assert_eq!(flac.total_samples_in_stream, 1);
+    assert_eq!(flac.md5_signature.first(), Some(&1));
+    assert_eq!(parsed.payload.audio_roll_distance, 1);
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+
+    let mut contradictory = parsed.payload.clone();
+    if let DecoderConfig::Flac(flac) = &mut contradictory.decoder_config {
+        flac.total_samples_in_stream = 0x10_0000_0000;
+    }
+    let findings = contradictory.validate();
+    let joined = findings
+        .iter()
+        .map(|finding| finding.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for field in [
+        "last_metadata_block",
+        "metadata_block_type",
+        "metadata_data_block_length",
+        "minimum_block_size",
+        "maximum_block_size",
+        "minimum_frame_size",
+        "maximum_frame_size",
+        "sample_rate",
+        "number_of_channels",
+        "bits_per_sample",
+        "total_samples_in_stream",
+        "md5_signature",
+        "audio_roll_distance",
+    ] {
+        assert!(
+            joined.contains(field),
+            "no finding named `{field}`:\n{joined}"
+        );
+    }
+}
+
+#[test]
+fn flac_constructor_rejects_exact_rate_frame_and_depth_boundaries() {
+    for rate in [0, 655_351] {
+        let error = CodecConfig::flac(1, 128, rate, 16).expect_err("rate is outside FLAC's range");
+        assert_eq!(error.kind(), &ErrorKind::SampleRateNotSupportedByCodec);
+        assert_eq!(error.at(), Location::Field("sample_rate"));
+    }
+    for frame_size in [0, u32::from(u16::MAX).saturating_add(1)] {
+        let error = CodecConfig::flac(1, frame_size, 48_000, 16)
+            .expect_err("frame size must fit a non-zero u16");
+        assert_eq!(error.kind(), &ErrorKind::SamplesPerFrameNotSupportedByCodec);
+        assert_eq!(error.at(), Location::Field("num_samples_per_frame"));
+    }
+    for bits in [3, 33] {
+        let error = CodecConfig::flac(1, 128, 48_000, bits)
+            .expect_err("actual FLAC depth is restricted to 4..=32");
+        assert_eq!(error.kind(), &ErrorKind::BitsPerSampleNotSupportedByCodec);
+        assert_eq!(error.at(), Location::Field("bits_per_sample"));
+    }
+}
+
+#[test]
+fn dump_exposes_every_flac_streaminfo_field() {
+    let bytes = hex!(
+        "00 2f 01 66 4c 61 43 80 01 00 00
+         80 00 00 22 00 80 00 80 00 00 00 00 00 00
+         0b b8 02 f0 00 00 00 00
+         00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    );
+    let dump = dump_annotated(&bytes).expect("FLAC vector dumps");
+
+    for field in [
+        "last_metadata_block",
+        "metadata_block_type",
+        "metadata_data_block_length",
+        "minimum_block_size",
+        "maximum_block_size",
+        "minimum_frame_size",
+        "maximum_frame_size",
+        "sample_rate",
+        "number_of_channels",
+        "bits_per_sample",
+        "total_samples_in_stream",
+        "md5_signature",
+    ] {
+        assert!(dump.contains(field), "dump omitted `{field}`:\n{dump}");
+    }
 }
 
 #[test]

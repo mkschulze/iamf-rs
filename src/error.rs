@@ -123,6 +123,12 @@ pub enum ErrorKind {
     SinkWrite,
     #[error("the sequence writer is poisoned after a partial output failure")]
     SequenceWriterPoisoned,
+    #[error("sample rate is not supported by the codec")]
+    SampleRateNotSupportedByCodec,
+    #[error("samples per frame are not supported by the codec")]
+    SamplesPerFrameNotSupportedByCodec,
+    #[error("bits per sample are not supported by the codec")]
+    BitsPerSampleNotSupportedByCodec,
 }
 
 /// An error, with the position it happened at attached exactly once.

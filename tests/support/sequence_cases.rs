@@ -68,6 +68,18 @@ pub fn canonical_parsed_strategy() -> impl Strategy<Value = ParsedSequence> {
         })
 }
 
+pub fn flac_codec_config_strategy() -> impl Strategy<Value = CodecConfig> {
+    (
+        any::<u32>(),
+        1_u32..=u32::from(u16::MAX),
+        1_u32..=655_350,
+        4_u8..=32,
+    )
+        .prop_map(|(id, frame_size, rate, bits)| {
+            CodecConfig::flac(id, frame_size, rate, bits).expect("strategy generates valid FLAC")
+        })
+}
+
 pub fn minimal_descriptors() -> DescriptorSet {
     DescriptorSet::new(IaSequenceHeader::new(0, 0))
 }

@@ -186,7 +186,7 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "iamf-tools/noise_1024samp_stereo_flac.iamf",
-        "4affe8c64bcf9c753de7417114d8faeff47c0747abeeeec77fd79c4cfd5a3a7b"
+        "c1141bf017154d76faa5ee3d912af7be118cc2f7f5153b4f908c7891fab2be3e"
     ),
     positive!(
         "iamf-tools/noise_3s_stereo_opus.iamf",
@@ -237,13 +237,6 @@ pub const RAW_CODEC_EXPECTATIONS: &[RawCodecExpectation] = &[
         offset: 19,
         len: 11,
         sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
-    },
-    RawCodecExpectation {
-        path: "iamf-tools/noise_1024samp_stereo_flac.iamf",
-        fourcc: *b"fLaC",
-        offset: 19,
-        len: 38,
-        sha256: "14bc8e30154e84e9f22afaa27f0a4d7e87b09f25a9ff23ac768aa165c8436e09",
     },
     RawCodecExpectation {
         path: "iamf-tools/noise_3s_stereo_opus.iamf",

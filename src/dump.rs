@@ -342,6 +342,60 @@ fn dump_codec_config(offset: usize, value: &CodecConfig) -> String {
             out.push_str(&field(offset, "  sample_size", lpcm.sample_size));
             out.push_str(&field(offset, "  sample_rate", lpcm.sample_rate));
         }
+        DecoderConfig::Flac(flac) => {
+            out.push_str(&field(
+                offset,
+                "  last_metadata_block",
+                flac.last_metadata_block,
+            ));
+            out.push_str(&field(
+                offset,
+                "  metadata_block_type",
+                flac.metadata_block_type,
+            ));
+            out.push_str(&field(
+                offset,
+                "  metadata_data_block_length",
+                flac.metadata_data_block_length,
+            ));
+            out.push_str(&field(
+                offset,
+                "  minimum_block_size",
+                flac.minimum_block_size,
+            ));
+            out.push_str(&field(
+                offset,
+                "  maximum_block_size",
+                flac.maximum_block_size,
+            ));
+            out.push_str(&field(
+                offset,
+                "  minimum_frame_size",
+                flac.minimum_frame_size,
+            ));
+            out.push_str(&field(
+                offset,
+                "  maximum_frame_size",
+                flac.maximum_frame_size,
+            ));
+            out.push_str(&field(offset, "  sample_rate", flac.sample_rate));
+            out.push_str(&field(
+                offset,
+                "  number_of_channels",
+                flac.number_of_channels,
+            ));
+            out.push_str(&field(offset, "  bits_per_sample", flac.bits_per_sample));
+            out.push_str(&field(
+                offset,
+                "  total_samples_in_stream",
+                flac.total_samples_in_stream,
+            ));
+            out.push_str(&field(
+                offset,
+                "  md5_signature",
+                hex_inline(&flac.md5_signature, flac.md5_signature.len()),
+            ));
+        }
         DecoderConfig::Raw { codec_id, bytes } => {
             out.push_str(&field(
                 offset,

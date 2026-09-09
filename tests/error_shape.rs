@@ -148,6 +148,20 @@ fn error_fits_the_thirty_two_byte_budget() {
     );
 }
 
+#[test]
+fn codec_capability_errors_are_exact_compact_kinds() {
+    for kind in [
+        ErrorKind::SampleRateNotSupportedByCodec,
+        ErrorKind::SamplesPerFrameNotSupportedByCodec,
+        ErrorKind::BitsPerSampleNotSupportedByCodec,
+    ] {
+        let error = Error::new(kind.clone(), Location::Unlocated);
+        assert_eq!(error.kind(), &kind);
+        assert!(!error.to_string().is_empty());
+    }
+    assert!(size_of::<Error>() <= 32);
+}
+
 // ---------------------------------------------------------------------------
 // Finding — D-09's "all findings, each naming its field path".
 // ---------------------------------------------------------------------------

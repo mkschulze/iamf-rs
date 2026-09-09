@@ -3,16 +3,19 @@
 #[path = "support/sequence_cases.rs"]
 mod sequence_cases;
 
-use iamf::bits::BitWriter;
+use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::obu::{
-    AudioElementParam, ObuHeader, ObuType, ParameterData, find_obu_boundaries, write_obu,
+    AudioElementParam, Obu, ObuHeader, ObuType, ParameterData, find_obu_boundaries,
+    read_codec_config, read_obu_with, write_codec_config, write_obu, write_obu_with,
 };
 use iamf::sequence::{
     ParsedSequence, SequenceObu, UnknownObu, parse_sequence, write_parsed_sequence, write_sequence,
 };
 use proptest::prelude::*;
-use sequence_cases::{canonical_case_strategy, canonical_parsed_strategy};
+use sequence_cases::{
+    canonical_case_strategy, canonical_parsed_strategy, flac_codec_config_strategy,
+};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
@@ -42,6 +45,22 @@ proptest! {
         let rewritten = write_parsed_sequence(Vec::new(), &reparsed).expect("parsed model writes");
 
         prop_assert_eq!(rewritten, bytes);
+    }
+
+    #[test]
+    fn typed_flac_codec_configs_round_trip(codec in flac_codec_config_strategy()) {
+        let obu = Obu::new(ObuHeader::new(ObuType::CodecConfig), codec.clone());
+        let mut writer = BitWriter::new();
+        write_obu_with(&mut writer, &obu, write_codec_config).expect("valid FLAC writes");
+        let bytes = writer.finish().expect("FLAC OBU is byte-aligned");
+
+        let mut reader = BitCursor::new(&bytes);
+        let parsed = read_obu_with(&mut reader, read_codec_config).expect("own FLAC parses");
+        prop_assert_eq!(&parsed.payload, &codec);
+
+        let mut rewritten = BitWriter::new();
+        write_obu_with(&mut rewritten, &parsed, write_codec_config).expect("parsed FLAC writes");
+        prop_assert_eq!(rewritten.finish().expect("rewritten OBU is aligned"), bytes);
     }
 }
 

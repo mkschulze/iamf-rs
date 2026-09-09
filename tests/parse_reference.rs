@@ -7,10 +7,12 @@ mod reference_expectations;
 
 use std::path::{Path, PathBuf};
 
+use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::Location;
 use iamf::obu::{
-    AudioElementParam, DecoderConfig, DurationFields, ParamDefinition, ParameterData,
-    ReconGainElement, ReconGainInfoParameterData,
+    AudioElementParam, DecoderConfig, DurationFields, FlacDecoderConfig, ParamDefinition,
+    ParameterData, ReconGainElement, ReconGainInfoParameterData, read_codec_config, read_obu_with,
+    write_codec_config, write_obu_with,
 };
 use iamf::sequence::{SequenceObu, parse_sequence, write_parsed_sequence};
 use reference_expectations::{
@@ -181,7 +183,7 @@ fn named_negative_dispositions_are_exact() {
 }
 
 #[test]
-fn every_non_lpcm_decoder_config_remains_raw_at_its_exact_boundary() {
+fn every_still_opaque_decoder_config_remains_raw_at_its_exact_boundary() {
     for expectation in RAW_CODEC_EXPECTATIONS {
         let bytes = fixture_bytes(expectation.path);
         let sequence = parse_sequence(&bytes).expect("raw-codec fixture parses");
@@ -232,6 +234,76 @@ fn every_non_lpcm_decoder_config_remains_raw_at_its_exact_boundary() {
             expectation.path
         );
     }
+}
+
+#[test]
+fn complete_reference_flac_is_typed_and_a_thirty_seven_byte_prefix_stays_raw() {
+    let bytes = fixture_bytes("iamf-tools/noise_1024samp_stereo_flac.iamf");
+    let sequence = parse_sequence(&bytes).expect("reference FLAC fixture parses");
+    let config = sequence
+        .obus
+        .iter()
+        .find_map(|obu| match obu {
+            SequenceObu::CodecConfig(obu) => Some(&obu.payload),
+            _ => None,
+        })
+        .expect("fixture carries a Codec Config");
+
+    assert_eq!(config.codec_id, *b"fLaC");
+    assert_eq!(config.codec_config_id, 0);
+    assert_eq!(config.num_samples_per_frame, 4_608);
+    assert_eq!(config.audio_roll_distance, 0);
+    assert_eq!(
+        config.flac_config(),
+        Some(&FlacDecoderConfig {
+            last_metadata_block: true,
+            metadata_block_type: 0,
+            metadata_data_block_length: 34,
+            minimum_block_size: 4_608,
+            maximum_block_size: 4_608,
+            minimum_frame_size: 4_153,
+            maximum_frame_size: 4_153,
+            sample_rate: 48_000,
+            number_of_channels: 1,
+            bits_per_sample: 15,
+            total_samples_in_stream: 1_024,
+            md5_signature: [
+                0xb5, 0xc9, 0xb3, 0xa6, 0x0e, 0x47, 0x84, 0x17, 0x18, 0x78, 0xb8, 0x73, 0x00,
+                0x8e, 0x13, 0xeb,
+            ],
+        })
+    );
+    assert!(config.trailing.is_empty());
+    let full_prefix = bytes.get(19..57).expect("fixture carries 38 FLAC bytes");
+    assert_eq!(full_prefix.len(), 38);
+    assert_eq!(
+        sha256_hex(full_prefix),
+        "14bc8e30154e84e9f22afaa27f0a4d7e87b09f25a9ff23ac768aa165c8436e09"
+    );
+
+    let mut short_obu = bytes
+        .get(8..57)
+        .expect("fixture carries one complete Codec Config OBU")
+        .to_vec();
+    *short_obu.get_mut(1).expect("OBU has a size byte") = 0x2e;
+    assert_eq!(short_obu.pop(), Some(0xeb));
+    let mut reader = BitCursor::new(&short_obu);
+    let parsed = read_obu_with(&mut reader, read_codec_config)
+        .expect("37-byte known FLAC syntax remains raw");
+    let DecoderConfig::Raw {
+        codec_id,
+        bytes: raw,
+    } = &parsed.payload.decoder_config
+    else {
+        panic!("37-byte known FLAC syntax became typed");
+    };
+    assert_eq!(*codec_id, *b"fLaC");
+    assert_eq!(raw, full_prefix.get(..37).expect("37-byte prefix"));
+    assert!(parsed.payload.trailing.is_empty());
+
+    let mut writer = BitWriter::new();
+    write_obu_with(&mut writer, &parsed, write_codec_config).expect("raw FLAC prefix rewrites");
+    assert_eq!(writer.finish().expect("whole-byte OBU"), short_obu);
 }
 
 #[test]
