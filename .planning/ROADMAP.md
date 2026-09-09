@@ -84,7 +84,7 @@ Plans:
 - [x] 02-01: Context-rich `ParamDefinitionRegistry` and complete Phase 2 Parameter Data parsing
 - [x] 02-02: Preserve and migrate every reserved field currently discarded by known readers
 - [x] 02-03: Transactional sequence parser, flat-order validation, and canonical temporal grouping
-- [ ] 02-04: Round-trip properties in both directions with exact unknown-data position fidelity
+- [x] 02-04: Round-trip properties in both directions with exact unknown-data position fidelity
 - [ ] 02-05: Independently derive and assert field-level expectations for the committed reference corpus
 - [ ] 02-06: Independent `fuzz/` workspace, shared bounded model generator, and exactly two fuzz targets
 - [ ] 02-07: Committed seeded corpora, four-target stable replay, and bounded nightly fuzzing
