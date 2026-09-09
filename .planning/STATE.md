@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1
-current_phase: 01
-current_phase_name: Conformant LPCM Bitstream
-status: complete
-stopped_at: Completed 01-10-PLAN.md
-last_updated: "2026-09-08T22:56:00.197Z"
+current_phase: 02
+current_phase_name: Parser, Round-Trip and Fuzzing
+status: in_progress
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-09-09T01:12:01.679Z"
 last_activity: 2026-09-09
-last_activity_desc: Phase 01 verified — exact-candidate four-target byte identity passed
+last_activity_desc: Plan 02-01 completed — contextual parameter registry and data parsing
 state_head: 4d81cd0
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
+  total_plans: 17
+  completed_plans: 11
+  percent: 65
 ---
 
 # Project State
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-08)
 
 **Core value:** A `.iamf` file this crate writes is read back by the reference decoder `libiamf` with the PCM sample-identical — and accepted by `iamf-tools`' stricter parser, because `libiamf` alone is a permissive oracle.
-**Current focus:** Phase 01 — Conformant LPCM Bitstream
+**Current focus:** Phase 02 — Parser, Round-Trip and Fuzzing
 
 ## Current Position
 
-Phase: 01 (Conformant LPCM Bitstream) — COMPLETE
-Plan: 10 of 10
-Status: Verified 5/5; exact-candidate four-target CI evidence passed
-Last activity: 2026-09-09 — Plan 01-10 closed the cross-target byte-identity gate
+Phase: 02 (Parser, Round-Trip and Fuzzing) — IN PROGRESS
+Plan: 1 of 7
+Status: Plan 02-01 complete; ready for 02-02
+Last activity: 2026-09-09 — Context-rich registry and contextual parameter data completed
 
-Progress: [██████████] 100% of Phase 01 plans
+Progress: [█░░░░░░░░░] 14% of Phase 02 plans
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Progress: [██████████] 100% of Phase 01 plans
 | Phase 01 P08 | ~2h | 3 tasks | 17 files |
 | Phase 01 P09 | 4min | 3 tasks | 2 files |
 | Phase 01 P10 | 34min | 4 tasks | 5 files |
+| Phase 02 P01 | 16min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current work:
 - [Phase 01]: The Phase 1 cross-target terminal branch is normal-four-target; no D-17 runner waiver is active.
 - [Phase 01]: Windows preserves committed LF bytes before checkout, and x86_64 macOS tests execute under Rosetta 2.
 - [Phase 01]: Cross-target evidence is bound to candidate 5fea02a; closure descendants are restricted to the explicit documentation/state allowlist.
+- [Phase 02]: Parameter Block readers require an explicit ordered ParamDefinitionRegistry carrying descriptor-owned parse context.
+- [Phase 02]: Registry lookup follows emitted wire order and binds duplicate parameter IDs to the first definition.
+- [Phase 02]: Reserved demixing modes and high Recon Gain bits are preserved and diagnosed rather than rejected or normalized.
 
 ### Pending Todos
 
@@ -141,6 +145,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-09T00:45:51.721Z
-Stopped at: Phase 2 planned
-Resume file: .planning/phases/02-parser-round-trip-and-fuzzing/02-01-PLAN.md
+Last session: 2026-09-09T01:12:01.675Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: None

@@ -81,7 +81,7 @@ strictly ordered verification-gap closure waves):
 
 Plans:
 
-- [ ] 02-01: Context-rich `ParamDefinitionRegistry` and complete Phase 2 Parameter Data parsing
+- [x] 02-01: Context-rich `ParamDefinitionRegistry` and complete Phase 2 Parameter Data parsing
 - [ ] 02-02: Preserve and migrate every reserved field currently discarded by known readers
 - [ ] 02-03: Transactional sequence parser, flat-order validation, and canonical temporal grouping
 - [ ] 02-04: Round-trip properties in both directions with exact unknown-data position fidelity
@@ -151,7 +151,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
-| 2. Parser, Round-Trip and Fuzzing | 0/4 | Not started | - |
+| 2. Parser, Round-Trip and Fuzzing | 1/7 | In Progress | - |
 | 3. FLAC and Opus Framing | 0/3 | Not started | - |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
