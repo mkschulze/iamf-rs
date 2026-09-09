@@ -77,7 +77,10 @@ fn test_000015_preserves_its_raw_ungoverned_parameter_block_in_place() {
         .position(|obu| matches!(obu, SequenceObu::UngovernedParameterBlock(_)))
         .expect("fixture carries its explicit ungoverned block");
 
-    assert_eq!(raw_index, 4, "raw block remains immediately after descriptors");
+    assert_eq!(
+        raw_index, 4,
+        "raw block remains immediately after descriptors"
+    );
     assert_eq!(
         write_parsed_sequence(Vec::new(), &parsed).expect("flat fixture writes"),
         bytes

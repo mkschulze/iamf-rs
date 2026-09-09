@@ -316,7 +316,10 @@ fn a_bounded_parameter_block_without_governing_context_is_preserved_and_diagnose
             message: "parameter block references parameter_id 101, which no definition in this sequence carries".to_owned(),
         }]
     );
-    assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes.to_vec()));
+    assert_eq!(
+        write_parsed_sequence(Vec::new(), &parsed),
+        Ok(bytes.to_vec())
+    );
 }
 
 #[test]
@@ -329,7 +332,10 @@ fn malformed_governed_parameter_block_remains_a_structural_error() {
 
     let error = parse_sequence(&bytes).expect_err("governed syntax is truncated");
     assert_eq!(error.kind(), &ErrorKind::UnexpectedEndOfInput);
-    assert_eq!(error.at(), Location::InputOffset(payload_offset.saturating_add(2)));
+    assert_eq!(
+        error.at(),
+        Location::InputOffset(payload_offset.saturating_add(2))
+    );
 }
 
 #[test]

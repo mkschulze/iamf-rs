@@ -7,68 +7,256 @@
 #[derive(Debug, Clone, Copy)]
 pub struct PositiveExpectation {
     pub path: &'static str,
+    pub semantic_sha256: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RawCodecExpectation {
+    pub path: &'static str,
+    pub fourcc: [u8; 4],
+    pub offset: usize,
+    pub len: usize,
+    pub sha256: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NegativeDisposition {
+    StructuralError {
+        kind: &'static str,
+        offset: u64,
+    },
+    ValidationFinding {
+        zero_frame_size: u32,
+        field: &'static str,
+        message: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct NegativeExpectation {
     pub path: &'static str,
-    pub zero_frame_size: u32,
-    pub finding_field: &'static str,
-    pub finding_message: &'static str,
+    pub disposition: NegativeDisposition,
+}
+
+macro_rules! positive {
+    ($path:literal, $digest:literal) => {
+        PositiveExpectation {
+            path: $path,
+            semantic_sha256: $digest,
+        }
+    };
 }
 
 pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
-    PositiveExpectation { path: "test_000000_3.iamf" },
-    PositiveExpectation { path: "test_000002.iamf" },
-    PositiveExpectation { path: "test_000003.iamf" },
-    PositiveExpectation { path: "test_000005.iamf" },
-    PositiveExpectation { path: "test_000006.iamf" },
-    PositiveExpectation { path: "test_000007.iamf" },
-    PositiveExpectation { path: "test_000012.iamf" },
-    PositiveExpectation { path: "test_000013.iamf" },
-    PositiveExpectation { path: "test_000015.iamf" },
-    PositiveExpectation { path: "test_000016.iamf" },
-    PositiveExpectation { path: "test_000017.iamf" },
-    PositiveExpectation { path: "test_000018.iamf" },
-    PositiveExpectation { path: "test_000019.iamf" },
-    PositiveExpectation { path: "test_000059.iamf" },
-    PositiveExpectation { path: "test_000060.iamf" },
-    PositiveExpectation { path: "test_000062.iamf" },
-    PositiveExpectation { path: "test_000063.iamf" },
-    PositiveExpectation { path: "test_000067.iamf" },
-    PositiveExpectation { path: "test_000071.iamf" },
-    PositiveExpectation { path: "test_000077.iamf" },
-    PositiveExpectation { path: "test_000078.iamf" },
-    PositiveExpectation { path: "test_000079.iamf" },
-    PositiveExpectation { path: "test_000085.iamf" },
-    PositiveExpectation { path: "test_000088.iamf" },
-    PositiveExpectation { path: "test_000097.iamf" },
-    PositiveExpectation { path: "test_000119.iamf" },
-    PositiveExpectation { path: "test_000120.iamf" },
-    PositiveExpectation { path: "test_000121.iamf" },
-    PositiveExpectation { path: "test_000122.iamf" },
-    PositiveExpectation { path: "test_000124.iamf" },
-    PositiveExpectation { path: "test_000129.iamf" },
-    PositiveExpectation { path: "test_000130.iamf" },
-    PositiveExpectation { path: "test_000501.iamf" },
-    PositiveExpectation { path: "test_000503.iamf" },
-    PositiveExpectation {
-        path: "iamf-tools/noise_1024samp_5p1_opus.iamf",
+    positive!(
+        "test_000000_3.iamf",
+        "0c2ddc410d5b20b7e6226adaf52aba3adcbfe1b22b6f5b97461facf96fdf3c6a"
+    ),
+    positive!(
+        "test_000002.iamf",
+        "a33fc7141bc407fd1336f169db2de2ac23f6a406eb6b8b6ff26a46da5bedb83e"
+    ),
+    positive!(
+        "test_000003.iamf",
+        "720529d10272f0a9e054d3593f23ff20015a9cb72c434596e5f806f067a3b53f"
+    ),
+    positive!(
+        "test_000005.iamf",
+        "3baf819112a068f683c0ce54e0da0521235587290a3b61ceb65ca1b91fb88327"
+    ),
+    positive!(
+        "test_000006.iamf",
+        "f29d1ca06ebba6d85678badf733cead10a0abda049e85402cd3c1d016995ecf5"
+    ),
+    positive!(
+        "test_000007.iamf",
+        "8ccb6d8134335348f299fcc25a8759f1b2fd84613b724af7cc15dc74ed4ca1d5"
+    ),
+    positive!(
+        "test_000012.iamf",
+        "3e72ff4b33c1fbce53f5bd5fd0ae8ac1937159ba509655c04b14a5680480efeb"
+    ),
+    positive!(
+        "test_000013.iamf",
+        "c4a7d1ed92104bbc181c2eaf0c3537a330759d03e49c662a5a5b03995346d0f5"
+    ),
+    positive!(
+        "test_000015.iamf",
+        "c3970213b836da1bb054805ecc896804f8c5bd7ded8ed1089487ab783c5ef8f2"
+    ),
+    positive!(
+        "test_000016.iamf",
+        "d91a8259b201549b7b7cdb0433c9f9775153f67bd0f15c57a8b2e61d167ce660"
+    ),
+    positive!(
+        "test_000017.iamf",
+        "e2aa30395b75ab7e1807ad98bc4ca3eb0f08cccbb35a71bf0925fdb943990b40"
+    ),
+    positive!(
+        "test_000018.iamf",
+        "200e0dbd7c64318d32459d26965addfcedd22b9350bedcf1fdc5690d2f860a2b"
+    ),
+    positive!(
+        "test_000019.iamf",
+        "3baf819112a068f683c0ce54e0da0521235587290a3b61ceb65ca1b91fb88327"
+    ),
+    positive!(
+        "test_000059.iamf",
+        "bd2158ca94e75367d940e835f9c121de9e84c566c5442dde001e1765b9efa823"
+    ),
+    positive!(
+        "test_000060.iamf",
+        "ae61b7c9666af2150599d80368b697552ab819e15d38ca3e47dfe5d719ec6d37"
+    ),
+    positive!(
+        "test_000062.iamf",
+        "c3e51b0b1ae7611f4a680952acc0cc7f9d6711c41e131df3050fd43cfe2fcf2b"
+    ),
+    positive!(
+        "test_000063.iamf",
+        "793dcdaf78e53e80dba54de3ce39ec28e794b9deb587c437c6b5e346e67aba24"
+    ),
+    positive!(
+        "test_000067.iamf",
+        "791a9c4b2a49cb35aad9ce08ea55ba82475bde382656aa145cac39ca12d85a46"
+    ),
+    positive!(
+        "test_000071.iamf",
+        "b600f8758be44b788cecb88fcd0b4d94c968591197688107e6816bd0fe278423"
+    ),
+    positive!(
+        "test_000077.iamf",
+        "e2fe9a41716b866e1368f8da7ca10fa48ec02a0bb5fa21a2be82dcad9d889f6b"
+    ),
+    positive!(
+        "test_000078.iamf",
+        "4ae69319df01fc038a8393d3075825a364624067f64c58f6a1140cadd115751e"
+    ),
+    positive!(
+        "test_000079.iamf",
+        "3a7691af37df38095db348ab6b1939f719986f2b11466eb93c356f48a6a7b1cc"
+    ),
+    positive!(
+        "test_000085.iamf",
+        "c4777be27a3c1926b8bd6bcfc25f20c8b0509e439617b22d945790ac920e287b"
+    ),
+    positive!(
+        "test_000088.iamf",
+        "ac704c1969cefd9610cfd723adaa2658b6ee9b2a5e054ef9db3f58605ffd5b31"
+    ),
+    positive!(
+        "test_000097.iamf",
+        "dca3ad4540967da5b4a361dbd5589562f2853ee61561258240c5cee9f7ea53bb"
+    ),
+    positive!(
+        "test_000119.iamf",
+        "13f77189d815adc5e0ce8327e171831702baf3cbb98be0ac9203e69419dcb355"
+    ),
+    positive!(
+        "test_000120.iamf",
+        "1928ee543bbf14d8b8ed5c276a058c5679b2b82b6a82b476a35ec2e1edbf53a4"
+    ),
+    positive!(
+        "test_000121.iamf",
+        "04737ff74968d56e326367a2dd2bbe58c4d3b4c5675a3af2fd62d63df9eb3366"
+    ),
+    positive!(
+        "test_000122.iamf",
+        "b324def10ef2e4ea0f6c68f3dd3b293d141aaed4c2305dbf7e76340ffa69353a"
+    ),
+    positive!(
+        "test_000124.iamf",
+        "8f637e9a02659decd87572257e7a6eafd02a05dcc9d5143808151ccfc70716cb"
+    ),
+    positive!(
+        "test_000130.iamf",
+        "219e6285ff7a47445f0007b01b2105dfba359eebcdc7dd054d1a58b2ab099d12"
+    ),
+    positive!(
+        "test_000501.iamf",
+        "6bcd610c8c62113944d2e7a5570eb9c14456dc2474180e0061a603924e53add1"
+    ),
+    positive!(
+        "test_000503.iamf",
+        "bc36e959544945182dda88871dd1e736ea74cdaa146790d99c6813a44866b512"
+    ),
+    positive!(
+        "iamf-tools/noise_1024samp_5p1_opus.iamf",
+        "e8868378e38768fb21f956214c479be30d9bddcf99b4b0a450d37d1c787588ed"
+    ),
+    positive!(
+        "iamf-tools/noise_1024samp_stereo_flac.iamf",
+        "4affe8c64bcf9c753de7417114d8faeff47c0747abeeeec77fd79c4cfd5a3a7b"
+    ),
+    positive!(
+        "iamf-tools/noise_3s_stereo_opus.iamf",
+        "ce3b61f47fb58a3e44d154d5e5125a03dd4fdd74ca1bac167d999fc3da6d249b"
+    ),
+    positive!(
+        "iamf-tools/tones_100ms_3OA_stereo_opus.iamf",
+        "1d2c2106f298e87ae3943f79247a0bddac8649b9c132c40b4f1162c704d010bd"
+    ),
+];
+
+pub const NEGATIVE_EXPECTATIONS: &[NegativeExpectation] = &[
+    NegativeExpectation {
+        path: "test_000129.iamf",
+        disposition: NegativeDisposition::StructuralError {
+            kind: "UnexpectedEndOfInput",
+            offset: 53,
+        },
     },
-    PositiveExpectation {
-        path: "iamf-tools/noise_1024samp_stereo_flac.iamf",
-    },
-    PositiveExpectation {
-        path: "iamf-tools/noise_3s_stereo_opus.iamf",
-    },
-    PositiveExpectation {
-        path: "iamf-tools/tones_100ms_3OA_stereo_opus.iamf",
+    NegativeExpectation {
+        path: "negative/tones_256samp_5p1_pcm.iamf",
+        disposition: NegativeDisposition::ValidationFinding {
+            zero_frame_size: 0,
+            field: "num_samples_per_frame",
+            message: "num_samples_per_frame is 0, outside 1..=96000",
+        },
     },
 ];
 
-pub const NEGATIVE_EXPECTATION: NegativeExpectation = NegativeExpectation {
-    path: "negative/tones_256samp_5p1_pcm.iamf",
-    zero_frame_size: 0,
-    finding_field: "num_samples_per_frame",
-    finding_message: "num_samples_per_frame is 0, outside 1..=96000",
-};
+pub const RAW_CODEC_EXPECTATIONS: &[RawCodecExpectation] = &[
+    RawCodecExpectation {
+        path: "test_000059.iamf",
+        fourcc: *b"Opus",
+        offset: 20,
+        len: 11,
+        sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+    },
+    RawCodecExpectation {
+        path: "test_000124.iamf",
+        fourcc: *b"Opus",
+        offset: 20,
+        len: 11,
+        sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+    },
+    RawCodecExpectation {
+        path: "iamf-tools/noise_1024samp_5p1_opus.iamf",
+        fourcc: *b"Opus",
+        offset: 19,
+        len: 11,
+        sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+    },
+    RawCodecExpectation {
+        path: "iamf-tools/noise_1024samp_stereo_flac.iamf",
+        fourcc: *b"fLaC",
+        offset: 19,
+        len: 38,
+        sha256: "14bc8e30154e84e9f22afaa27f0a4d7e87b09f25a9ff23ac768aa165c8436e09",
+    },
+    RawCodecExpectation {
+        path: "iamf-tools/noise_3s_stereo_opus.iamf",
+        fourcc: *b"Opus",
+        offset: 18,
+        len: 11,
+        sha256: "62111fe8161f0727d8dac66e5e5e8a61751fda1b1d1df24211e6d9e91791f758",
+    },
+    RawCodecExpectation {
+        path: "iamf-tools/tones_100ms_3OA_stereo_opus.iamf",
+        fourcc: *b"Opus",
+        offset: 19,
+        len: 11,
+        sha256: "6f16678e7c8864729b653873d8536abb564ec78c80ef557c7b3638351c3cc53b",
+    },
+];
