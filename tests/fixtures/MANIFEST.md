@@ -188,6 +188,11 @@ is known, for Phase 2's PARSE-04.
 
 ### 4. `iamf-tools` fixtures — the four valid ones
 
+The four binaries have no paired configuration files upstream.  Their pinned
+byte-offset hand-decodes and raw-codec digests are committed in
+[`PHASE2-EXPECTATION-PROVENANCE.md`](PHASE2-EXPECTATION-PROVENANCE.md); the
+short filename summaries below are inventory labels, not semantic oracles.
+
 | Path (under `tests/fixtures/`) | Source repo | Bytes | Vendored | Reason |
 |---|---|---:|:--:|---|
 | `reference/iamf-tools/noise_1024samp_5p1_opus.iamf` | `iamf-tools` | 2 228 | yes | valid iamf-tools-produced fixture: 5.1 Opus  num_samples_per_frame = 960 |
