@@ -13,14 +13,15 @@
 
 use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
-use iamf::error::ErrorKind;
+use iamf::error::{ErrorKind, Location};
 use iamf::obu::{
-    AnimationType, AudioFrame, BlockDurationFields, DurationFields, MixGainParameterData, Obu,
-    ObuHeader, ObuType, ParamDefinition, ParamDefinitionType, ParameterBlock, ParameterData,
-    ParameterSubblock, TemporalDelimiter, Trimming, TypeSpecific, obu_type_for, plan_frames,
-    read_audio_frame, read_obu_with, read_obu_with_header, read_parameter_block,
-    read_temporal_delimiter, substream_id_for, validate_temporal_unit, write_audio_frame,
-    write_obu, write_obu_with, write_obu_with_header, write_parameter_block,
+    AnimationType, AudioFrame, BlockDurationFields, DemixingInfoParameterData, DurationFields,
+    MixGainParameterData, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
+    ParamDefinitionType, ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock,
+    ReconGainElement, ReconGainInfoParameterData, TemporalDelimiter, Trimming, TypeSpecific,
+    obu_type_for, plan_frames, read_audio_frame, read_obu_with, read_obu_with_header,
+    read_parameter_block, read_temporal_delimiter, substream_id_for, validate_temporal_unit,
+    write_audio_frame, write_obu, write_obu_with, write_obu_with_header, write_parameter_block,
     write_temporal_delimiter,
 };
 
@@ -766,6 +767,153 @@ fn a_subblock_count_larger_than_the_bytes_remaining_is_refused_before_reserving(
             .map(|e| e.kind().clone()),
         Some(ErrorKind::UnexpectedEndOfInput),
         "bounded against bytes_remaining() before a single element is reserved"
+    );
+}
+
+fn registry_with(definition: ParamDefinition, context: ParameterDataContext) -> ParamDefinitionRegistry {
+    let mut registry = ParamDefinitionRegistry::new();
+    registry.register(definition, context);
+    registry
+}
+
+#[test]
+fn demixing_data_uses_exactly_three_mode_bits_and_five_reserved_bits() {
+    // id 5, duration 1, constant duration 1, then 0b101_11011.
+    let bytes = hex!("05 01 01 bb");
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let registry = registry_with(definition.clone(), ParameterDataContext::Demixing);
+    let mut reader = BitCursor::new(&bytes);
+
+    let block = read_parameter_block(&mut reader, &registry).expect("demixing data parses");
+    assert_eq!(
+        block.subblocks.first().map(|subblock| &subblock.data),
+        Some(&ParameterData::Demixing(DemixingInfoParameterData {
+            dmixp_mode: 5,
+            reserved: 0x1b,
+        }))
+    );
+
+    let mut writer = BitWriter::new();
+    write_parameter_block(
+        &mut writer,
+        &definition,
+        &ParameterDataContext::Demixing,
+        &block,
+    )
+    .expect("demixing data writes");
+    assert_eq!(writer.finish().unwrap_or_default(), bytes);
+}
+
+#[test]
+fn test_000059_two_layer_recon_gain_shape_round_trips_exact_bytes() {
+    // id 101, duration 960, constant duration 960. Layer 0 is absent and
+    // consumes no bytes. Layer 1 flag 0x1d selects gains 0, 2, 3, and 4.
+    let bytes = hex!("65 c0 07 c0 07 1d ff ff ff ff");
+    let definition = ParamDefinition::mode_1(101, 48_000);
+    let context = ParameterDataContext::ReconGain {
+        recon_gain_is_present: vec![false, true],
+    };
+    let registry = registry_with(definition.clone(), context.clone());
+    let mut reader = BitCursor::new(&bytes);
+
+    let block = read_parameter_block(&mut reader, &registry).expect("test_000059 shape parses");
+    let mut gains = [0_u8; 12];
+    gains[0] = 0xff;
+    gains[2] = 0xff;
+    gains[3] = 0xff;
+    gains[4] = 0xff;
+    assert_eq!(
+        block.subblocks.first().map(|subblock| &subblock.data),
+        Some(&ParameterData::ReconGain(ReconGainInfoParameterData {
+            layers: vec![
+                None,
+                Some(ReconGainElement {
+                    recon_gain_flag: 0x1d,
+                    recon_gain: gains,
+                }),
+            ],
+        }))
+    );
+
+    let mut writer = BitWriter::new();
+    write_parameter_block(&mut writer, &definition, &context, &block)
+        .expect("test_000059 shape writes");
+    assert_eq!(writer.finish().unwrap_or_default(), bytes);
+}
+
+#[test]
+fn missing_and_mismatched_recon_gain_context_are_located_errors() {
+    let bytes = hex!("65 c0 07 c0 07 1d ff ff ff ff");
+    let mut reader = BitCursor::new(&bytes);
+    let missing = read_parameter_block(&mut reader, &ParamDefinitionRegistry::new())
+        .expect_err("parameter 101 has no governing definition");
+    assert_eq!(missing.kind(), &ErrorKind::NoGoverningParamDefinition);
+    assert_eq!(missing.at(), Location::InputOffset(0));
+
+    let definition = ParamDefinition::mode_1(101, 48_000);
+    let block = ParameterBlock {
+        parameter_id: 101,
+        duration_fields: Some(BlockDurationFields {
+            duration: 960,
+            constant_subblock_duration: 960,
+        }),
+        subblocks: vec![ParameterSubblock {
+            subblock_duration: None,
+            data: ParameterData::ReconGain(ReconGainInfoParameterData {
+                layers: vec![None, Some(ReconGainElement {
+                    recon_gain_flag: 0,
+                    recon_gain: [0; 12],
+                })],
+            }),
+        }],
+    };
+    let mut writer = BitWriter::new();
+    let mismatch = write_parameter_block(
+        &mut writer,
+        &definition,
+        &ParameterDataContext::ReconGain {
+            recon_gain_is_present: vec![true, false],
+        },
+        &block,
+    )
+    .expect_err("layer options must agree with descriptor flags");
+    assert_eq!(mismatch.kind(), &ErrorKind::UnsupportedParameterData);
+    assert_eq!(mismatch.at(), Location::Field("recon_gain_is_present"));
+}
+
+#[test]
+fn reserved_demixing_modes_and_high_recon_flags_are_preserved_but_diagnosed() {
+    let demixing = ParameterData::Demixing(DemixingInfoParameterData {
+        dmixp_mode: 3,
+        reserved: 0,
+    });
+    assert!(demixing.validate().iter().any(|finding| {
+        finding.at == Location::Field("dmixp_mode") && finding.message.contains("reserved")
+    }));
+
+    let recon = ParameterData::ReconGain(ReconGainInfoParameterData {
+        layers: vec![Some(ReconGainElement {
+            recon_gain_flag: 1 << 12,
+            recon_gain: [0; 12],
+        })],
+    });
+    assert!(recon.validate().iter().any(|finding| {
+        finding.at == Location::Field("recon_gain_flag")
+            && finding.message.contains("above bit 11")
+    }));
+}
+
+#[test]
+fn corrupt_known_demixing_syntax_is_not_reclassified_as_raw_data() {
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let registry = registry_with(definition, ParameterDataContext::Demixing);
+    let mut reader = BitCursor::new(&hex!("05 01 01"));
+
+    assert_eq!(
+        read_parameter_block(&mut reader, &registry)
+            .err()
+            .map(|error| error.kind().clone()),
+        Some(ErrorKind::UnexpectedEndOfInput)
     );
 }
 
