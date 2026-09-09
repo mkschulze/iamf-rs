@@ -66,6 +66,21 @@ pub struct UnknownObu {
     pub payload: Vec<u8>,
 }
 
+/// A structurally bounded Parameter Block whose `parameter_id` has no
+/// governing definition in the sequence.
+///
+/// Without descriptor context the payload syntax after `parameter_id` is
+/// unknowable. The complete payload therefore remains opaque and the flat
+/// writer reproduces it verbatim. This is deliberately not a fallback for a
+/// governed block whose known syntax is malformed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UngovernedParameterBlock {
+    /// The complete common type-3 header.
+    pub header: ObuHeader,
+    /// The complete bounded payload, beginning with `parameter_id`.
+    pub payload: Vec<u8>,
+}
+
 /// One parsed OBU in exact wire order.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +90,7 @@ pub enum SequenceObu {
     AudioElement(Obu<AudioElement>),
     MixPresentation(Obu<MixPresentation>),
     ParameterBlock(Obu<ParameterBlock>),
+    UngovernedParameterBlock(UngovernedParameterBlock),
     TemporalDelimiter(Obu<TemporalDelimiter>),
     AudioFrame(Obu<AudioFrame>),
     Unknown(UnknownObu),
@@ -241,6 +257,7 @@ impl ParsedSequence {
                 SequenceObu::ParameterBlock(obu) => {
                     findings.extend(obu.payload.validate());
                 }
+                SequenceObu::UngovernedParameterBlock(_) => {}
                 SequenceObu::AudioFrame(obu) => {
                     findings.extend(obu.payload.validate(obu.header.obu_type));
                 }
@@ -315,6 +332,17 @@ impl ParsedSequence {
                         });
                     }
                 }
+                SequenceObu::UngovernedParameterBlock(obu) => {
+                    let mut payload = BitCursor::new(&obu.payload);
+                    if let Ok(parameter_id) = payload.read_uleb128() {
+                        findings.push(Finding {
+                            at: Location::Field("parameter_id"),
+                            message: format!(
+                                "parameter block references parameter_id {parameter_id}, which no definition in this sequence carries"
+                            ),
+                        });
+                    }
+                }
                 SequenceObu::AudioFrame(obu) => {
                     if !audio_elements.iter().any(|element| {
                         element
@@ -350,6 +378,7 @@ impl ParsedSequence {
             let is_temporal = matches!(
                 obu,
                 SequenceObu::ParameterBlock(_)
+                    | SequenceObu::UngovernedParameterBlock(_)
                     | SequenceObu::TemporalDelimiter(_)
                     | SequenceObu::AudioFrame(_)
             );
@@ -359,7 +388,8 @@ impl ParsedSequence {
                 false
             } else {
                 match obu {
-                    SequenceObu::ParameterBlock(_) => saw_frame,
+                    SequenceObu::ParameterBlock(_)
+                    | SequenceObu::UngovernedParameterBlock(_) => saw_frame,
                     SequenceObu::AudioFrame(frame) => {
                         frame_ids.contains(&frame.payload.substream_id)
                     }
@@ -451,6 +481,7 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
         // dispatcher arm and the absolute start of the bounded payload; the
         // central OBU reader below remains the sole framing and drain path.
         let mut inspection = reader.clone();
+        let parameter_inspection = reader.clone();
         let (header, _) = read_obu_header(&mut inspection)?;
         let payload_base = inspection.byte_position();
 
@@ -490,10 +521,30 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
                 SequenceObu::MixPresentation(obu)
             }
             ObuType::ParameterBlock => {
-                SequenceObu::ParameterBlock(read_obu_with(&mut reader, |payload| {
-                    read_parameter_block(payload, &registry)
+                let mut inspection = parameter_inspection;
+                let inspected = read_obu_with(&mut inspection, |payload| {
+                    payload
+                        .read_uleb128()
                         .map_err(|error| error.with_input_base(payload_base))
-                })?)
+                })?;
+                if registry.get(inspected.payload).is_some() {
+                    SequenceObu::ParameterBlock(read_obu_with(&mut reader, |payload| {
+                        read_parameter_block(payload, &registry)
+                            .map_err(|error| error.with_input_base(payload_base))
+                    })?)
+                } else {
+                    let raw = read_obu_with(&mut reader, |payload| {
+                        let remaining = payload.bytes_remaining();
+                        payload
+                            .read_uint8_span(remaining)
+                            .map(<[u8]>::to_vec)
+                            .map_err(|error| error.with_input_base(payload_base))
+                    })?;
+                    SequenceObu::UngovernedParameterBlock(UngovernedParameterBlock {
+                        header: raw.header,
+                        payload: raw.payload,
+                    })
+                }
             }
             ObuType::TemporalDelimiter => {
                 SequenceObu::TemporalDelimiter(read_obu_with(&mut reader, |payload| {
@@ -574,6 +625,9 @@ pub fn write_parsed_sequence<W: Write>(mut sink: W, sequence: &ParsedSequence) -
                         block,
                     )
                 })?;
+            }
+            SequenceObu::UngovernedParameterBlock(obu) => {
+                write_obu(&mut writer, &obu.header, &obu.payload)?;
             }
             SequenceObu::TemporalDelimiter(obu) => {
                 write_obu_with(&mut writer, obu, write_temporal_delimiter)?;

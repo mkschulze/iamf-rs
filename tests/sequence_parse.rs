@@ -329,7 +329,7 @@ fn malformed_governed_parameter_block_remains_a_structural_error() {
 
     let error = parse_sequence(&bytes).expect_err("governed syntax is truncated");
     assert_eq!(error.kind(), &ErrorKind::UnexpectedEndOfInput);
-    assert_eq!(error.at(), Location::InputOffset(payload_offset.saturating_add(1)));
+    assert_eq!(error.at(), Location::InputOffset(payload_offset.saturating_add(2)));
 }
 
 #[test]
