@@ -157,8 +157,6 @@ nothing else in the file.
 | `reference/test_000121.textproto` | `libiamf` | 3 808 | yes | configuration for test_000121.iamf |
 | `reference/test_000122.iamf` | `libiamf` | 207 | yes | LPCM under the cap; stereo  simple profile |
 | `reference/test_000122.textproto` | `libiamf` | 5 894 | yes | configuration for test_000122.iamf |
-| `reference/test_000129.iamf` | `libiamf` | 221 | yes | LPCM under the cap; stereo  simple profile |
-| `reference/test_000129.textproto` | `libiamf` | 6 358 | yes | configuration for test_000129.iamf |
 | `reference/test_000130.iamf` | `libiamf` | 204 | yes | LPCM under the cap; stereo  simple profile |
 | `reference/test_000130.textproto` | `libiamf` | 5 661 | yes | configuration for test_000130.iamf |
 | `reference/test_000501.iamf` | `libiamf` | 32 522 | yes | LPCM under the cap; stereo  simple profile |
@@ -204,7 +202,16 @@ short filename summaries below are inventory labels, not semantic oracles.
 
 | Path (under `tests/fixtures/`) | Source repo | Bytes | Vendored | Reason |
 |---|---|---:|:--:|---|
+| `reference/test_000129.iamf` | `libiamf` | 221 | yes | INVALID: paired pinned textproto sets `is_valid: false`; injected Audio Element truncates its declared third layer at offset 53 |
+| `reference/test_000129.textproto` | `libiamf` | 6 358 | yes | authoritative invalid disposition (`invalidates_bitstream: true`) for test_000129.iamf |
 | `reference/negative/tones_256samp_5p1_pcm.iamf` | `iamf-tools` | 3 188 | yes | INVALID: num_samples_per_frame = 0. NEGATIVE FIXTURE ONLY - never a golden |
+
+`test_000129.iamf` is structurally negative, not a permissive-read positive.
+Its injected Audio Element says `num_layers = 3` but supplies only two layer
+records; the third begins at the exact end of that bounded OBU, so parsing
+returns `UnexpectedEndOfInput` at absolute input offset 53. This classification
+comes directly from its pinned textproto's `is_valid: false` and
+`invalidates_bitstream: true` declarations.
 
 `tones_256samp_5p1_pcm.iamf` carries **`num_samples_per_frame = 0`**, read
 directly from its Codec Config payload

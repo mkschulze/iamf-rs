@@ -70,7 +70,7 @@ strictly ordered verification-gap closure waves):
 **Success Criteria** (what must be TRUE):
 
   1. `parse(serialize(model)) == model` holds for every model the encoder can construct, and `serialize(parse(bytes)) == bytes` holds byte-for-byte for every file this crate produced — with the non-minimal-leb128 divergence on foreign files documented rather than silently normalised. *(PARSE-03, PARSE-04)*
-  2. Every `.iamf` generated from `iamf-tools` textprotos parses without error and each descriptor is asserted against an expected value, not merely accepted. *(PARSE-07)*
+  2. Every valid `.iamf` generated from `iamf-tools` textprotos parses without error and each descriptor is asserted against an expected value, not merely accepted; fixtures whose pinned metadata explicitly marks them invalid retain an exact structural-error or validation-finding disposition. *(PARSE-07)*
   3. A file containing an unknown OBU type and unknown parameter data re-serialises with those bytes verbatim at their original byte offsets. *(PARSE-05, PARSE-06)*
   4. Parsing a Parameter Block without a `ParamDefinitionRegistry` does not compile — the registry is an argument, never hidden parser state. *(PARSE-01, PARSE-02)*
   5. `cargo fuzz run parse_sequence` and `cargo fuzz run obu_roundtrip` run from a committed corpus seeded with real `iamf-tools` output without a crash, from an independent `fuzz/` workspace whose dependencies never appear in the root lockfile; and the corpus-regression test replays every corpus entry on the stable toolchain on all four targets. *(FUZZ-01, FUZZ-02, FUZZ-03, FUZZ-04, FUZZ-05)*

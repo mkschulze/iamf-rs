@@ -29,9 +29,13 @@ below use the recommended defaults under Claude's discretion. Phase 1 decisions 
 - The Phase 2 entry point is a one-shot, whole-input parser over `&[u8]` that returns an owned
   sequence model. Incremental input, resumable parsing, and an iterator that yields a parsed prefix
   are deferred; they would be a distinct streaming capability.
-- Structural failures are transactional: truncated fields, impossible lengths, a missing governing
-  parameter definition, or an OBU payload that cannot be decoded return one located `Error` and no
-  partial public sequence. The error uses `Location::InputOffset`; malformed input never panics.
+- Structural failures are transactional: truncated fields, impossible lengths, or a governed OBU
+  payload that cannot be decoded return one located `Error` and no partial public sequence. The
+  error uses `Location::InputOffset`; malformed input never panics. **Evidence revision
+  (2026-09-09):** valid pinned fixture `test_000015` carries a Parameter Block whose ID has no
+  definition. Common OBU framing safely bounds that complete type-3 payload, so the sequence model
+  preserves it as an explicit unparsed/ungoverned Parameter Block (header plus raw payload at its
+  exact wire position), and `validate()` reports the missing governing definition.
 - Semantic invalidity remains separate from syntax. Reserved values, duplicate IDs, inconsistent
   derived fields, and unresolved descriptor references are preserved when structurally readable and
   reported by the existing explicit `validate() -> Vec<Finding>` path. Parsing never silently
@@ -41,8 +45,9 @@ below use the recommended defaults under Claude's discretion. Phase 1 decisions 
   the lower-level function signature; it may not hide inside a stateful parser object.
 - Registry lookup is not an output-order source. Duplicate parameter IDs bind to the first
   definition in bitstream order, matching the existing `by_id()` rule, while validation reports all
-  duplicates. A Parameter Block with no governing definition is a located structural error because
-  its payload shape cannot be known safely.
+  duplicates. The missing-definition preservation above is limited strictly to missing context:
+  `read_parameter_block` still requires `&ParamDefinitionRegistry`, and corrupted syntax governed
+  by a known definition remains a structural error with no raw fallback.
 - The parsed sequence must represent every sequence the Phase 1 writer can emit, including an empty
   file, a descriptors-only sequence, temporal units without a delimiter, and redundant descriptor
   copies. It must not synthesize a mandatory header or delimiter that was absent on the wire.
