@@ -72,47 +72,84 @@ check_manifest_and_lock() {
     require_file "${ROOT}/Cargo.lock"
 
     if ! awk '
-        function strip_comments(line,    i, ch, result, delimiter, escaped) {
-            for (i = 1; i <= length(line); ++i) {
-                ch = substr(line, i, 1)
-                if (delimiter != "") {
-                    if (escaped) escaped = 0
-                    else if (delimiter == "\"" && ch == "\\") escaped = 1
-                    else if (ch == delimiter) delimiter = ""
-                } else if (ch == "\"" || ch == sprintf("%c", 39)) delimiter = ch
-                else if (ch == "#") break
-                result = result ch
+        function read_string(text, start,    delimiter, multiline, content, i, quotes) {
+            delimiter = substr(text, start, 1)
+            multiline = substr(text, start, 3) == delimiter delimiter delimiter
+            content = start + (multiline ? 3 : 1)
+            if (multiline && substr(text, content, 2) == "\r\n") content += 2
+            else if (multiline && substr(text, content, 1) == "\n") ++content
+            i = content
+            while (i <= length(text)) {
+                if (delimiter == "\"" && substr(text, i, 1) == "\\") i += 2
+                else if (substr(text, i, 1) == delimiter) {
+                    if (!multiline) {
+                        string_value = substr(text, content, i - content)
+                        string_end = i + 1
+                        return 1
+                    }
+                    quotes = 0
+                    while (substr(text, i + quotes, 1) == delimiter) ++quotes
+                    if (quotes >= 3) {
+                        if (quotes > 5) return 0
+                        string_value = substr(text, content, i + quotes - 3 - content)
+                        string_end = i + quotes
+                        return 1
+                    }
+                    i += quotes
+                } else ++i
+            }
+            return 0
+        }
+        function strip_comments(text, mask_strings,    i, ch, result, value) {
+            i = 1
+            while (i <= length(text)) {
+                ch = substr(text, i, 1)
+                if (ch == "\"" || ch == sprintf("%c", 39)) {
+                    if (!read_string(text, i)) string_end = length(text) + 1
+                    value = substr(text, i, string_end - i)
+                    if (mask_strings) gsub(/[^\n]/, " ", value)
+                    result = result value
+                    i = string_end
+                } else if (ch == "#") {
+                    while (i <= length(text) && substr(text, i, 1) != "\n") ++i
+                } else { result = result ch; ++i }
             }
             return result
         }
-        function consume_array(line,    i, ch) {
-            for (i = 1; i <= length(line); ++i) {
-                ch = substr(line, i, 1)
-                if (quote != "") {
-                    if (escaped) { entry = entry ch; escaped = 0 }
-                    else if (quote == "\"" && ch == "\\") { entry = entry ch; escaped = 1 }
-                    else if (ch == quote) {
-                        if (entry == "tools/codec-fixtures") found = 1
-                        quote = ""
-                    } else entry = entry ch
-                } else if (ch == "\"" || ch == sprintf("%c", 39)) { quote = ch; entry = "" }
-                else if (ch == "]") { collecting = 0; done = 1; return }
+        function consume_array(text,    i, ch) {
+            i = 1
+            while (i <= length(text)) {
+                ch = substr(text, i, 1)
+                if (ch == "\"" || ch == sprintf("%c", 39)) {
+                    if (!read_string(text, i)) return
+                    if (string_value == "tools/codec-fixtures") found = 1
+                    i = string_end
+                } else if (ch == "]") { collecting = 0; done = 1; return }
+                else ++i
             }
         }
-        {
-            line = strip_comments($0)
-            if (collecting) { consume_array(line); next }
-            if (line ~ /^[[:space:]]*\[/) {
-                in_workspace = line ~ /^[[:space:]]*\[workspace\][[:space:]]*$/
-                next
+        { manifest = manifest $0 "\n" }
+        END {
+            # Parse complete strings across physical lines in both passes.
+            manifest = strip_comments(manifest)
+            count = split(strip_comments(manifest, 1), lines, "\n")
+            offset = 1
+            for (row = 1; row <= count; ++row) {
+                line = lines[row]
+                line_start = offset
+                offset += length(line) + 1
+                if (line ~ /^[[:space:]]*\[/) {
+                    in_workspace = line ~ /^[[:space:]]*\[workspace\][[:space:]]*$/
+                    continue
+                }
+                if (in_workspace && match(line, /^[[:space:]]*exclude[[:space:]]*=[[:space:]]*\[/)) {
+                    collecting = 1
+                    consume_array(substr(manifest, line_start + RLENGTH))
+                    break
+                }
             }
-            if (in_workspace && !done && line ~ /^[[:space:]]*exclude[[:space:]]*=[[:space:]]*\[/) {
-                sub(/^[[:space:]]*exclude[[:space:]]*=[[:space:]]*\[/, "", line)
-                collecting = 1
-                consume_array(line)
-            }
+            exit done && found ? 0 : 1
         }
-        END { exit done && found ? 0 : 1 }
     ' "${ROOT}/Cargo.toml"; then
         printf 'root [workspace] exclude must contain tools/codec-fixtures\n' >&2
         return 1
@@ -188,14 +225,14 @@ file_has_codec_import() {
         my @forbidden = split /\s+/, $ENV{FORBIDDEN_PACKAGES};
         # Visibility qualifiers naturally precede the globally located use
         # token; a preceding function/module block must not hide it.
-        while ($out =~ /(?<![A-Za-z0-9_\x80-\xff])
+        while ($out =~ /(?<![A-Za-z0-9_\x80-\xff])(?<!r\#)
             (?: use(?![A-Za-z0-9_\x80-\xff]) | extern\s+crate(?![A-Za-z0-9_\x80-\xff]) )
             ([^;]*);/gx) {
             my $statement = $1;
             for my $package (@forbidden) {
                 my $crate = $package =~ s/-/_/gr;
                 for my $branch (split /[{},]/, $statement) {
-                    if ($branch =~ /^\s*(?:::)?\s*([A-Za-z0-9_\x80-\xff]+)/ && $1 eq $crate) {
+                    if ($branch =~ /^\s*(?:::)?\s*(?:r\#)?([A-Za-z0-9_\x80-\xff]+)/ && $1 eq $crate) {
                         print $package; exit;
                     }
                 }
@@ -294,6 +331,12 @@ self_test() {
     cp -R "${SCRIPT_ROOT}/src" "${CANARY_DIR}/src"
 
     local failures=0
+    expect_import_canary "raw crate use" 'use r#opus::Encoder;' || failures=$((failures + 1))
+    expect_import_canary "raw extern crate" 'extern crate r#opus;' || failures=$((failures + 1))
+    expect_import_canary "raw normalized crate use" 'use {std::fmt, r#opusic_sys};' opusic-sys || failures=$((failures + 1))
+    expect_import_canary "raw normalized extern crate" 'extern crate r#opusic_sys as codec;' opusic-sys || failures=$((failures + 1))
+    expect_import_canary "raw keyword before real import" 'fn main() { let r#use = { use opus::Encoder; }; }' || failures=$((failures + 1))
+    expect_harmless_canary "raw use function name" 'fn opus() {} fn r#use() { opus(); }' || failures=$((failures + 1))
     expect_import_canary "compact grouped name" 'use {opus};' || failures=$((failures + 1))
     expect_import_canary "extern crate" 'extern crate opus;' || failures=$((failures + 1))
     expect_import_canary "function then import" $'fn harmless() {}\nuse opus::Encoder;' || failures=$((failures + 1))
@@ -326,6 +369,18 @@ self_test() {
     expect_workspace_canary "literal string and table comment" $'[workspace] # comment\nexclude = [\'tools/codec-fixtures\']' true || failures=$((failures + 1))
     expect_workspace_canary "trailing comment" $'[workspace]\nexclude = ["fuzz"] # "tools/codec-fixtures"' false || failures=$((failures + 1))
     expect_workspace_canary "different key" $'[workspace]\nexclude_more = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    expect_workspace_canary "multiline basic embedded path" $'[workspace]\nexclude = ["""prefix""tools/codec-fixtures""suffix"""]' false || failures=$((failures + 1))
+    expect_workspace_canary "multiline literal embedded path" $'[workspace]\nexclude = [\'\'\'prefix\'\'tools/codec-fixtures\'\'suffix\'\'\']' false || failures=$((failures + 1))
+    expect_workspace_canary "multiline path between lines" $'[workspace]\nexclude = ["""prefix\n"tools/codec-fixtures"\nsuffix"""]' false || failures=$((failures + 1))
+    expect_workspace_canary "exact multiline basic path" $'[workspace]\nexclude = ["""tools/codec-fixtures"""]' true || failures=$((failures + 1))
+    expect_workspace_canary "multiline initial newline" $'[workspace]\nexclude = ["""\ntools/codec-fixtures"""]' true || failures=$((failures + 1))
+    expect_workspace_canary "literal multiline initial newline" $'[workspace]\nexclude = [\'\'\'\ntools/codec-fixtures\'\'\']' true || failures=$((failures + 1))
+    expect_workspace_canary "four closing quotes" $'[workspace]\nexclude = ["""tools/codec-fixtures""""]' false || failures=$((failures + 1))
+    expect_workspace_canary "five closing quotes" $'[workspace]\nexclude = ["""tools/codec-fixtures"""""]' false || failures=$((failures + 1))
+    expect_workspace_canary "multiline punctuation then real entry" $'[workspace]\nexclude = ["""prefix\n# ] ""suffix""", "tools/codec-fixtures"]' true || failures=$((failures + 1))
+    expect_workspace_canary "multiline embedded path then members" $'[workspace]\nexclude = ["""prefix""tools/codec-fixtures""suffix"""]\nmembers = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    expect_workspace_canary "workspace inside multiline content" $'[package.metadata]\nnote = """\n[workspace]\nexclude = ["tools/codec-fixtures"]\n"""\n[workspace]\nexclude = ["fuzz"]' false || failures=$((failures + 1))
+    expect_workspace_canary "exclude inside multiline content" $'[workspace]\nmetadata.note = \'\'\'\nexclude = ["tools/codec-fixtures"]\n\'\'\'\nexclude = ["fuzz"]' false || failures=$((failures + 1))
     [[ "${failures}" -eq 0 ]] || return 1
     cp "${SCRIPT_ROOT}/Cargo.toml" "${CANARY_DIR}/Cargo.toml"
     cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"

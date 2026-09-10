@@ -22,6 +22,15 @@ const FORBIDDEN: &[&str] = &[
 fn lexical_import_canaries_have_the_expected_polarity() {
     let mut failures = Vec::new();
     for (source, expected) in [
+        ("use r#opus::Encoder;\n", Some("opus")),
+        ("extern crate r#opus;\n", Some("opus")),
+        ("use {std::fmt, r#opusic_sys};\n", Some("opusic-sys")),
+        ("extern crate r#opusic_sys as codec;\n", Some("opusic-sys")),
+        ("fn opus() {} fn r#use() { opus(); }\n", None),
+        (
+            "fn main() { let r#use = { use opus::Encoder; }; }\n",
+            Some("opus"),
+        ),
         ("use {opus};\n", Some("opus")),
         ("extern crate opus;\n", Some("opus")),
         ("fn harmless() {}\nuse opus::Encoder;\n", Some("opus")),
@@ -92,6 +101,54 @@ fn lexical_import_canaries_have_the_expected_polarity() {
 fn workspace_exclusion_canaries_are_limited_to_the_exclude_value() {
     let mut failures = Vec::new();
     for (manifest, accepted) in [
+        (
+            "[package.metadata]\nnote = \"\"\"\n[workspace]\nexclude = [\"tools/codec-fixtures\"]\n\"\"\"\n[workspace]\nexclude = [\"fuzz\"]\n",
+            false,
+        ),
+        (
+            "[workspace]\nmetadata.note = '''\nexclude = [\"tools/codec-fixtures\"]\n'''\nexclude = [\"fuzz\"]\n",
+            false,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"prefix\"\"tools/codec-fixtures\"\"suffix\"\"\"]\n",
+            false,
+        ),
+        (
+            "[workspace]\nexclude = ['''prefix''tools/codec-fixtures''suffix''']\n",
+            false,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"prefix\n\"tools/codec-fixtures\"\nsuffix\"\"\"]\n",
+            false,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"tools/codec-fixtures\"\"\"]\n",
+            true,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"\ntools/codec-fixtures\"\"\"]\n",
+            true,
+        ),
+        (
+            "[workspace]\nexclude = ['''\ntools/codec-fixtures''']\n",
+            true,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"tools/codec-fixtures\"\"\"\"]\n",
+            false,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"tools/codec-fixtures\"\"\"\"\"]\n",
+            false,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"prefix\n# ] \"\"suffix\"\"\", \"tools/codec-fixtures\"]\n",
+            true,
+        ),
+        (
+            "[workspace]\nexclude = [\"\"\"prefix\"\"tools/codec-fixtures\"\"suffix\"\"\"]\nmembers = [\"tools/codec-fixtures\"]\n",
+            false,
+        ),
         (
             "[workspace]\nexclude = [\n    \"fuzz\",\n    \"tools/codec-fixtures\",\n]\n",
             true,
@@ -286,27 +343,23 @@ fn assert_root_workspace_excludes_codec_fixtures(root: &Path) -> Result<(), Stri
         .map_err(|error| format!("cannot read root Cargo.toml: {error}"))?;
     let mut in_workspace = false;
     let manifest = strip_toml_comments(&manifest);
-    let mut lines = manifest.lines();
-    while let Some(line) = lines.next() {
+    let syntax = mask_toml_strings(&manifest);
+    let mut offset = 0;
+    for line in syntax.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             in_workspace = trimmed == "[workspace]";
             continue;
         }
         if in_workspace {
-            if let Some((key, value)) = trimmed.split_once('=') {
+            if let Some((key, value)) = line.split_once('=') {
                 if key.trim() == "exclude" && value.trim_start().starts_with('[') {
                     // The parser returns at this array's closing bracket, even when
                     // later members or tables mention the fixture generator.
-                    let array = value.trim_start()[1..]
-                        .chars()
-                        .chain(std::iter::once('\n'))
-                        .chain(
-                            lines
-                                .by_ref()
-                                .flat_map(|line| line.chars().chain(std::iter::once('\n'))),
-                        );
-                    if toml_array_contains_fixture(array) {
+                    let array_start = line_start + key.len() + 1 + value.find('[').unwrap() + 1;
+                    if toml_array_contains_fixture(&manifest[array_start..]) {
                         return Ok(());
                     }
                     break;
@@ -318,63 +371,105 @@ fn assert_root_workspace_excludes_codec_fixtures(root: &Path) -> Result<(), Stri
 }
 
 fn strip_toml_comments(manifest: &str) -> String {
-    let mut output = String::with_capacity(manifest.len());
-    let mut quote = None;
-    let mut escaped = false;
-    let mut comment = false;
-    for ch in manifest.chars() {
-        if comment && ch != '\n' {
-            output.push(' ');
-            continue;
-        }
-        comment = false;
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if delimiter == '"' && ch == '\\' {
-                escaped = true;
-            } else if ch == delimiter {
-                quote = None;
+    let bytes = manifest.as_bytes();
+    let mut output = bytes.to_vec();
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], b'"' | b'\'') {
+            // Use the same string boundaries as the array parser, including
+            // multiline values whose content contains comments or brackets.
+            index = toml_string_span(manifest, index).map_or(bytes.len(), |(_, _, end)| end);
+        } else if bytes[index] == b'#' {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                output[index] = b' ';
+                index += 1;
             }
-        } else if matches!(ch, '"' | '\'') {
-            quote = Some(ch);
-        } else if ch == '#' {
-            comment = true;
+        } else {
+            index += 1;
         }
-        output.push(if comment { ' ' } else { ch });
     }
-    output
+    String::from_utf8(output).expect("blanking TOML comments preserves UTF-8")
 }
 
-fn toml_array_contains_fixture(array: impl Iterator<Item = char>) -> bool {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut entry = String::new();
-    let mut found = false;
-    for ch in array {
-        if let Some(delimiter) = quote {
-            if escaped {
-                // Escaped entries are not needed for this literal path. Keep
-                // the escape so a different path cannot accidentally match.
-                entry.push(ch);
-                escaped = false;
-            } else if delimiter == '"' && ch == '\\' {
-                entry.push(ch);
-                escaped = true;
-            } else if ch == delimiter {
-                found |= entry == "tools/codec-fixtures";
-                quote = None;
-            } else {
-                entry.push(ch);
+fn mask_toml_strings(manifest: &str) -> String {
+    let bytes = manifest.as_bytes();
+    let mut output = bytes.to_vec();
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], b'"' | b'\'') {
+            let end = toml_string_span(manifest, index).map_or(bytes.len(), |(_, _, end)| end);
+            for byte in &mut output[index..end] {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
             }
-        } else if matches!(ch, '"' | '\'') {
-            quote = Some(ch);
-            entry.clear();
-        } else if ch == ']' {
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    String::from_utf8(output).expect("masking complete TOML strings preserves UTF-8")
+}
+
+fn toml_array_contains_fixture(array: &str) -> bool {
+    let bytes = array.as_bytes();
+    let mut index = 0;
+    let mut found = false;
+    while index < bytes.len() {
+        if matches!(bytes[index], b'"' | b'\'') {
+            let Some((start, end, next)) = toml_string_span(array, index) else {
+                return false;
+            };
+            found |= &array[start..end] == "tools/codec-fixtures";
+            index = next;
+        } else if bytes[index] == b']' {
             return found;
+        } else {
+            index += 1;
         }
     }
     false
+}
+
+// Returns the content range and first byte after one complete TOML string.
+// Escape spellings remain literal; only the initial newline of a multiline
+// string is trimmed. One or two quotes before its closing triple are content.
+fn toml_string_span(source: &str, start: usize) -> Option<(usize, usize, usize)> {
+    let bytes = source.as_bytes();
+    let delimiter = *bytes.get(start)?;
+    if !matches!(delimiter, b'"' | b'\'') {
+        return None;
+    }
+    let multiline = bytes.get(start..start + 3) == Some(&[delimiter; 3]);
+    let mut content = start + if multiline { 3 } else { 1 };
+    if multiline {
+        if bytes[content..].starts_with(b"\r\n") {
+            content += 2;
+        } else if bytes.get(content) == Some(&b'\n') {
+            content += 1;
+        }
+    }
+    let mut index = content;
+    while index < bytes.len() {
+        if delimiter == b'"' && bytes[index] == b'\\' {
+            index += 2;
+        } else if bytes[index] == delimiter {
+            if !multiline {
+                return Some((content, index, index + 1));
+            }
+            let quotes = bytes[index..]
+                .iter()
+                .take_while(|byte| **byte == delimiter)
+                .count();
+            if quotes >= 3 {
+                return (quotes <= 5).then_some((content, index + quotes - 3, index + quotes));
+            }
+            index += quotes;
+        } else {
+            index += 1;
+        }
+    }
+    None
 }
 
 fn assert_lock_has_no_codec_packages(root: &Path) -> Result<(), String> {
@@ -458,8 +553,16 @@ fn imported_codec(source: &str) -> Option<&'static str> {
             continue;
         }
         let start = index;
+        let raw_identifier = bytes[index..].starts_with(b"r#");
+        if raw_identifier {
+            index += 2;
+        }
         while index < bytes.len() && is_identifier_byte(bytes[index]) {
             index += 1;
+        }
+        // `r#use` and `r#extern` are identifiers, not import keywords.
+        if raw_identifier {
+            continue;
         }
         let mut rest = &source[index..];
         match &source[start..index] {
@@ -489,6 +592,7 @@ fn imported_codec(source: &str) -> Option<&'static str> {
             for branch in statement.split(['{', ',', '}']) {
                 let branch = branch.trim_start();
                 let branch = branch.strip_prefix("::").unwrap_or(branch).trim_start();
+                let branch = branch.strip_prefix("r#").unwrap_or(branch);
                 let end = branch
                     .as_bytes()
                     .iter()
