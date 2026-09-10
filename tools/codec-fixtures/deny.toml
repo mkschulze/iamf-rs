@@ -1,0 +1,39 @@
+# Scoped policy for iamf-codec-fixtures.
+#
+# This configuration governs only the excluded integration-test package and
+# its isolated codec dependency graph. It mirrors the repository policy so
+# codec fixtures are checked with the same graph, advisory, ban, source, and
+# licence requirements without broadening the shipping workspace policy.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+]
+unused-allowed-license = "allow"
+confidence-threshold = 0.93
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
