@@ -113,10 +113,14 @@ fn load_opus_corpus() -> OpusCorpus {
     assert_eq!(order, canonical.iter().map(String::as_str).collect::<Vec<_>>());
     let mut actual = std::fs::read_dir(opus_corpus())
         .expect("committed Opus corpus directory")
-        .filter_map(|entry| {
-            let name = entry.ok()?.file_name().into_string().ok()?;
-            (name.starts_with("packet-") && name.ends_with(".bin")).then_some(name)
+        .map(|entry| {
+            entry
+                .expect("Opus corpus directory entry")
+                .file_name()
+                .into_string()
+                .expect("Opus corpus filenames must be UTF-8")
         })
+        .filter(|name| name.starts_with("packet-") && name.ends_with(".bin"))
         .collect::<Vec<_>>();
     actual.sort();
     assert_eq!(actual, canonical, "Opus packet file set");
