@@ -77,21 +77,29 @@ fn load_opus_corpus() -> OpusCorpus {
     let number = |key: &str| -> usize {
         fields
             .get(key)
-            .unwrap_or_else(|| panic!("Opus manifest field {key}"))
+            .expect("Opus manifest field")
             .parse()
-            .unwrap_or_else(|_| panic!("numeric Opus manifest field {key}"))
+            .expect("numeric Opus manifest field")
     };
     let lookahead = number("L");
     let packets = number("P");
     let end_trim = number("E");
     let source_frames = number("S");
     assert!(lookahead > 0, "Opus lookahead must be nonzero");
-    assert_eq!(packets, (source_frames + lookahead).div_ceil(960));
+    let total = source_frames
+        .checked_add(lookahead)
+        .expect("Opus source plus lookahead overflow");
+    assert_eq!(packets, total.div_ceil(960));
     assert!(
         packets >= 2,
         "Opus corpus must contain at least two packets"
     );
-    assert_eq!(end_trim, packets * 960 - lookahead - source_frames);
+    let padded = packets.checked_mul(960).expect("Opus padded length overflow");
+    let expected_end_trim = padded
+        .checked_sub(lookahead)
+        .and_then(|value| value.checked_sub(source_frames))
+        .expect("Opus trim arithmetic underflow");
+    assert_eq!(end_trim, expected_end_trim);
     assert!(end_trim > 0 && end_trim < 960);
     assert_ne!(end_trim, lookahead);
 
@@ -144,7 +152,7 @@ fn load_opus_corpus() -> OpusCorpus {
                 at_start: lookahead as u32,
                 at_end: 0,
             })
-        } else if index + 1 == packets {
+        } else if index.checked_add(1).expect("Opus packet index overflow") == packets {
             Some(Trimming {
                 at_start: 0,
                 at_end: end_trim as u32,
@@ -161,7 +169,10 @@ fn load_opus_corpus() -> OpusCorpus {
     let digest = format!("{:x}", Sha256::digest(&expected_bytes));
     assert_eq!(fields.get("sha256.expected.s16le"), Some(&digest));
     let expected = pcm(&expected_bytes, false);
-    assert_eq!(expected.len(), source_frames * 2, "expected stereo frames");
+    let expected_samples = source_frames
+        .checked_mul(2)
+        .expect("Opus stereo sample length overflow");
+    assert_eq!(expected.len(), expected_samples, "expected stereo frames");
     OpusCorpus {
         lookahead,
         packets,
@@ -368,7 +379,7 @@ fn opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output(
     let corpus = load_opus_corpus();
     assert_eq!(corpus.units.len(), corpus.packets);
     assert_eq!(
-        corpus.units[0].trimming,
+        corpus.units.first().expect("Opus packets").trimming,
         Some(Trimming {
             at_start: corpus.lookahead as u32,
             at_end: 0
