@@ -107,7 +107,23 @@ fn load_opus_corpus() -> OpusCorpus {
         .split(',')
         .map(str::trim)
         .collect::<Vec<_>>();
-    assert_eq!(order.len(), packets);
+    let canonical = (0..packets)
+        .map(|index| format!("packet-{index:03}.bin"))
+        .collect::<Vec<_>>();
+    assert_eq!(order, canonical.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut actual = std::fs::read_dir(opus_corpus())
+        .expect("committed Opus corpus directory")
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            (name.starts_with("packet-") && name.ends_with(".bin")).then_some(name)
+        })
+        .collect::<Vec<_>>();
+    actual.sort();
+    assert_eq!(actual, canonical, "Opus packet file set");
+    for name in &actual {
+        let bytes = opus_artifact(name);
+        assert!(!bytes.windows(8).any(|window| window == b"OpusHead"), "{name}");
+    }
     let mut units = Vec::with_capacity(packets);
     for (index, name) in order.iter().enumerate() {
         let bytes = opus_artifact(name);
