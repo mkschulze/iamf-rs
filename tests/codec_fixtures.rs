@@ -94,6 +94,30 @@ fn validate_opus_metadata(fields: &BTreeMap<String, String>) -> Result<(), Strin
     Ok(())
 }
 
+fn validate_opus_inventory(actual: &[String], required: &[String]) -> Result<(), String> {
+    if actual == required {
+        Ok(())
+    } else {
+        Err("Opus corpus inventory mismatch".to_owned())
+    }
+}
+
+fn validate_opus_packet(bytes: &[u8], expected_len: usize) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("Opus packet is empty".to_owned());
+    }
+    if bytes.windows(8).any(|window| window == b"OpusHead") {
+        return Err("OpusHead marker in raw packet".to_owned());
+    }
+    if bytes.windows(4).any(|window| window == b"OggS") {
+        return Err("OggS marker in raw packet".to_owned());
+    }
+    if bytes.len() != expected_len {
+        return Err("Opus packet length mismatch".to_owned());
+    }
+    Ok(())
+}
+
 #[allow(clippy::expect_used)] // A malformed committed corpus is a hard test failure.
 fn load_opus_corpus() -> OpusCorpus {
     let text = String::from_utf8(opus_artifact("MANIFEST.md")).expect("UTF-8 Opus manifest");
@@ -133,12 +157,6 @@ fn load_opus_corpus() -> OpusCorpus {
     assert!(end_trim > 0 && end_trim < 960);
     assert_ne!(end_trim, lookahead);
 
-    for (key, expected) in fields.iter().filter(|(key, _)| key.starts_with("sha256.")) {
-        let name = key.strip_prefix("sha256.").expect("digest key prefix");
-        let digest = format!("{:x}", Sha256::digest(opus_artifact(name)));
-        assert_eq!(&digest, expected, "{name}");
-    }
-
     let order = fields
         .get("packet_order")
         .expect("Opus packet order")
@@ -161,7 +179,7 @@ fn load_opus_corpus() -> OpusCorpus {
         .filter(|name| name.starts_with("packet-") && name.ends_with(".bin"))
         .collect::<Vec<_>>();
     actual.sort();
-    assert_eq!(actual, canonical, "Opus packet file set");
+    validate_opus_inventory(&actual, &canonical).expect("Opus packet file set");
     let mut inventory = std::fs::read_dir(opus_corpus())
         .expect("committed Opus corpus directory")
         .map(|entry| {
@@ -176,24 +194,38 @@ fn load_opus_corpus() -> OpusCorpus {
     let mut required = vec!["MANIFEST.md".to_owned(), "expected.s16le".to_owned(), "source.s16le".to_owned()];
     required.extend(canonical.iter().cloned());
     required.sort();
-    assert_eq!(inventory, required, "Opus corpus inventory");
+    validate_opus_inventory(&inventory, &required).expect("Opus corpus inventory");
+    let mut digest_names = vec!["source.s16le", "expected.s16le"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    digest_names.extend(canonical.iter().cloned());
+    for name in digest_names {
+        let digest_key = format!("sha256.{name}");
+        let expected = fields
+            .get(&digest_key)
+            .expect("required Opus digest manifest field");
+        let digest = format!("{:x}", Sha256::digest(opus_artifact(&name)));
+        assert_eq!(&digest, expected, "{name}");
+    }
     for name in &actual {
         let bytes = opus_artifact(name);
-        assert!(!bytes.windows(8).any(|window| window == b"OpusHead"), "{name}");
-        assert!(!bytes.windows(4).any(|window| window == b"OggS"), "{name}");
-    }
-    let mut units = Vec::with_capacity(packets);
-    for (index, name) in order.iter().enumerate() {
-        let bytes = opus_artifact(name);
-        assert!(!bytes.is_empty(), "Opus packet {name} must be nonempty");
-        assert!(!bytes.windows(8).any(|window| window == b"OpusHead"));
-        assert!(!bytes.windows(4).any(|window| window == b"OggS"));
         let packet_len = fields
             .get(&format!("packet_len.{name}"))
             .expect("Opus packet length manifest field")
             .parse::<usize>()
             .expect("numeric Opus packet length");
-        assert_eq!(bytes.len(), packet_len, "{name} length");
+        validate_opus_packet(&bytes, packet_len).expect("valid Opus packet");
+    }
+    let mut units = Vec::with_capacity(packets);
+    for (index, name) in order.iter().enumerate() {
+        let bytes = opus_artifact(name);
+        let packet_len = fields
+            .get(&format!("packet_len.{name}"))
+            .expect("Opus packet length manifest field")
+            .parse::<usize>()
+            .expect("numeric Opus packet length");
+        validate_opus_packet(&bytes, packet_len).expect("valid Opus packet");
         let digest = format!("{:x}", Sha256::digest(&bytes));
         assert_eq!(
             fields.get(&format!("sha256.{name}")),
@@ -484,6 +516,20 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     ]);
     assert!(validate_opus_metadata(&fields).is_err());
     fields.insert("sha256.source.s16le".to_owned(), "digest".to_owned());
-    fields.insert("sample_rate".to_owned(), "44100".to_owned());
+    for key in ["sample_rate", "channels", "frame_samples"] {
+        fields.insert(key.to_owned(), "wrong".to_owned());
+        assert!(validate_opus_metadata(&fields).is_err(), "{key}");
+        fields.insert(key.to_owned(), match key {
+            "sample_rate" => "48000",
+            "channels" => "2",
+            _ => "960",
+        }.to_owned());
+    }
+    fields.remove("sha256.expected.s16le");
     assert!(validate_opus_metadata(&fields).is_err());
+    assert!(validate_opus_inventory(&["packet-000.bin".to_owned()], &["packet-000.bin".to_owned(), "packet-001.bin".to_owned()]).is_err());
+    assert!(validate_opus_packet(&[], 0).is_err());
+    assert!(validate_opus_packet(b"OpusHead", 8).is_err());
+    assert!(validate_opus_packet(b"OggS", 4).is_err());
+    assert!(validate_opus_packet(b"raw", 4).is_err());
 }
