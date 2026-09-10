@@ -11,7 +11,7 @@
 # re-run the byte-identity matrix in the same change.
 [toolchain]
 channel = "1.85.0"
-components = ["clippy", "rustfmt"]
+components = ["clippy", "rustfmt", "rust-analyzer"]
 targets = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
