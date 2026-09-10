@@ -24,6 +24,7 @@ ROOT="${SCRIPT_ROOT}"
 SELF_TEST=false
 CANARY_DIR=""
 CANARY_BASE=""
+FOUND_PACKAGE=""
 case "${1:-}" in
     '') ;;
     --root)
@@ -98,15 +99,55 @@ check_src_imports() {
         printf 'root src must be a non-symlink directory: %s\n' "${ROOT}/src" >&2
         return 1
     }
-    local package pattern match
-    for package in "${FORBIDDEN[@]}"; do
-        pattern="^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+(\\{[[:space:]]*)?(::)?${package}::|^[[:space:]]*extern[[:space:]]+crate[[:space:]]+${package}([[:space:];]|$)"
-        match="$(grep -rEn --include='*.rs' "${pattern}" "${ROOT}/src" || true)"
-        if [[ -n "${match}" ]]; then
-            printf 'src import must not name codec package %s:\n%s\n' "${package}" "${match}" >&2
+    local file
+    while IFS= read -r -d '' file; do
+        if file_has_codec_import "${file}"; then
+            printf 'src import must not name codec package %s: %s\n' "${FOUND_PACKAGE}" "${file}" >&2
             return 1
         fi
-    done
+    done < <(find "${ROOT}/src" -type f -name '*.rs' -print0)
+}
+
+file_has_codec_import() {
+    local file="$1" package line code before_block before_line trimmed use_pattern extern_pattern
+    local in_block=0
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        if [[ "${in_block}" -eq 1 ]]; then
+            if [[ "${line}" != *'*/'* ]]; then
+                continue
+            fi
+            line="${line#*\*/}"
+            in_block=0
+        fi
+        code="${line}"
+        if [[ "${code}" == *'/*'* ]]; then
+            before_block="${code%%'/*'*}"
+            if [[ "${code}" == *'//'* ]]; then
+                before_line="${code%%'//'*}"
+                if [[ ${#before_line} -le ${#before_block} ]]; then
+                    code="${before_line}"
+                else
+                    code="${before_block}"
+                    [[ "${line}" == *'*/'* ]] || in_block=1
+                fi
+            else
+                code="${before_block}"
+                [[ "${line}" == *'*/'* ]] || in_block=1
+            fi
+        elif [[ "${code}" == *'//'* ]]; then
+            code="${code%%'//'*}"
+        fi
+        trimmed="${code#"${code%%[![:space:]]*}"}"
+        for package in "${FORBIDDEN[@]}"; do
+            use_pattern="^(pub(\\([^)]*\\))?[[:space:]]+)?use[[:space:]]+(::)?${package}([[:space:]:;]|$)"
+            extern_pattern="^extern[[:space:]]+crate[[:space:]]+${package}([[:space:];]|$)"
+            if [[ "${trimmed}" =~ ${use_pattern} ]] || [[ "${trimmed}" =~ ${extern_pattern} ]]; then
+                FOUND_PACKAGE="${package}"
+                return 0
+            fi
+        done
+    done < "${file}"
+    return 1
 }
 
 check_normal_graph() {
@@ -179,6 +220,33 @@ self_test() {
         return 1
     elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
         printf 'self-test failed: src import canary error was not specific:\n%s\n' "${output}" >&2
+        return 1
+    fi
+
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+    printf '\nuse opus;\n' >> "${CANARY_DIR}/src/lib.rs"
+    if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
+        printf 'self-test failed: simple src import canary passed\n' >&2
+        return 1
+    elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
+        printf 'self-test failed: simple import canary error was not specific:\n%s\n' "${output}" >&2
+        return 1
+    fi
+
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+    printf '\nuse opus as codec;\n' >> "${CANARY_DIR}/src/lib.rs"
+    if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
+        printf 'self-test failed: aliased src import canary passed\n' >&2
+        return 1
+    elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
+        printf 'self-test failed: aliased import canary error was not specific:\n%s\n' "${output}" >&2
+        return 1
+    fi
+
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+    printf '\n/* use opus::Encoder; */\n' >> "${CANARY_DIR}/src/lib.rs"
+    if ! output="$(ROOT="${CANARY_DIR}" check_src_imports 2>&1)"; then
+        printf 'self-test failed: block-comment canary was treated as an import:\n%s\n' "${output}" >&2
         return 1
     fi
 

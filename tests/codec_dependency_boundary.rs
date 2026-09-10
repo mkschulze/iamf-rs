@@ -22,7 +22,7 @@ fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
         "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nopus = \"0.4\"\n",
         "pub const CODEC_ID_OPUS: u32 = 1;\n",
     );
-    let dependency_error = assert_boundary(canary.path())
+    let dependency_error = assert_manifest_and_src_boundary(canary.path())
         .expect_err("a root [dependencies] opus entry must be rejected")
         .to_string();
     assert!(dependency_error.contains("[dependencies]"), "{dependency_error}");
@@ -34,18 +34,110 @@ fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
         "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nthiserror = \"2\"\n",
         "use opus::Encoder;\n",
     );
-    let import_error = assert_boundary(canary.path())
+    let import_error = assert_manifest_and_src_boundary(canary.path())
         .expect_err("a codec import from src must be rejected")
         .to_string();
     assert!(import_error.contains("src import"), "{import_error}");
     assert!(import_error.contains("opus"), "{import_error}");
+
+    for (kind, source) in [
+        ("simple-import", "use opus;\n"),
+        ("aliased-import", "use opus as codec;\n"),
+        ("block-comment", "/* use opus::Encoder; */\n"),
+    ] {
+        let canary = TemporaryCanary::new(kind);
+        write_canary(
+            canary.path(),
+            "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nthiserror = \"2\"\n",
+            source,
+        );
+        let result = assert_manifest_and_src_boundary(canary.path());
+        if kind == "block-comment" {
+            result.expect("a block comment mentioning a codec must remain harmless");
+        } else {
+            let error = result
+                .expect_err("a simple or aliased codec import must be rejected")
+                .to_string();
+            assert!(error.contains("src import"), "{error}");
+            assert!(error.contains("opus"), "{error}");
+        }
+    }
+
+    let canary = TemporaryCanary::new("workspace-exclude");
+    write_canary(
+        canary.path(),
+        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\nmembers = [\".\"]\n",
+        "pub const CODEC_ID_OPUS: u32 = 1;\n",
+    );
+    let workspace_error = assert_root_workspace_excludes_codec_fixtures(canary.path())
+        .expect_err("the root workspace must exclude the codec fixture generator")
+        .to_string();
+    assert!(workspace_error.contains("[workspace] exclude"), "{workspace_error}");
+
+    let canary = TemporaryCanary::new("lockfile");
+    write_canary(
+        canary.path(),
+        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\nexclude = [\"tools/codec-fixtures\"]\n",
+        "pub const CODEC_ID_OPUS: u32 = 1;\n",
+    );
+    fs::write(canary.path().join("Cargo.lock"), "[[package]]\nname = \"opus\"\n")
+        .expect("write codec lockfile canary");
+    let lock_error = assert_lock_has_no_codec_packages(canary.path())
+        .expect_err("the root lockfile must not resolve opus")
+        .to_string();
+    assert!(lock_error.contains("Cargo.lock"), "{lock_error}");
+    assert!(lock_error.contains("opus"), "{lock_error}");
 }
 
 fn assert_boundary(root: &Path) -> Result<(), String> {
+    assert_root_workspace_excludes_codec_fixtures(root)?;
+    assert_lock_has_no_codec_packages(root)?;
+    assert_manifest_and_src_boundary(root)
+}
+
+fn assert_manifest_and_src_boundary(root: &Path) -> Result<(), String> {
     let manifest = fs::read_to_string(root.join("Cargo.toml"))
         .map_err(|error| format!("cannot read root Cargo.toml: {error}"))?;
     assert_manifest_has_no_codec_dependencies(&manifest)?;
     assert_src_has_no_codec_imports(&root.join("src"))
+}
+
+fn assert_root_workspace_excludes_codec_fixtures(root: &Path) -> Result<(), String> {
+    let manifest = fs::read_to_string(root.join("Cargo.toml"))
+        .map_err(|error| format!("cannot read root Cargo.toml: {error}"))?;
+    let mut in_workspace = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_workspace = trimmed == "[workspace]";
+            continue;
+        }
+        if in_workspace && trimmed.starts_with("exclude") && trimmed.contains("\"tools/codec-fixtures\"") {
+            return Ok(());
+        }
+    }
+    Err("root [workspace] exclude must contain tools/codec-fixtures".to_owned())
+}
+
+fn assert_lock_has_no_codec_packages(root: &Path) -> Result<(), String> {
+    let lock = fs::read_to_string(root.join("Cargo.lock"))
+        .map_err(|error| format!("cannot read root Cargo.lock: {error}"))?;
+    let mut in_package = false;
+    for line in lock.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[package]]" {
+            in_package = true;
+            continue;
+        }
+        if in_package {
+            for codec in FORBIDDEN {
+                if trimmed == format!("name = \"{codec}\"") {
+                    return Err(format!("root Cargo.lock must not contain codec package `{codec}`"));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn assert_manifest_has_no_codec_dependencies(manifest: &str) -> Result<(), String> {
@@ -85,13 +177,11 @@ fn assert_src_has_no_codec_imports(src: &Path) -> Result<(), String> {
         }
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        for line in source.lines() {
-            let code = line.split_once("//").map_or(line, |(code, _)| code).trim_start();
+        for line in strip_comments(&source).lines() {
+            let code = line.trim_start();
             for codec in FORBIDDEN {
-                let use_import = code.starts_with("use ")
-                    && (code[4..].starts_with(&format!("{codec}::"))
-                        || code[4..].starts_with(&format!("::{codec}::")));
-                let extern_crate = code.starts_with(&format!("extern crate {codec}"));
+                let use_import = import_starts_with_codec(code, "use", codec);
+                let extern_crate = import_starts_with_codec(code, "extern crate", codec);
                 if use_import || extern_crate {
                     return Err(format!("src import must not name codec `{codec}` ({})", path.display()));
                 }
@@ -99,6 +189,53 @@ fn assert_src_has_no_codec_imports(src: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn import_starts_with_codec(code: &str, keyword: &str, codec: &str) -> bool {
+    let Some(rest) = code.strip_prefix(keyword).and_then(|rest| rest.strip_prefix(char::is_whitespace)) else {
+        return false;
+    };
+    let rest = rest.trim_start().strip_prefix("::").unwrap_or(rest.trim_start());
+    let Some(after_codec) = rest.strip_prefix(codec) else {
+        return false;
+    };
+    matches!(after_codec.chars().next(), None | Some(':' | ';'))
+        || after_codec.chars().next().is_some_and(char::is_whitespace)
+}
+
+fn strip_comments(source: &str) -> String {
+    let mut output = String::with_capacity(source.len());
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    let mut block_depth = 0_u32;
+    while index < bytes.len() {
+        let pair = bytes.get(index..index.saturating_add(2));
+        if block_depth > 0 {
+            if pair == Some(b"/*") {
+                block_depth += 1;
+                index += 2;
+            } else if pair == Some(b"*/") {
+                block_depth -= 1;
+                index += 2;
+            } else {
+                if bytes[index] == b'\n' {
+                    output.push('\n');
+                }
+                index += 1;
+            }
+        } else if pair == Some(b"/*") {
+            block_depth = 1;
+            index += 2;
+        } else if pair == Some(b"//") {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+        } else {
+            output.push(bytes[index] as char);
+            index += 1;
+        }
+    }
+    output
 }
 
 fn write_canary(root: &Path, manifest: &str, source: &str) {
