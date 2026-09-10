@@ -43,6 +43,8 @@ fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
     for (kind, source) in [
         ("simple-import", "use opus;\n"),
         ("aliased-import", "use opus as codec;\n"),
+        ("grouped-import", "use { opus::Encoder };\n"),
+        ("inline-block-import", "/* comment */ use opus;\n"),
         ("block-comment", "/* use opus::Encoder; */\n"),
     ] {
         let canary = TemporaryCanary::new(kind);
@@ -196,6 +198,7 @@ fn import_starts_with_codec(code: &str, keyword: &str, codec: &str) -> bool {
         return false;
     };
     let rest = rest.trim_start().strip_prefix("::").unwrap_or(rest.trim_start());
+    let rest = rest.strip_prefix('{').map(str::trim_start).unwrap_or(rest);
     let Some(after_codec) = rest.strip_prefix(codec) else {
         return false;
     };

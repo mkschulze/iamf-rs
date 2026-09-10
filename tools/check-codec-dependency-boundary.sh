@@ -109,7 +109,7 @@ check_src_imports() {
 }
 
 file_has_codec_import() {
-    local file="$1" package line code before_block before_line trimmed use_pattern extern_pattern
+    local file="$1" package line code before_block before_line after_block trimmed use_pattern extern_pattern
     local in_block=0
     while IFS= read -r line || [[ -n "${line}" ]]; do
         if [[ "${in_block}" -eq 1 ]]; then
@@ -132,14 +132,19 @@ file_has_codec_import() {
                 fi
             else
                 code="${before_block}"
-                [[ "${line}" == *'*/'* ]] || in_block=1
+                if [[ "${line}" == *'*/'* ]]; then
+                    after_block="${line#*\*/}"
+                    code+="${after_block}"
+                else
+                    in_block=1
+                fi
             fi
         elif [[ "${code}" == *'//'* ]]; then
             code="${code%%'//'*}"
         fi
         trimmed="${code#"${code%%[![:space:]]*}"}"
         for package in "${FORBIDDEN[@]}"; do
-            use_pattern="^(pub(\\([^)]*\\))?[[:space:]]+)?use[[:space:]]+(::)?${package}([[:space:]:;]|$)"
+            use_pattern="^(pub(\\([^)]*\\))?[[:space:]]+)?use[[:space:]]+(\\{[[:space:]]*)?(::)?${package}([[:space:]:;]|$)"
             extern_pattern="^extern[[:space:]]+crate[[:space:]]+${package}([[:space:];]|$)"
             if [[ "${trimmed}" =~ ${use_pattern} ]] || [[ "${trimmed}" =~ ${extern_pattern} ]]; then
                 FOUND_PACKAGE="${package}"
@@ -240,6 +245,26 @@ self_test() {
         return 1
     elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
         printf 'self-test failed: aliased import canary error was not specific:\n%s\n' "${output}" >&2
+        return 1
+    fi
+
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+    printf '\nuse { opus::Encoder };\n' >> "${CANARY_DIR}/src/lib.rs"
+    if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
+        printf 'self-test failed: grouped src import canary passed\n' >&2
+        return 1
+    elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
+        printf 'self-test failed: grouped import canary error was not specific:\n%s\n' "${output}" >&2
+        return 1
+    fi
+
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+    printf '\n/* comment */ use opus;\n' >> "${CANARY_DIR}/src/lib.rs"
+    if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
+        printf 'self-test failed: post-comment src import canary passed\n' >&2
+        return 1
+    elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
+        printf 'self-test failed: post-comment import canary error was not specific:\n%s\n' "${output}" >&2
         return 1
     fi
 
