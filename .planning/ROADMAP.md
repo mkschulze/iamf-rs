@@ -112,7 +112,7 @@ Plans:
 - [x] 03-02: Codec-neutral fixture adapter, excluded FLAC fixture tooling, fixed-block corpus, and FLAC conformance
 - [x] 03-03: Typed faithful Opus configuration, sample-rate rejection, and checked roll derivation
 - [x] 03-04: Excluded Opus fixture generation with measured lookahead, exact packet count, and standalone decode oracle
-- [ ] 03-05: Opus packet/trim integration through the shared conformance gate
+- [x] 03-05: Opus packet/trim integration through the shared conformance gate
 - [ ] 03-06: Shipping dependency-boundary canaries and scoped codec-tool licence policy
 - [ ] 03-07: Offline parser/property/fuzz regression closure and immutable artifact proof
 - [ ] 03-08: Four-target CI and pinned reference-evidence closure

@@ -4,17 +4,17 @@ milestone: v1
 current_phase: 03
 current_phase_name: FLAC and Opus Framing
 status: ready_to_execute
-stopped_at: Phase 03 Plan 04 complete; ready to execute 03-05
+stopped_at: Phase 03 Plan 05 complete; ready to execute 03-06
 last_updated: "2026-09-10T03:00:00Z"
 last_activity: 2026-09-10
-last_activity_desc: Phase 03 Plan 04 complete — measured Opus corpus and standalone decode oracle verified
-state_head: 1f6ca8c
+last_activity_desc: Phase 03 Plan 05 complete — Opus packets and asymmetric trims now traverse the shared conformance gate
+state_head: da2d7ef
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 25
-  completed_plans: 21
-  percent: 84
+  completed_plans: 22
+  percent: 88
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 03 (FLAC and Opus Framing) — READY TO EXECUTE
-Plan: 4 of 8
-Status: Plan 03-04 complete; ready for 03-05
-Last activity: 2026-09-10 — measured Opus corpus and standalone decode oracle verified
+Plan: 5 of 8
+Status: Plan 03-05 complete; ready for 03-06
+Last activity: 2026-09-10 — Opus packets and asymmetric trims traverse the shared conformance gate
 
-Progress: [█████░░░░░] 50% of Phase 03 plans
+Progress: [██████░░░░] 62% of Phase 03 plans
 
 ## Performance Metrics
 
@@ -129,7 +129,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute Phase 3 Plan 03-05: Opus packet/trim integration through the shared conformance gate.
+- Execute Phase 3 Plan 03-06: Shipping dependency-boundary canaries and scoped codec-tool licence policy.
 
 ### Blockers/Concerns
 
@@ -156,5 +156,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-10T03:00:00Z
-Stopped at: Phase 03 Plan 04 complete; ready to execute 03-05
-Resume file: .planning/phases/03-flac-and-opus-framing/03-05-PLAN.md
+Stopped at: Phase 03 Plan 05 complete; ready to execute 03-06
+Resume file: .planning/phases/03-flac-and-opus-framing/03-06-PLAN.md
