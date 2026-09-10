@@ -46,6 +46,14 @@ fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
         ("grouped-import", "use { opus::Encoder };\n"),
         ("inline-block-import", "/* comment */ use opus;\n"),
         ("block-comment", "/* use opus::Encoder; */\n"),
+        ("grouped-branch", "use { std::fmt, opus::Encoder };\n"),
+        ("grouped-name", "use { opus };\n"),
+        ("multiline-group", "use {\n    std::fmt,\n    opus::Encoder,\n};\n"),
+        ("visible-import", "pub use opus::Encoder;\n"),
+        ("hyphen-normalized", "use opusic_sys::Encoder;\n"),
+        ("raw-string", "const TOKEN: &str = r#\"use opus::Encoder;\"#;\n"),
+        ("string-then-import", "const TOKEN: &str = \"/*\"; use opus::Encoder;\n"),
+        ("two-comments-then-import", "/* one */ /* two */ use opus;\n"),
     ] {
         let canary = TemporaryCanary::new(kind);
         write_canary(
@@ -54,7 +62,7 @@ fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
             source,
         );
         let result = assert_manifest_and_src_boundary(canary.path());
-        if kind == "block-comment" {
+        if matches!(kind, "block-comment" | "raw-string") {
             result.expect("a block comment mentioning a codec must remain harmless");
         } else {
             let error = result
@@ -75,6 +83,24 @@ fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
         .expect_err("the root workspace must exclude the codec fixture generator")
         .to_string();
     assert!(workspace_error.contains("[workspace] exclude"), "{workspace_error}");
+
+    let canary = TemporaryCanary::new("workspace-multiline");
+    write_canary(
+        canary.path(),
+        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\nexclude = [\n    \"fuzz\",\n    \"tools/codec-fixtures\",\n]\n",
+        "pub const CODEC_ID_OPUS: u32 = 1;\n",
+    );
+    assert_root_workspace_excludes_codec_fixtures(canary.path())
+        .expect("a multiline workspace exclusion must be accepted");
+
+    let canary = TemporaryCanary::new("workspace-comment");
+    write_canary(
+        canary.path(),
+        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n# exclude = [\"tools/codec-fixtures\"]\n",
+        "pub const CODEC_ID_OPUS: u32 = 1;\n",
+    );
+    assert_root_workspace_excludes_codec_fixtures(canary.path())
+        .expect_err("a comment-only workspace exclusion must not count");
 
     let canary = TemporaryCanary::new("lockfile");
     write_canary(
@@ -108,15 +134,24 @@ fn assert_root_workspace_excludes_codec_fixtures(root: &Path) -> Result<(), Stri
     let manifest = fs::read_to_string(root.join("Cargo.toml"))
         .map_err(|error| format!("cannot read root Cargo.toml: {error}"))?;
     let mut in_workspace = false;
+    let mut exclude = String::new();
+    let mut collecting = false;
     for line in manifest.lines() {
-        let trimmed = line.trim();
+        let trimmed = line.split('#').next().unwrap_or_default().trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             in_workspace = trimmed == "[workspace]";
             continue;
         }
-        if in_workspace && trimmed.starts_with("exclude") && trimmed.contains("\"tools/codec-fixtures\"") {
-            return Ok(());
+        if in_workspace && (collecting || trimmed.starts_with("exclude")) {
+            collecting = true;
+            exclude.push_str(trimmed);
+            if trimmed.contains(']') {
+                break;
+            }
         }
+    }
+    if exclude.contains("\"tools/codec-fixtures\"") {
+        return Ok(());
     }
     Err("root [workspace] exclude must contain tools/codec-fixtures".to_owned())
 }
@@ -179,34 +214,39 @@ fn assert_src_has_no_codec_imports(src: &Path) -> Result<(), String> {
         }
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        for line in strip_comments(&source).lines() {
-            let code = line.trim_start();
-            for codec in FORBIDDEN {
-                let use_import = import_starts_with_codec(code, "use", codec);
-                let extern_crate = import_starts_with_codec(code, "extern crate", codec);
-                if use_import || extern_crate {
-                    return Err(format!("src import must not name codec `{codec}` ({})", path.display()));
-                }
+        for statement in strip_rust_comments_and_strings(&source).split(';') {
+            if let Some(codec) = imported_codec(statement) {
+                return Err(format!("src import must not name codec `{codec}` ({})", path.display()));
             }
         }
     }
     Ok(())
 }
 
-fn import_starts_with_codec(code: &str, keyword: &str, codec: &str) -> bool {
-    let Some(rest) = code.strip_prefix(keyword).and_then(|rest| rest.strip_prefix(char::is_whitespace)) else {
-        return false;
-    };
-    let rest = rest.trim_start().strip_prefix("::").unwrap_or(rest.trim_start());
-    let rest = rest.strip_prefix('{').map(str::trim_start).unwrap_or(rest);
-    let Some(after_codec) = rest.strip_prefix(codec) else {
-        return false;
-    };
-    matches!(after_codec.chars().next(), None | Some(':' | ';'))
-        || after_codec.chars().next().is_some_and(char::is_whitespace)
+fn imported_codec(statement: &str) -> Option<&'static str> {
+    let mut code = statement.trim_start();
+    if let Some(rest) = code.strip_prefix("pub") {
+        code = rest.trim_start();
+        if code.starts_with('(') {
+            code = code.split_once(')').map_or("", |(_, rest)| rest.trim_start());
+        }
+    }
+    let code = code.strip_prefix("use")?.trim_start();
+    for codec in FORBIDDEN {
+        let identifier = codec.replace('-', "_");
+        for branch in code.split(['{', ',', '}']) {
+            let branch = branch.trim_start().strip_prefix("::").unwrap_or(branch.trim_start());
+            if branch.starts_with(&identifier)
+                && matches!(branch[identifier.len()..].chars().next(), None | Some(':' | ' ' | '\n' | '\t'))
+            {
+                return Some(codec);
+            }
+        }
+    }
+    None
 }
 
-fn strip_comments(source: &str) -> String {
+fn strip_rust_comments_and_strings(source: &str) -> String {
     let mut output = String::with_capacity(source.len());
     let bytes = source.as_bytes();
     let mut index = 0;
@@ -231,6 +271,37 @@ fn strip_comments(source: &str) -> String {
             index += 2;
         } else if pair == Some(b"//") {
             while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+        } else if bytes[index] == b'"' {
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'\\' {
+                    index += 2;
+                } else if bytes[index] == b'"' {
+                    index += 1;
+                    break;
+                } else {
+                    if bytes[index] == b'\n' { output.push('\n'); }
+                    index += 1;
+                }
+            }
+        } else if bytes[index] == b'r' && bytes.get(index + 1).is_some_and(|byte| *byte == b'"' || *byte == b'#') {
+            let hashes = bytes[index + 1..].iter().take_while(|byte| **byte == b'#').count();
+            let quote = index + hashes + 1;
+            if bytes.get(quote) == Some(&b'"') {
+                index = quote + 1;
+                loop {
+                    if index >= bytes.len() { break; }
+                    if bytes[index] == b'\n' { output.push('\n'); }
+                    if bytes[index] == b'"' && bytes.get(index + 1..index + 1 + hashes) == Some(&vec![b'#'; hashes][..]) {
+                        index += hashes + 1;
+                        break;
+                    }
+                    index += 1;
+                }
+            } else {
+                output.push(bytes[index] as char);
                 index += 1;
             }
         } else {

@@ -74,8 +74,14 @@ check_manifest_and_lock() {
     if ! awk '
         /^\[workspace\][[:space:]]*$/ { in_workspace = 1; next }
         /^\[/ { in_workspace = 0 }
-        in_workspace && /exclude[[:space:]]*=/ && /"tools\/codec-fixtures"/ { found = 1 }
-        END { exit found ? 0 : 1 }
+        in_workspace {
+            line = $0; sub(/#.*/, "", line)
+            if (collecting || line ~ /^[[:space:]]*exclude[[:space:]]*=/) {
+                collecting = 1; exclude = exclude line
+                if (line ~ /\]/) done = 1
+            }
+        }
+        END { exit done && exclude ~ /"tools\/codec-fixtures"/ ? 0 : 1 }
     ' "${ROOT}/Cargo.toml"; then
         printf 'root [workspace] exclude must contain tools/codec-fixtures\n' >&2
         return 1
@@ -109,50 +115,35 @@ check_src_imports() {
 }
 
 file_has_codec_import() {
-    local file="$1" package line code before_block before_line after_block trimmed use_pattern extern_pattern
-    local in_block=0
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        if [[ "${in_block}" -eq 1 ]]; then
-            if [[ "${line}" != *'*/'* ]]; then
-                continue
-            fi
-            line="${line#*\*/}"
-            in_block=0
-        fi
-        code="${line}"
-        if [[ "${code}" == *'/*'* ]]; then
-            before_block="${code%%'/*'*}"
-            if [[ "${code}" == *'//'* ]]; then
-                before_line="${code%%'//'*}"
-                if [[ ${#before_line} -le ${#before_block} ]]; then
-                    code="${before_line}"
-                else
-                    code="${before_block}"
-                    [[ "${line}" == *'*/'* ]] || in_block=1
-                fi
-            else
-                code="${before_block}"
-                if [[ "${line}" == *'*/'* ]]; then
-                    after_block="${line#*\*/}"
-                    code+="${after_block}"
-                else
-                    in_block=1
-                fi
-            fi
-        elif [[ "${code}" == *'//'* ]]; then
-            code="${code%%'//'*}"
-        fi
-        trimmed="${code#"${code%%[![:space:]]*}"}"
-        for package in "${FORBIDDEN[@]}"; do
-            use_pattern="^(pub(\\([^)]*\\))?[[:space:]]+)?use[[:space:]]+(\\{[[:space:]]*)?(::)?${package}([[:space:]:;]|$)"
-            extern_pattern="^extern[[:space:]]+crate[[:space:]]+${package}([[:space:];]|$)"
-            if [[ "${trimmed}" =~ ${use_pattern} ]] || [[ "${trimmed}" =~ ${extern_pattern} ]]; then
-                FOUND_PACKAGE="${package}"
-                return 0
-            fi
-        done
-    done < "${file}"
-    return 1
+    local file="$1"
+    FOUND_PACKAGE="$(LC_ALL=C FORBIDDEN_PACKAGES="${FORBIDDEN[*]}" perl -0ne '
+        my ($s, $out, $i, $depth) = ($_, q{}, 0, 0);
+        while ($i < length $s) {
+            if ($depth) {
+                if (substr($s, $i, 2) eq "/*") { ++$depth; $i += 2; next }
+                if (substr($s, $i, 2) eq "*/") { --$depth; $i += 2; next }
+                $out .= "\n" if substr($s, $i, 1) eq "\n"; ++$i; next;
+            }
+            if (substr($s, $i, 2) eq "/*") { $depth = 1; $i += 2; next }
+            if (substr($s, $i, 2) eq "//") { $i = index($s, "\n", $i); $i = length($s) if $i < 0; next }
+            if (substr($s, $i) =~ /\A r(\#*)"/x) {
+                my $end = q{"} . $1; $i += length($&); my $at = index($s, $end, $i);
+                $at = length($s) if $at < 0; $out .= (substr($s, $i, $at - $i) =~ tr/\n/\n/r); $i = $at + length($end); next;
+            }
+            if (substr($s, $i, 1) eq q{"}) {
+                ++$i; while ($i < length $s && substr($s, $i, 1) ne q{"}) { $out .= "\n" if substr($s,$i,1) eq "\n"; $i += substr($s,$i,1) eq q{\\} ? 2 : 1 } ++$i; next;
+            }
+            $out .= substr($s, $i++, 1);
+        }
+        my @forbidden = split /\s+/, $ENV{FORBIDDEN_PACKAGES};
+        for my $statement (split /;/, $out) {
+            $statement =~ s/^\s*pub(?:\([^)]*\))?\s+//; next unless $statement =~ s/^\s*use\s+//;
+            for my $package (@forbidden) { my $crate = $package =~ s/-/_/gr;
+                if ($statement =~ /(?:^|[,{])\s*(?:::)?\Q$crate\E(?=\s|:|$)/) { print $package; exit }
+            }
+        }
+    ' "${file}")"
+    [[ -n "${FOUND_PACKAGE}" ]]
 }
 
 check_normal_graph() {
@@ -188,6 +179,18 @@ safe_self_test_dir() {
 
 self_test() {
     local output
+    expect_import_canary() {
+        local description="$1" source="$2"
+        cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+        printf '\n%s\n' "${source}" >> "${CANARY_DIR}/src/lib.rs"
+        if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
+            printf 'self-test failed: %s canary passed\n' "${description}" >&2
+            return 1
+        elif [[ "${output}" != *"src import"* ]]; then
+            printf 'self-test failed: %s error was not specific:\n%s\n' "${description}" "${output}" >&2
+            return 1
+        fi
+    }
     CANARY_DIR="$(safe_self_test_dir)"
     CANARY_BASE="$(cd -P "$(dirname "${CANARY_DIR}")" && pwd)"
     CANARY_DIR="$(cd -P "${CANARY_DIR}" && pwd)"
@@ -209,7 +212,11 @@ self_test() {
     cp "${SCRIPT_ROOT}/Cargo.toml" "${SCRIPT_ROOT}/Cargo.lock" "${CANARY_DIR}/"
     cp -R "${SCRIPT_ROOT}/src" "${CANARY_DIR}/src"
 
-    printf '\n[dependencies]\nopus = "0.4"\n' >> "${CANARY_DIR}/Cargo.toml"
+    awk '
+        /^\[dependencies\][[:space:]]*$/ { print; print "opus = \"0.4\""; next }
+        { print }
+    ' "${CANARY_DIR}/Cargo.toml" > "${CANARY_DIR}/Cargo.toml.with-opus"
+    mv "${CANARY_DIR}/Cargo.toml.with-opus" "${CANARY_DIR}/Cargo.toml"
     if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
         printf 'self-test failed: [dependencies] opus canary passed\n' >&2
         return 1
@@ -225,6 +232,21 @@ self_test() {
         return 1
     elif [[ "${output}" != *"src import"* || "${output}" != *"opus"* ]]; then
         printf 'self-test failed: src import canary error was not specific:\n%s\n' "${output}" >&2
+        return 1
+    fi
+
+    expect_import_canary "grouped branch" 'use { std::fmt, opus::Encoder };'
+    expect_import_canary "grouped name" 'use { opus };'
+    expect_import_canary "multiline group" $'use {\n    std::fmt,\n    opus::Encoder,\n};'
+    expect_import_canary "visible import" 'pub use opus::Encoder;'
+    expect_import_canary "hyphen-normalized import" 'use opusic_sys::Encoder;'
+    expect_import_canary "string-followed import" 'const TOKEN: &str = "/*"; use opus::Encoder;'
+    expect_import_canary "two comments followed import" '/* one */ /* two */ use opus;'
+
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
+    printf '\nconst TOKEN: &str = r#"use opus::Encoder;"#;\n' >> "${CANARY_DIR}/src/lib.rs"
+    if ! output="$(ROOT="${CANARY_DIR}" check_src_imports 2>&1)"; then
+        printf 'self-test failed: raw-string canary was treated as an import:\n%s\n' "${output}" >&2
         return 1
     fi
 
