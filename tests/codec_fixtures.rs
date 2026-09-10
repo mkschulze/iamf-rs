@@ -65,6 +65,35 @@ struct OpusCorpus {
     expected: Vec<i32>,
 }
 
+fn validate_opus_metadata(fields: &BTreeMap<String, String>) -> Result<(), String> {
+    for (key, expected) in [
+        ("sample_rate", "48000"),
+        ("channels", "2"),
+        ("frame_samples", "960"),
+        ("application", "audio"),
+        ("bitrate", "128000"),
+        ("vbr", "false"),
+        ("complexity", "10"),
+        ("force_channels", "stereo"),
+        ("max_bandwidth", "fullband"),
+        ("signal", "music"),
+        ("dtx", "false"),
+        ("inband_fec", "false"),
+        ("packet_loss_perc", "0"),
+        ("lsb_depth", "16"),
+    ] {
+        if fields.get(key).map(String::as_str) != Some(expected) {
+            return Err(format!("Opus manifest metadata {key} = {expected}"));
+        }
+    }
+    for key in ["sha256.source.s16le", "sha256.expected.s16le"] {
+        if !fields.contains_key(key) {
+            return Err(format!("Opus manifest field {key}"));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::expect_used)] // A malformed committed corpus is a hard test failure.
 fn load_opus_corpus() -> OpusCorpus {
     let text = String::from_utf8(opus_artifact("MANIFEST.md")).expect("UTF-8 Opus manifest");
@@ -74,6 +103,7 @@ fn load_opus_corpus() -> OpusCorpus {
             assert!(fields.insert(key.to_owned(), value.to_owned()).is_none());
         }
     }
+    validate_opus_metadata(&fields).expect("complete Opus manifest metadata");
     let number = |key: &str| -> usize {
         fields
             .get(key)
@@ -132,15 +162,38 @@ fn load_opus_corpus() -> OpusCorpus {
         .collect::<Vec<_>>();
     actual.sort();
     assert_eq!(actual, canonical, "Opus packet file set");
+    let mut inventory = std::fs::read_dir(opus_corpus())
+        .expect("committed Opus corpus directory")
+        .map(|entry| {
+            entry
+                .expect("Opus corpus directory entry")
+                .file_name()
+                .into_string()
+                .expect("Opus corpus filenames must be UTF-8")
+        })
+        .collect::<Vec<_>>();
+    inventory.sort();
+    let mut required = vec!["MANIFEST.md".to_owned(), "expected.s16le".to_owned(), "source.s16le".to_owned()];
+    required.extend(canonical.iter().cloned());
+    required.sort();
+    assert_eq!(inventory, required, "Opus corpus inventory");
     for name in &actual {
         let bytes = opus_artifact(name);
         assert!(!bytes.windows(8).any(|window| window == b"OpusHead"), "{name}");
+        assert!(!bytes.windows(4).any(|window| window == b"OggS"), "{name}");
     }
     let mut units = Vec::with_capacity(packets);
     for (index, name) in order.iter().enumerate() {
         let bytes = opus_artifact(name);
         assert!(!bytes.is_empty(), "Opus packet {name} must be nonempty");
         assert!(!bytes.windows(8).any(|window| window == b"OpusHead"));
+        assert!(!bytes.windows(4).any(|window| window == b"OggS"));
+        let packet_len = fields
+            .get(&format!("packet_len.{name}"))
+            .expect("Opus packet length manifest field")
+            .parse::<usize>()
+            .expect("numeric Opus packet length");
+        assert_eq!(bytes.len(), packet_len, "{name} length");
         let digest = format!("{:x}", Sha256::digest(&bytes));
         assert_eq!(
             fields.get(&format!("sha256.{name}")),
@@ -408,4 +461,29 @@ fn opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output(
         );
     }
     assert_eq!(corpus.expected.len(), corpus.source_frames * 2);
+}
+
+#[test]
+fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
+    let mut fields = BTreeMap::from([
+        ("sample_rate".to_owned(), "48000".to_owned()),
+        ("channels".to_owned(), "2".to_owned()),
+        ("frame_samples".to_owned(), "960".to_owned()),
+        ("application".to_owned(), "audio".to_owned()),
+        ("bitrate".to_owned(), "128000".to_owned()),
+        ("vbr".to_owned(), "false".to_owned()),
+        ("complexity".to_owned(), "10".to_owned()),
+        ("force_channels".to_owned(), "stereo".to_owned()),
+        ("max_bandwidth".to_owned(), "fullband".to_owned()),
+        ("signal".to_owned(), "music".to_owned()),
+        ("dtx".to_owned(), "false".to_owned()),
+        ("inband_fec".to_owned(), "false".to_owned()),
+        ("packet_loss_perc".to_owned(), "0".to_owned()),
+        ("lsb_depth".to_owned(), "16".to_owned()),
+        ("sha256.expected.s16le".to_owned(), "digest".to_owned()),
+    ]);
+    assert!(validate_opus_metadata(&fields).is_err());
+    fields.insert("sha256.source.s16le".to_owned(), "digest".to_owned());
+    fields.insert("sample_rate".to_owned(), "44100".to_owned());
+    assert!(validate_opus_metadata(&fields).is_err());
 }
