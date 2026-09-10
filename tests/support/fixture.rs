@@ -33,15 +33,17 @@
 #![allow(dead_code)]
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{DescriptorSet, select_minimum_profile};
+use iamf::model::{select_minimum_profile, DescriptorSet};
 use iamf::obu::{
-    AudioElement, AudioElementType, AudioFrame, CODEC_ID_OPUS, ChannelAudioLayerConfig,
-    CodecConfig, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
+    plan_frames, AudioElement, AudioElementType, AudioFrame, ChannelAudioLayerConfig, CodecConfig,
+    IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
     MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
-    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming, plan_frames,
+    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming, CODEC_ID_OPUS,
 };
-use iamf::packing::{SubstreamPlan, pack_channels_to_substreams};
+use iamf::packing::{pack_channels_to_substreams, SubstreamPlan};
 use iamf::sequence::{SequenceWriter, TemporalUnit};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -305,6 +307,255 @@ pub fn spec_of_first(descriptors: &DescriptorSet) -> Result<ElementSpec, String>
 pub struct EncodedTemporalUnit {
     pub trimming: Option<Trimming>,
     pub substream_payloads: Vec<Vec<u8>>,
+}
+
+/// The committed raw Opus corpus, read by test targets only.  Its expected PCM
+/// is the standalone decoder output, never the source PCM used to encode it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpusCorpus {
+    pub lookahead: usize,
+    pub packets: usize,
+    pub end_trim: usize,
+    pub source_frames: usize,
+    pub units: Vec<EncodedTemporalUnit>,
+    pub expected: Vec<i32>,
+}
+
+fn opus_corpus_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codecs/opus")
+}
+
+#[allow(clippy::expect_used)] // Missing committed artifacts must fail loudly.
+fn opus_artifact(name: &str) -> Vec<u8> {
+    std::fs::read(opus_corpus_dir().join(name)).expect("committed Opus artifact must exist")
+}
+
+/// Validate the corpus's fixed encoder metadata without accepting a near miss.
+pub fn validate_opus_metadata(fields: &BTreeMap<String, String>) -> Result<(), String> {
+    for (key, expected) in [
+        ("sample_rate", "48000"),
+        ("channels", "2"),
+        ("frame_samples", "960"),
+        ("application", "audio"),
+        ("bitrate", "128000"),
+        ("vbr", "false"),
+        ("complexity", "10"),
+        ("force_channels", "stereo"),
+        ("max_bandwidth", "fullband"),
+        ("signal", "music"),
+        ("dtx", "false"),
+        ("inband_fec", "false"),
+        ("packet_loss_perc", "0"),
+        ("lsb_depth", "16"),
+    ] {
+        if fields.get(key).map(String::as_str) != Some(expected) {
+            return Err(format!("Opus manifest metadata {key} = {expected}"));
+        }
+    }
+    for key in ["sha256.source.s16le", "sha256.expected.s16le"] {
+        if !fields.contains_key(key) {
+            return Err(format!("Opus manifest field {key}"));
+        }
+    }
+    Ok(())
+}
+
+/// Require an exact committed corpus inventory.
+pub fn validate_opus_inventory(actual: &[String], required: &[String]) -> Result<(), String> {
+    if actual == required {
+        Ok(())
+    } else {
+        Err("Opus corpus inventory mismatch".to_owned())
+    }
+}
+
+/// Raw access units must be nonempty, uncontainerized and manifest-sized.
+pub fn validate_opus_packet(bytes: &[u8], expected_len: usize) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("Opus packet is empty".to_owned());
+    }
+    if bytes.windows(8).any(|window| window == b"OpusHead") {
+        return Err("OpusHead marker in raw packet".to_owned());
+    }
+    if bytes.windows(4).any(|window| window == b"OggS") {
+        return Err("OggS marker in raw packet".to_owned());
+    }
+    if bytes.len() != expected_len {
+        return Err("Opus packet length mismatch".to_owned());
+    }
+    Ok(())
+}
+
+/// Require digests for precisely the source, independent expected PCM and all packets.
+pub fn validate_opus_digest_keys(
+    fields: &BTreeMap<String, String>,
+    packet_names: &[String],
+) -> Result<(), String> {
+    let mut expected = BTreeSet::from([
+        "sha256.source.s16le".to_owned(),
+        "sha256.expected.s16le".to_owned(),
+    ]);
+    expected.extend(packet_names.iter().map(|name| format!("sha256.{name}")));
+    let actual = fields
+        .keys()
+        .filter(|key| key.starts_with("sha256."))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err("Opus manifest digest key set mismatch".to_owned())
+    }
+}
+
+#[allow(clippy::expect_used)] // A malformed committed corpus is a hard test failure.
+pub fn load_opus_corpus() -> OpusCorpus {
+    let text = String::from_utf8(opus_artifact("MANIFEST.md")).expect("UTF-8 Opus manifest");
+    let mut fields = BTreeMap::new();
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(" = ") {
+            assert!(fields.insert(key.to_owned(), value.to_owned()).is_none());
+        }
+    }
+    validate_opus_metadata(&fields).expect("complete Opus manifest metadata");
+    let number = |key: &str| -> usize {
+        fields
+            .get(key)
+            .expect("Opus manifest field")
+            .parse()
+            .expect("numeric Opus manifest field")
+    };
+    let lookahead = number("L");
+    let packets = number("P");
+    let end_trim = number("E");
+    let source_frames = number("S");
+    assert!(lookahead > 0, "Opus lookahead must be nonzero");
+    let total = source_frames
+        .checked_add(lookahead)
+        .expect("Opus source plus lookahead overflow");
+    assert_eq!(packets, total.div_ceil(960));
+    assert!(
+        packets >= 2,
+        "Opus corpus must contain at least two packets"
+    );
+    let padded = packets
+        .checked_mul(960)
+        .expect("Opus padded length overflow");
+    let expected_end_trim = padded
+        .checked_sub(lookahead)
+        .and_then(|value| value.checked_sub(source_frames))
+        .expect("Opus trim arithmetic underflow");
+    assert_eq!(end_trim, expected_end_trim);
+    assert!(end_trim > 0 && end_trim < 960);
+    assert_ne!(end_trim, lookahead);
+
+    let order = fields
+        .get("packet_order")
+        .expect("Opus packet order")
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    let canonical = (0..packets)
+        .map(|index| format!("packet-{index:03}.bin"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        canonical.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    validate_opus_digest_keys(&fields, &canonical).expect("Opus manifest digest keys");
+    let read_names = || {
+        std::fs::read_dir(opus_corpus_dir())
+            .expect("committed Opus corpus directory")
+            .map(|entry| {
+                entry
+                    .expect("Opus corpus directory entry")
+                    .file_name()
+                    .into_string()
+                    .expect("Opus corpus filenames must be UTF-8")
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut actual = read_names()
+        .into_iter()
+        .filter(|name| name.starts_with("packet-") && name.ends_with(".bin"))
+        .collect::<Vec<_>>();
+    actual.sort();
+    validate_opus_inventory(&actual, &canonical).expect("Opus packet file set");
+    let mut inventory = read_names();
+    inventory.sort();
+    let mut required = vec![
+        "MANIFEST.md".to_owned(),
+        "expected.s16le".to_owned(),
+        "source.s16le".to_owned(),
+    ];
+    required.extend(canonical.iter().cloned());
+    required.sort();
+    validate_opus_inventory(&inventory, &required).expect("Opus corpus inventory");
+    let mut digest_names = vec!["source.s16le", "expected.s16le"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    digest_names.extend(canonical.iter().cloned());
+    for name in digest_names {
+        let digest_key = format!("sha256.{name}");
+        let expected = fields
+            .get(&digest_key)
+            .expect("required Opus digest manifest field");
+        let digest = format!("{:x}", Sha256::digest(opus_artifact(&name)));
+        assert_eq!(&digest, expected, "{name}");
+    }
+    let mut units = Vec::with_capacity(packets);
+    for (index, name) in order.iter().enumerate() {
+        let bytes = opus_artifact(name);
+        let packet_len = fields
+            .get(&format!("packet_len.{name}"))
+            .expect("Opus packet length manifest field")
+            .parse::<usize>()
+            .expect("numeric Opus packet length");
+        validate_opus_packet(&bytes, packet_len).expect("valid Opus packet");
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            fields.get(&format!("sha256.{name}")),
+            Some(&digest),
+            "{name}"
+        );
+        let trimming = if index == 0 {
+            Some(Trimming {
+                at_end: 0,
+                at_start: u32::try_from(lookahead).expect("u32 Opus lookahead"),
+            })
+        } else if index.checked_add(1).expect("Opus packet index overflow") == packets {
+            Some(Trimming {
+                at_end: u32::try_from(end_trim).expect("u32 Opus end trim"),
+                at_start: 0,
+            })
+        } else {
+            None
+        };
+        units.push(EncodedTemporalUnit {
+            trimming,
+            substream_payloads: vec![bytes],
+        });
+    }
+    let expected_bytes = opus_artifact("expected.s16le");
+    let digest = format!("{:x}", Sha256::digest(&expected_bytes));
+    assert_eq!(fields.get("sha256.expected.s16le"), Some(&digest));
+    let expected = expected_bytes
+        .chunks_exact(2)
+        .map(|pair| i32::from(i16::from_le_bytes(pair.try_into().expect("two PCM bytes"))))
+        .collect::<Vec<_>>();
+    let expected_samples = source_frames
+        .checked_mul(2)
+        .expect("Opus stereo sample length overflow");
+    assert_eq!(expected.len(), expected_samples, "expected stereo frames");
+    OpusCorpus {
+        lookahead,
+        packets,
+        end_trim,
+        source_frames,
+        units,
+        expected,
+    }
 }
 
 /// The source of one Audio Element's frames, in descriptor order.
@@ -733,10 +984,8 @@ pub fn flac() -> Fixture {
                 at_end: 84,
                 at_start: 0,
             }),
-            substream_payloads: vec![
-                std::fs::read(dir.join(format!("packet-{index:03}.bin")))
-                    .expect("committed opaque FLAC frame"),
-            ],
+            substream_payloads: vec![std::fs::read(dir.join(format!("packet-{index:03}.bin")))
+                .expect("committed opaque FLAC frame")],
         })
         .collect();
     let config = CodecConfig::flac(200, 128, 48_000, 16).expect("valid FLAC configuration");
@@ -772,6 +1021,57 @@ pub fn flac() -> Fixture {
         },
         expected_pcm: vec![pcm],
         frame_sources: vec![FrameSource::PreEncoded(units)],
+    }
+}
+
+/// The committed raw Opus corpus framed by the ordinary fixture adapter.
+///
+/// The corpus loader is the sole owner of the measured `L`, `P`, `E` and `S`
+/// values.  Packets remain opaque: this helper only supplies the typed IAMF
+/// descriptors, the loader's independent decode oracle, and the temporal-unit
+/// trim metadata that belongs beside each raw packet.
+#[allow(clippy::expect_used)] // The committed corpus has bounded manifest values.
+pub fn opus() -> Fixture {
+    let corpus = load_opus_corpus();
+    let config = CodecConfig::opus(
+        200,
+        960,
+        SAMPLE_RATE,
+        u16::try_from(corpus.lookahead).expect("Opus lookahead fits pre_skip"),
+    )
+    .expect("valid measured Opus configuration");
+    let element = channel_element(300, 200, LoudspeakerLayout::Stereo, 0);
+    let mix_gain = MixGainParamDefinition::mode_1(100, SAMPLE_RATE);
+    let presentation = MixPresentation {
+        mix_presentation_id: 42,
+        annotations_language: vec![b"en-us".to_vec()],
+        localized_presentation_annotations: vec![b"phase3_opus".to_vec()],
+        sub_mixes: vec![SubMix {
+            elements: vec![SubMixAudioElement {
+                audio_element_id: 300,
+                localized_element_annotations: vec![b"stereo_opus".to_vec()],
+                rendering_config: RenderingConfig::stereo(),
+                element_mix_gain: mix_gain.clone(),
+            }],
+            output_mix_gain: mix_gain,
+            layouts: vec![LayoutWithLoudness {
+                layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
+                loudness: Loudness::new(-6144, -1536),
+            }],
+        }],
+        trailing: Vec::new(),
+    };
+    Fixture {
+        name: "phase3_opus",
+        descriptors: DescriptorSet {
+            sequence_header: header_for(&[&element]),
+            codec_configs: vec![config],
+            audio_elements: vec![element],
+            mix_presentations: vec![presentation],
+        },
+        expected_pcm: vec![corpus.expected],
+        frame_sources: vec![FrameSource::PreEncoded(corpus.units)],
     }
 }
 

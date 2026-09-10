@@ -13,17 +13,17 @@
 mod fixture;
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{Profile, select_minimum_profile};
+use iamf::model::{select_minimum_profile, Profile};
 use iamf::obu::{
-    Layout, ObuType, Trimming, TypeSpecific, find_obu_boundaries, plan_frames, read_obu_header,
+    find_obu_boundaries, plan_frames, read_obu_header, Layout, ObuType, Trimming, TypeSpecific,
 };
 use iamf::packing::SubstreamPlan;
-use iamf::sequence::{SequenceObu, parse_sequence};
+use iamf::sequence::{parse_sequence, SequenceObu};
 
 use fixture::{
-    CHANNELS_5_1, EXPECTED_TRIM_AT_END, EncodedTemporalUnit, FRAME_SIZE, Fixture, FixtureCodec,
-    FrameSource, SAMPLE_FRAMES, SAMPLE_RATE, describe_channel_mismatch, peak_for, ramp_pcm,
-    ramp_sample, store_sample,
+    describe_channel_mismatch, peak_for, ramp_pcm, ramp_sample, store_sample, EncodedTemporalUnit,
+    Fixture, FixtureCodec, FrameSource, CHANNELS_5_1, EXPECTED_TRIM_AT_END, FRAME_SIZE,
+    SAMPLE_FRAMES, SAMPLE_RATE,
 };
 
 /// The `ObuType` of every OBU in a byte slice, in order.
@@ -617,6 +617,130 @@ fn the_structure_only_fixture_carries_at_least_six_obus_with_two_audio_elements(
         types.get(1),
         Some(&ObuType::CodecConfig),
         "Codec Configs follow the header"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Opus fixture (CODEC-02 through CODEC-05)
+// ---------------------------------------------------------------------------
+
+/// The committed raw Opus packets must enter the ordinary fixture adapter in
+/// manifest order.  Moving priming to the final frame, equalising L and E, or
+/// swapping the header's END/START fields changes the audible timeline while
+/// still producing a structurally valid IAMF sequence.
+#[test]
+fn opus_fixture_keeps_manifest_packets_and_asymmetric_priming_on_the_wire() {
+    let corpus = fixture::load_opus_corpus();
+    let fixture = fixture::opus();
+    let spec = fixture.spec().expect("Opus spec resolves");
+    let config = fixture
+        .descriptors
+        .codec_configs
+        .first()
+        .expect("one Opus Codec Config");
+    let opus = config.opus_config().expect("typed Opus config");
+
+    assert_eq!(fixture.name, "phase3_opus");
+    assert_eq!(spec.layout, LoudspeakerLayout::Stereo);
+    assert_eq!(spec.channels, 2);
+    assert_eq!(spec.sample_rate, 48_000);
+    assert_eq!(spec.sample_size, 16);
+    assert_eq!(spec.num_samples_per_frame, 960);
+    assert_eq!(spec.codec, FixtureCodec::Opus);
+    assert_eq!(config.audio_roll_distance, -4);
+    assert_eq!(opus.version, 1);
+    assert_eq!(opus.output_channel_count, 2);
+    assert_eq!(
+        opus.pre_skip,
+        u16::try_from(corpus.lookahead).expect("u16 lookahead")
+    );
+    assert_eq!(opus.input_sample_rate, 48_000);
+    assert_eq!(opus.output_gain, 0);
+    assert_eq!(opus.mapping_family, 0);
+    assert_eq!(fixture.single_pcm(), corpus.expected);
+    assert_eq!(fixture.sample_frames(), corpus.source_frames);
+
+    let source = fixture.frame_sources.first().expect("one frame source");
+    let FrameSource::PreEncoded(units) = source else {
+        panic!("Opus packets must stay opaque pre-encoded payloads");
+    };
+    assert_eq!(units.len(), corpus.packets);
+    assert_eq!(units, &corpus.units, "packets remain in manifest order");
+    assert_ne!(
+        corpus.lookahead, corpus.end_trim,
+        "asymmetric trims catch a swap"
+    );
+    assert_eq!(
+        units.first().and_then(|unit| unit.trimming),
+        Some(Trimming {
+            at_end: 0,
+            at_start: u32::try_from(corpus.lookahead).expect("u32 lookahead"),
+        })
+    );
+    assert_eq!(
+        units.last().and_then(|unit| unit.trimming),
+        Some(Trimming {
+            at_end: u32::try_from(corpus.end_trim).expect("u32 end trim"),
+            at_start: 0,
+        })
+    );
+    for unit in units.iter().skip(1).take(units.len().saturating_sub(2)) {
+        assert_eq!(unit.trimming, None, "middle packets have no trim fields");
+    }
+
+    let bytes = fixture.encode().expect("Opus fixture encodes");
+    let parsed = parse_sequence(&bytes).expect("Opus IAMF parses");
+    let frames = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioFrame(frame) => Some(frame),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), corpus.packets);
+    for (frame, unit) in frames.iter().zip(&corpus.units) {
+        assert_eq!(
+            frame.payload.payload.as_slice(),
+            unit.substream_payloads
+                .first()
+                .expect("one stereo Opus packet")
+                .as_slice()
+        );
+        assert_eq!(
+            frame.header.type_specific,
+            TypeSpecific::Trimming(unit.trimming)
+        );
+    }
+
+    let boundaries = find_obu_boundaries(&bytes).expect("Opus OBU boundaries");
+    let mut wire_trims = Vec::new();
+    for start in boundaries.iter().take(boundaries.len().saturating_sub(1)) {
+        let mut cursor = iamf::bits::BitCursor::new(bytes.get(*start..).unwrap_or_default());
+        let byte = cursor.read_unsigned(8).expect("OBU header byte");
+        let _size = cursor.read_uleb128().expect("OBU size");
+        let obu_type = (byte >> 3) & 0x1f;
+        if (5..=23).contains(&obu_type) {
+            if byte & 0x02 != 0 {
+                let end = cursor.read_uleb128().expect("END trim is first");
+                let start = cursor.read_uleb128().expect("START trim is second");
+                wire_trims.push(Some(Trimming {
+                    at_end: end,
+                    at_start: start,
+                }));
+            } else {
+                wire_trims.push(None);
+            }
+        }
+    }
+    assert_eq!(
+        wire_trims,
+        corpus
+            .units
+            .iter()
+            .map(|unit| unit.trimming)
+            .collect::<Vec<_>>(),
+        "the encoded trim fields decode END then START for each temporal unit"
     );
 }
 
