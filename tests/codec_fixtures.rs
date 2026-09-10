@@ -2,7 +2,7 @@
 //! deliberately not a general FLAC decoder; Claxon lives in the excluded tool.
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use iamf::obu::Trimming;
@@ -118,6 +118,27 @@ fn validate_opus_packet(bytes: &[u8], expected_len: usize) -> Result<(), String>
     Ok(())
 }
 
+fn validate_opus_digest_keys(
+    fields: &BTreeMap<String, String>,
+    packet_names: &[String],
+) -> Result<(), String> {
+    let mut expected = BTreeSet::from([
+        "sha256.source.s16le".to_owned(),
+        "sha256.expected.s16le".to_owned(),
+    ]);
+    expected.extend(packet_names.iter().map(|name| format!("sha256.{name}")));
+    let actual = fields
+        .keys()
+        .filter(|key| key.starts_with("sha256."))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err("Opus manifest digest key set mismatch".to_owned())
+    }
+}
+
 #[allow(clippy::expect_used)] // A malformed committed corpus is a hard test failure.
 fn load_opus_corpus() -> OpusCorpus {
     let text = String::from_utf8(opus_artifact("MANIFEST.md")).expect("UTF-8 Opus manifest");
@@ -167,6 +188,7 @@ fn load_opus_corpus() -> OpusCorpus {
         .map(|index| format!("packet-{index:03}.bin"))
         .collect::<Vec<_>>();
     assert_eq!(order, canonical.iter().map(String::as_str).collect::<Vec<_>>());
+    validate_opus_digest_keys(&fields, &canonical).expect("Opus manifest digest keys");
     let mut actual = std::fs::read_dir(opus_corpus())
         .expect("committed Opus corpus directory")
         .map(|entry| {
@@ -516,18 +538,28 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     ]);
     assert!(validate_opus_metadata(&fields).is_err());
     fields.insert("sha256.source.s16le".to_owned(), "digest".to_owned());
-    for key in ["sample_rate", "channels", "frame_samples"] {
+    for (key, expected) in [
+        ("sample_rate", "48000"), ("channels", "2"), ("frame_samples", "960"),
+        ("application", "audio"), ("bitrate", "128000"), ("vbr", "false"),
+        ("complexity", "10"), ("force_channels", "stereo"),
+        ("max_bandwidth", "fullband"), ("signal", "music"), ("dtx", "false"),
+        ("inband_fec", "false"), ("packet_loss_perc", "0"), ("lsb_depth", "16"),
+    ] {
         fields.insert(key.to_owned(), "wrong".to_owned());
         assert!(validate_opus_metadata(&fields).is_err(), "{key}");
-        fields.insert(key.to_owned(), match key {
-            "sample_rate" => "48000",
-            "channels" => "2",
-            _ => "960",
-        }.to_owned());
+        fields.insert(key.to_owned(), expected.to_owned());
     }
     fields.remove("sha256.expected.s16le");
     assert!(validate_opus_metadata(&fields).is_err());
+    fields.insert("sha256.expected.s16le".to_owned(), "digest".to_owned());
+    let packets = vec!["packet-000.bin".to_owned(), "packet-001.bin".to_owned()];
+    assert!(validate_opus_digest_keys(&fields, &packets).is_err());
+    fields.insert("sha256.packet-000.bin".to_owned(), "digest".to_owned());
+    fields.insert("sha256.packet-001.bin".to_owned(), "digest".to_owned());
+    fields.insert("sha256../escape".to_owned(), "digest".to_owned());
+    assert!(validate_opus_digest_keys(&fields, &packets).is_err());
     assert!(validate_opus_inventory(&["packet-000.bin".to_owned()], &["packet-000.bin".to_owned(), "packet-001.bin".to_owned()]).is_err());
+    assert!(validate_opus_inventory(&["packet-000.bin".to_owned(), "packet-001.bin".to_owned(), "unexpected.bin".to_owned()], &packets).is_err());
     assert!(validate_opus_packet(&[], 0).is_err());
     assert!(validate_opus_packet(b"OpusHead", 8).is_err());
     assert!(validate_opus_packet(b"OggS", 4).is_err());
