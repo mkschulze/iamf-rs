@@ -72,16 +72,47 @@ check_manifest_and_lock() {
     require_file "${ROOT}/Cargo.lock"
 
     if ! awk '
-        /^\[workspace\][[:space:]]*$/ { in_workspace = 1; next }
-        /^\[/ { in_workspace = 0 }
-        in_workspace {
-            line = $0; sub(/#.*/, "", line)
-            if (collecting || line ~ /^[[:space:]]*exclude[[:space:]]*=/) {
-                collecting = 1; exclude = exclude line
-                if (line ~ /\]/) done = 1
+        function strip_comments(line,    i, ch, result, delimiter, escaped) {
+            for (i = 1; i <= length(line); ++i) {
+                ch = substr(line, i, 1)
+                if (delimiter != "") {
+                    if (escaped) escaped = 0
+                    else if (delimiter == "\"" && ch == "\\") escaped = 1
+                    else if (ch == delimiter) delimiter = ""
+                } else if (ch == "\"" || ch == sprintf("%c", 39)) delimiter = ch
+                else if (ch == "#") break
+                result = result ch
+            }
+            return result
+        }
+        function consume_array(line,    i, ch) {
+            for (i = 1; i <= length(line); ++i) {
+                ch = substr(line, i, 1)
+                if (quote != "") {
+                    if (escaped) { entry = entry ch; escaped = 0 }
+                    else if (quote == "\"" && ch == "\\") { entry = entry ch; escaped = 1 }
+                    else if (ch == quote) {
+                        if (entry == "tools/codec-fixtures") found = 1
+                        quote = ""
+                    } else entry = entry ch
+                } else if (ch == "\"" || ch == sprintf("%c", 39)) { quote = ch; entry = "" }
+                else if (ch == "]") { collecting = 0; done = 1; return }
             }
         }
-        END { exit done && exclude ~ /"tools\/codec-fixtures"/ ? 0 : 1 }
+        {
+            line = strip_comments($0)
+            if (collecting) { consume_array(line); next }
+            if (line ~ /^[[:space:]]*\[/) {
+                in_workspace = line ~ /^[[:space:]]*\[workspace\][[:space:]]*$/
+                next
+            }
+            if (in_workspace && !done && line ~ /^[[:space:]]*exclude[[:space:]]*=[[:space:]]*\[/) {
+                sub(/^[[:space:]]*exclude[[:space:]]*=[[:space:]]*\[/, "", line)
+                collecting = 1
+                consume_array(line)
+            }
+        }
+        END { exit done && found ? 0 : 1 }
     ' "${ROOT}/Cargo.toml"; then
         printf 'root [workspace] exclude must contain tools/codec-fixtures\n' >&2
         return 1
@@ -117,29 +148,57 @@ check_src_imports() {
 file_has_codec_import() {
     local file="$1"
     FOUND_PACKAGE="$(LC_ALL=C FORBIDDEN_PACKAGES="${FORBIDDEN[*]}" perl -0ne '
-        my ($s, $out, $i, $depth) = ($_, q{}, 0, 0);
+        my ($s, $out, $i) = ($_, $_, 0);
         while ($i < length $s) {
-            if ($depth) {
-                if (substr($s, $i, 2) eq "/*") { ++$depth; $i += 2; next }
-                if (substr($s, $i, 2) eq "*/") { --$depth; $i += 2; next }
-                $out .= "\n" if substr($s, $i, 1) eq "\n"; ++$i; next;
+            my $start = $i;
+            if (substr($s, $i, 2) eq "/*") {
+                my $depth = 1; $i += 2;
+                while ($i < length($s) && $depth) {
+                    if (substr($s, $i, 2) eq "/*") { ++$depth; $i += 2 }
+                    elsif (substr($s, $i, 2) eq "*/") { --$depth; $i += 2 }
+                    else { ++$i }
+                }
+            } elsif (substr($s, $i, 2) eq "//") {
+                $i = index($s, "\n", $i); $i = length($s) if $i < 0;
+            } elsif (($i == 0 || substr($s, $i - 1, 1) !~ /[A-Za-z0-9_\x80-\xff]/)
+                && substr($s, $i) =~ /\A b?r(\#*)"/x) {
+                my $end = q{"} . $1; $i += length($&);
+                my $at = index($s, $end, $i);
+                $i = $at < 0 ? length($s) : $at + length($end);
+            } elsif (substr($s, $i) =~ /\A b?"/x) {
+                $i += length($&);
+                while ($i < length $s) {
+                    if (substr($s, $i, 1) eq q{\\}) { $i += 2 }
+                    elsif (substr($s, $i++, 1) eq q{"}) { last }
+                }
+                $i = length($s) if $i > length($s);
+            } elsif (substr($s, $i) =~ /\A b?\x27
+                (?: \\ (?: u\{[0-9A-Fa-f_]+\} | x[0-9A-Fa-f]{2} | [^\r\n] )
+                  | [^\\\x27\r\n\x80-\xff] | [\xc2-\xf4][\x80-\xbf]+ ) \x27/x) {
+                # Require a closing quote after one character, so lifetimes
+                # cannot swallow a subsequent import.
+                $i += length($&);
+            } else {
+                ++$i; next;
             }
-            if (substr($s, $i, 2) eq "/*") { $depth = 1; $i += 2; next }
-            if (substr($s, $i, 2) eq "//") { $i = index($s, "\n", $i); $i = length($s) if $i < 0; next }
-            if (substr($s, $i) =~ /\A r(\#*)"/x) {
-                my $end = q{"} . $1; $i += length($&); my $at = index($s, $end, $i);
-                $at = length($s) if $at < 0; $out .= (substr($s, $i, $at - $i) =~ tr/\n/\n/r); $i = $at + length($end); next;
-            }
-            if (substr($s, $i, 1) eq q{"}) {
-                ++$i; while ($i < length $s && substr($s, $i, 1) ne q{"}) { $out .= "\n" if substr($s,$i,1) eq "\n"; $i += substr($s,$i,1) eq q{\\} ? 2 : 1 } ++$i; next;
-            }
-            $out .= substr($s, $i++, 1);
+            # Blank the entire literal/comment while keeping line positions
+            # and token separators identical to the portable Rust scanner.
+            substr($out, $start, $i - $start) =~ s/[^\n]/ /g;
         }
         my @forbidden = split /\s+/, $ENV{FORBIDDEN_PACKAGES};
-        for my $statement (split /;/, $out) {
-            $statement =~ s/^\s*pub(?:\([^)]*\))?\s+//; next unless $statement =~ s/^\s*use\s+//;
-            for my $package (@forbidden) { my $crate = $package =~ s/-/_/gr;
-                if ($statement =~ /(?:^|[,{])\s*(?:::)?\Q$crate\E(?=\s|:|$)/) { print $package; exit }
+        # Visibility qualifiers naturally precede the globally located use
+        # token; a preceding function/module block must not hide it.
+        while ($out =~ /(?<![A-Za-z0-9_\x80-\xff])
+            (?: use(?![A-Za-z0-9_\x80-\xff]) | extern\s+crate(?![A-Za-z0-9_\x80-\xff]) )
+            ([^;]*);/gx) {
+            my $statement = $1;
+            for my $package (@forbidden) {
+                my $crate = $package =~ s/-/_/gr;
+                for my $branch (split /[{},]/, $statement) {
+                    if ($branch =~ /^\s*(?:::)?\s*([A-Za-z0-9_\x80-\xff]+)/ && $1 eq $crate) {
+                        print $package; exit;
+                    }
+                }
             }
         }
     ' "${file}")"
@@ -180,14 +239,36 @@ safe_self_test_dir() {
 self_test() {
     local output
     expect_import_canary() {
-        local description="$1" source="$2"
+        local description="$1" source="$2" package="${3:-opus}"
         cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
         printf '\n%s\n' "${source}" >> "${CANARY_DIR}/src/lib.rs"
         if output="$(bash "$0" --root "${CANARY_DIR}" 2>&1)"; then
             printf 'self-test failed: %s canary passed\n' "${description}" >&2
             return 1
-        elif [[ "${output}" != *"src import"* ]]; then
+        elif [[ "${output}" != *"src import"* || "${output}" != *"${package}"* ]]; then
             printf 'self-test failed: %s error was not specific:\n%s\n' "${description}" "${output}" >&2
+            return 1
+        fi
+    }
+    expect_harmless_canary() {
+        local description="$1" source="$2"
+        printf '%s\n' "${source}" > "${CANARY_DIR}/src/lib.rs"
+        if ! output="$(ROOT="${CANARY_DIR}" check_src_imports 2>&1)"; then
+            printf 'self-test failed: harmless %s was rejected:\n%s\n' "${description}" "${output}" >&2
+            return 1
+        fi
+    }
+    expect_workspace_canary() {
+        local description="$1" manifest="$2" accepted="$3" actual=false
+        printf '%s\n' "${manifest}" > "${CANARY_DIR}/Cargo.toml"
+        if output="$(ROOT="${CANARY_DIR}" check_manifest_and_lock 2>&1)"; then
+            actual=true
+        elif [[ "${output}" != *"[workspace] exclude"* ]]; then
+            printf 'self-test failed: %s error was not specific:\n%s\n' "${description}" "${output}" >&2
+            return 1
+        fi
+        if [[ "${actual}" != "${accepted}" ]]; then
+            printf 'self-test failed: %s expected accepted=%s, got %s\n' "${description}" "${accepted}" "${actual}" >&2
             return 1
         fi
     }
@@ -211,6 +292,43 @@ self_test() {
 
     cp "${SCRIPT_ROOT}/Cargo.toml" "${SCRIPT_ROOT}/Cargo.lock" "${CANARY_DIR}/"
     cp -R "${SCRIPT_ROOT}/src" "${CANARY_DIR}/src"
+
+    local failures=0
+    expect_import_canary "compact grouped name" 'use {opus};' || failures=$((failures + 1))
+    expect_import_canary "extern crate" 'extern crate opus;' || failures=$((failures + 1))
+    expect_import_canary "function then import" $'fn harmless() {}\nuse opus::Encoder;' || failures=$((failures + 1))
+    expect_import_canary "restricted visibility" 'pub(crate) use ::opus::Encoder;' || failures=$((failures + 1))
+    expect_import_canary "path visibility" 'pub(in crate::private) use {std::fmt, opusic_sys};' opusic-sys || failures=$((failures + 1))
+    expect_import_canary "compact use" 'use{claxon, flacenc};' claxon || failures=$((failures + 1))
+    expect_import_canary "extern crate alias" 'extern crate audiopus as codec;' audiopus || failures=$((failures + 1))
+    expect_import_canary "module then import" 'mod inner { use rubato::Resampler; }' rubato || failures=$((failures + 1))
+    expect_import_canary "comment separator" 'use/* comment */opus::Encoder;' || failures=$((failures + 1))
+    expect_import_canary "character quote" "const QUOTE: char = '\"'; use opus::Encoder;" || failures=$((failures + 1))
+    expect_import_canary "byte character quote" "const QUOTE: u8 = b'\"'; extern crate opus;" || failures=$((failures + 1))
+    expect_import_canary "escaped character" "const QUOTE: char = '\\''; use opus;" || failures=$((failures + 1))
+    expect_import_canary "unicode character escape" "const SYMBOL: char = '\\u{1f600}'; use opus;" || failures=$((failures + 1))
+    expect_import_canary "lifetime" "fn borrow<'a>(s: &'a str) { use opus::Encoder; }" || failures=$((failures + 1))
+    expect_import_canary "raw string then import" 'const HELP: &str = r#"use opus;"#; use flacenc::Encoder;' flacenc || failures=$((failures + 1))
+    expect_harmless_canary "raw string with semicolon" 'const HELP: &str = r#"; use opus::Encoder;"#;' || failures=$((failures + 1))
+    expect_harmless_canary "raw string with two hashes" 'const HELP: &str = r##"use opus::Encoder;"##;' || failures=$((failures + 1))
+    expect_harmless_canary "raw string with embedded closing quote" 'const HELP: &str = r##""#; use opus::Encoder;"##;' || failures=$((failures + 1))
+    expect_harmless_canary "raw byte string" 'const HELP: &[u8] = br##"; extern crate opus;"##;' || failures=$((failures + 1))
+    expect_harmless_canary "byte string" 'const HELP: &[u8] = b"\"; use opus;";' || failures=$((failures + 1))
+    expect_harmless_canary "escaped string" 'const HELP: &str = "\"; use opus;";' || failures=$((failures + 1))
+    expect_harmless_canary "nested and line comments" $'/* nested /* use opus; */ extern crate opus; */\n// use opus;' || failures=$((failures + 1))
+    expect_harmless_canary "identifier boundaries" 'use opus_extra::Encoder; fn reuse() {}' || failures=$((failures + 1))
+    expect_workspace_canary "multiline exclusion" $'[workspace]\nexclude = [\n "fuzz",\n "tools/codec-fixtures",\n]' true || failures=$((failures + 1))
+    expect_workspace_canary "comment-only exclusion" $'[workspace]\n# exclude = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    expect_workspace_canary "later members" $'[workspace]\nexclude = ["fuzz"]\nmembers = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    expect_workspace_canary "multiline then members" $'[workspace]\nexclude = [\n "fuzz", # "tools/codec-fixtures"\n]\nmembers = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    expect_workspace_canary "later table" $'[workspace]\nexclude = ["fuzz"]\n[package.metadata]\nexclude = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    expect_workspace_canary "hash and bracket in string" $'[workspace]\nexclude = ["name#with]bracket", "tools/codec-fixtures"] # comment' true || failures=$((failures + 1))
+    expect_workspace_canary "literal string and table comment" $'[workspace] # comment\nexclude = [\'tools/codec-fixtures\']' true || failures=$((failures + 1))
+    expect_workspace_canary "trailing comment" $'[workspace]\nexclude = ["fuzz"] # "tools/codec-fixtures"' false || failures=$((failures + 1))
+    expect_workspace_canary "different key" $'[workspace]\nexclude_more = ["tools/codec-fixtures"]' false || failures=$((failures + 1))
+    [[ "${failures}" -eq 0 ]] || return 1
+    cp "${SCRIPT_ROOT}/Cargo.toml" "${CANARY_DIR}/Cargo.toml"
+    cp "${SCRIPT_ROOT}/src/lib.rs" "${CANARY_DIR}/src/lib.rs"
 
     awk '
         /^\[dependencies\][[:space:]]*$/ { print; print "opus = \"0.4\""; next }
@@ -239,7 +357,7 @@ self_test() {
     expect_import_canary "grouped name" 'use { opus };'
     expect_import_canary "multiline group" $'use {\n    std::fmt,\n    opus::Encoder,\n};'
     expect_import_canary "visible import" 'pub use opus::Encoder;'
-    expect_import_canary "hyphen-normalized import" 'use opusic_sys::Encoder;'
+    expect_import_canary "hyphen-normalized import" 'use opusic_sys::Encoder;' opusic-sys
     expect_import_canary "string-followed import" 'const TOKEN: &str = "/*"; use opus::Encoder;'
     expect_import_canary "two comments followed import" '/* one */ /* two */ use opus;'
 
