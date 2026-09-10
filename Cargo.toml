@@ -46,6 +46,8 @@ hex-literal = "1.1.0"   # MIT OR Apache-2.0 — hand-computed vectors (BITS-06, 
 proptest = "1.11.0"     # MIT OR Apache-2.0 — differential oracle (D-01); MSRV 1.85, exactly GUARD-12's floor
 bitstream-io = "4.10.0" # MIT/Apache-2.0 (slash form; cargo-deny 0.20.2 resolves it as OR) — the oracle itself
 sha2 = "0.10.9"         # MIT OR Apache-2.0 — GUARD-09's golden digest (D-20), dev-only
+syn = { version = "2.0.119", features = ["full", "visit"] } # MIT OR Apache-2.0 — CODEC-07 AST oracle
+toml = "0.8.23" # MIT OR Apache-2.0 — CODEC-07 manifest/lock oracle
 
 [[test]]
 name = "fuzz_regression"

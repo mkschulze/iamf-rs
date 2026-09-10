@@ -1,6 +1,6 @@
 //! CODEC-07 must remain true even on Windows, where the shell boundary gate is
 //! not available. These canaries exercise the same root manifest/source rule
-//! using only Rust's standard library.
+//! using portable Rust, syn's AST, and decoded TOML values.
 
 use std::{
     env, fs,
@@ -8,6 +8,8 @@ use std::{
     process,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use syn::{ext::IdentExt, visit::Visit};
 
 const FORBIDDEN: &[&str] = &[
     "claxon",
@@ -19,7 +21,153 @@ const FORBIDDEN: &[&str] = &[
 ];
 
 #[test]
-fn lexical_import_canaries_have_the_expected_polarity() {
+fn parser_valid_imports_are_distinguished_from_literal_content() {
+    let mut failures = Vec::new();
+    for (source, forbidden) in [
+        ("extern crate opus;", true),
+        ("use r#opus::Encoder;", true),
+        (
+            "fn f() -> impl Sized + use<> { use opus::Encoder; () }",
+            true,
+        ),
+        (
+            "const HELP: &std::ffi::CStr = cr#\"\"\"#; use opus::Encoder;",
+            true,
+        ),
+        ("use\u{0085}opus::Encoder;", true),
+        (
+            "const HELP: &std::ffi::CStr = cr#\"\"; use opus;\"#;",
+            false,
+        ),
+        ("const LABEL: &str = r#\"use opus::Encoder;\"#;", false),
+        ("use std::{opus, nested::{opusic_sys}};", false),
+        (
+            "mod local { fn f() { extern crate r#opus as codec; } }",
+            true,
+        ),
+        ("use {std::fmt, {opus as codec}};", true),
+    ] {
+        syn::parse_file(source).expect("the import canary must be valid Rust syntax");
+        let canary = TemporaryCanary::new("parser-import");
+        write_complete_canary(canary.path(), "", source);
+        let result = assert_boundary(canary.path());
+        match (forbidden, result) {
+            (false, Ok(())) => {}
+            (true, Err(error)) if error.contains("src import") && error.contains("`opus`") => {}
+            (expected, actual) => {
+                failures.push(format!("{source:?}: forbidden={expected}, got {actual:?}"))
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn decoded_manifest_dependency_tables_define_the_boundary() {
+    let mut failures = Vec::new();
+    for (manifest, forbidden) in [
+        (
+            "[dependencies] # legal table comment\n\"opus\" = \"0.4\"\n",
+            true,
+        ),
+        (
+            "[target.'cfg(unix)'.dev-dependencies]\nrenamed = { package = 'opus', version = \"0.4\" }\n",
+            true,
+        ),
+        (
+            "[dependencies.renamed]\npackage = 'opus'\nversion = '0.4'\n",
+            true,
+        ),
+        ("[build-dependencies]\nopus = '0.4'\n", true),
+        (
+            "[target.'cfg(windows)'.build-dependencies.renamed]\npackage = \"op\\u0075s\"\n",
+            true,
+        ),
+        ("[workspace.dependencies]\nopus = '0.4'\n", true),
+        (
+            "[dependencies]\n# package = \"opus\"\nthiserror = '2' # opus = '0.4'\n",
+            false,
+        ),
+        (
+            "[package.metadata]\nnote = '''\n[dependencies]\nopus = '0.4'\n'''\n",
+            false,
+        ),
+    ] {
+        let canary = TemporaryCanary::new("parser-dependency");
+        write_complete_canary(canary.path(), manifest, "");
+        let text = fs::read_to_string(canary.path().join("Cargo.toml")).unwrap();
+        text.parse::<toml::Value>()
+            .expect("the manifest canary must be valid TOML");
+        let result = assert_boundary(canary.path());
+        match (forbidden, result) {
+            (false, Ok(())) => {}
+            (true, Err(error)) if error.contains("dependencies") && error.contains("`opus`") => {}
+            (expected, actual) => failures.push(format!(
+                "{manifest:?}: forbidden={expected}, got {actual:?}"
+            )),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn decoded_lock_package_names_define_the_boundary() {
+    let mut failures = Vec::new();
+    for (lock, forbidden) in [
+        ("[[package]] # legal comment\n'name' = 'opus'\n", true),
+        ("[[\"package\"]]\nname = \"op\\u0075s\"\n", true),
+        ("[[package]]\nname = 'iamf'\n# name = \"opus\"\n", false),
+        (
+            "[[package]]\nname = 'iamf'\n[metadata]\nname = \"opus\"\n",
+            false,
+        ),
+    ] {
+        lock.parse::<toml::Value>()
+            .expect("the lock canary must be valid TOML");
+        let canary = TemporaryCanary::new("parser-lock");
+        write_complete_canary(canary.path(), "", "");
+        fs::write(canary.path().join("Cargo.lock"), lock).unwrap();
+        let result = assert_boundary(canary.path());
+        match (forbidden, result) {
+            (false, Ok(())) => {}
+            (true, Err(error)) if error.contains("Cargo.lock") && error.contains("`opus`") => {}
+            (expected, actual) => {
+                failures.push(format!("{lock:?}: forbidden={expected}, got {actual:?}"))
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn malformed_inputs_fail_with_their_path() {
+    for (file, content, diagnostic) in [
+        ("Cargo.toml", "[workspace", "cannot parse"),
+        ("Cargo.lock", "[[package]", "cannot parse"),
+        ("src/lib.rs", "fn broken( {", "cannot parse Rust source"),
+    ] {
+        let canary = TemporaryCanary::new("malformed");
+        write_complete_canary(canary.path(), "", "");
+        let path = canary.path().join(file);
+        fs::write(&path, content).unwrap();
+        let error = assert_boundary(canary.path()).expect_err("malformed input must fail closed");
+        assert!(
+            error.contains(diagnostic) && error.contains(&path.display().to_string()),
+            "{error}"
+        );
+    }
+}
+
+fn write_complete_canary(root: &Path, manifest: &str, source: &str) {
+    write_canary(
+        root,
+        &format!("[workspace]\nexclude = [\"tools/codec-fixtures\"]\n{manifest}"),
+        source,
+    );
+}
+
+#[test]
+fn import_canaries_have_the_expected_polarity() {
     let mut failures = Vec::new();
     for (source, expected) in [
         ("use r#opus::Encoder;\n", Some("opus")),
@@ -83,8 +231,9 @@ fn lexical_import_canaries_have_the_expected_polarity() {
         ),
     ] {
         let canary = TemporaryCanary::new("lexical-import");
-        write_canary(canary.path(), "[dependencies]\n", source);
-        let result = assert_src_has_no_codec_imports(&canary.path().join("src"));
+        syn::parse_file(source).expect("the import canary must be valid Rust syntax");
+        write_complete_canary(canary.path(), "[dependencies]\n", source);
+        let result = assert_boundary(canary.path());
         match (expected, result) {
             (None, Ok(())) => {}
             (Some(package), Err(error))
@@ -101,6 +250,14 @@ fn lexical_import_canaries_have_the_expected_polarity() {
 fn workspace_exclusion_canaries_are_limited_to_the_exclude_value() {
     let mut failures = Vec::new();
     for (manifest, accepted) in [
+        (
+            "[\"workspace\"]\n\"exclude\" = [\"tools/codec-fixtures\"]\n",
+            true,
+        ),
+        (
+            "[workspace]\nexclude = [\"tools\\u002fcodec-fixtures\"]\n",
+            true,
+        ),
         (
             "[package.metadata]\nnote = \"\"\"\n[workspace]\nexclude = [\"tools/codec-fixtures\"]\n\"\"\"\n[workspace]\nexclude = [\"fuzz\"]\n",
             false,
@@ -186,13 +343,22 @@ fn workspace_exclusion_canaries_are_limited_to_the_exclude_value() {
             false,
         ),
     ] {
+        manifest
+            .parse::<toml::Value>()
+            .expect("the workspace canary must be valid TOML");
         let canary = TemporaryCanary::new("workspace-value");
         write_canary(canary.path(), manifest, "");
-        let result = assert_root_workspace_excludes_codec_fixtures(canary.path());
+        let result = assert_boundary(canary.path());
         if result.is_ok() != accepted {
             failures.push(format!(
                 "{manifest:?}: expected accepted={accepted}, got {result:?}"
             ));
+        }
+        if let Err(error) = result {
+            assert!(
+                error.contains("[workspace] exclude") && error.contains("tools/codec-fixtures"),
+                "{error}"
+            );
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -200,318 +366,120 @@ fn workspace_exclusion_canaries_are_limited_to_the_exclude_value() {
 
 #[test]
 fn codec_dependencies_and_src_imports_remain_outside_the_root_crate() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert_boundary(root).expect("the committed root tree must preserve the CODEC-07 boundary");
+    let root = boundary_root().expect("the CODEC-07 boundary root must be a directory");
+    assert_boundary(&root).expect("the root tree must preserve the CODEC-07 boundary");
+}
 
-    let canary = TemporaryCanary::new("dependency");
-    write_canary(
-        canary.path(),
-        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nopus = \"0.4\"\n",
-        "pub const CODEC_ID_OPUS: u32 = 1;\n",
-    );
-    let dependency_error = assert_manifest_and_src_boundary(canary.path())
-        .expect_err("a root [dependencies] opus entry must be rejected")
-        .to_string();
-    assert!(
-        dependency_error.contains("[dependencies]"),
-        "{dependency_error}"
-    );
-    assert!(dependency_error.contains("opus"), "{dependency_error}");
-
-    let canary = TemporaryCanary::new("import");
-    write_canary(
-        canary.path(),
-        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nthiserror = \"2\"\n",
-        "use opus::Encoder;\n",
-    );
-    let import_error = assert_manifest_and_src_boundary(canary.path())
-        .expect_err("a codec import from src must be rejected")
-        .to_string();
-    assert!(import_error.contains("src import"), "{import_error}");
-    assert!(import_error.contains("opus"), "{import_error}");
-
-    for (kind, source) in [
-        ("simple-import", "use opus;\n"),
-        ("aliased-import", "use opus as codec;\n"),
-        ("grouped-import", "use { opus::Encoder };\n"),
-        ("inline-block-import", "/* comment */ use opus;\n"),
-        ("block-comment", "/* use opus::Encoder; */\n"),
-        ("grouped-branch", "use { std::fmt, opus::Encoder };\n"),
-        ("grouped-name", "use { opus };\n"),
-        (
-            "multiline-group",
-            "use {\n    std::fmt,\n    opus::Encoder,\n};\n",
-        ),
-        ("visible-import", "pub use opus::Encoder;\n"),
-        ("hyphen-normalized", "use opusic_sys::Encoder;\n"),
-        (
-            "raw-string",
-            "const TOKEN: &str = r#\"use opus::Encoder;\"#;\n",
-        ),
-        (
-            "string-then-import",
-            "const TOKEN: &str = \"/*\"; use opus::Encoder;\n",
-        ),
-        (
-            "two-comments-then-import",
-            "/* one */ /* two */ use opus;\n",
-        ),
-    ] {
-        let canary = TemporaryCanary::new(kind);
-        write_canary(
-            canary.path(),
-            "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nthiserror = \"2\"\n",
-            source,
-        );
-        let result = assert_manifest_and_src_boundary(canary.path());
-        if matches!(kind, "block-comment" | "raw-string") {
-            result.expect("a block comment mentioning a codec must remain harmless");
-        } else {
-            let error = result
-                .expect_err("a simple or aliased codec import must be rejected")
-                .to_string();
-            assert!(error.contains("src import"), "{error}");
-            assert!(error.contains("opus"), "{error}");
-        }
+fn boundary_root() -> Result<PathBuf, String> {
+    let root = env::var_os("CODEC_BOUNDARY_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    if !root.is_dir() {
+        return Err(format!(
+            "boundary root is not a directory: {}",
+            root.display()
+        ));
     }
-
-    let canary = TemporaryCanary::new("workspace-exclude");
-    write_canary(
-        canary.path(),
-        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\nmembers = [\".\"]\n",
-        "pub const CODEC_ID_OPUS: u32 = 1;\n",
-    );
-    let workspace_error = assert_root_workspace_excludes_codec_fixtures(canary.path())
-        .expect_err("the root workspace must exclude the codec fixture generator")
-        .to_string();
-    assert!(
-        workspace_error.contains("[workspace] exclude"),
-        "{workspace_error}"
-    );
-
-    let canary = TemporaryCanary::new("workspace-multiline");
-    write_canary(
-        canary.path(),
-        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\nexclude = [\n    \"fuzz\",\n    \"tools/codec-fixtures\",\n]\n",
-        "pub const CODEC_ID_OPUS: u32 = 1;\n",
-    );
-    assert_root_workspace_excludes_codec_fixtures(canary.path())
-        .expect("a multiline workspace exclusion must be accepted");
-
-    let canary = TemporaryCanary::new("workspace-comment");
-    write_canary(
-        canary.path(),
-        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n# exclude = [\"tools/codec-fixtures\"]\n",
-        "pub const CODEC_ID_OPUS: u32 = 1;\n",
-    );
-    assert_root_workspace_excludes_codec_fixtures(canary.path())
-        .expect_err("a comment-only workspace exclusion must not count");
-
-    let canary = TemporaryCanary::new("lockfile");
-    write_canary(
-        canary.path(),
-        "[package]\nname = \"boundary-canary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\nexclude = [\"tools/codec-fixtures\"]\n",
-        "pub const CODEC_ID_OPUS: u32 = 1;\n",
-    );
-    fs::write(
-        canary.path().join("Cargo.lock"),
-        "[[package]]\nname = \"opus\"\n",
-    )
-    .expect("write codec lockfile canary");
-    let lock_error = assert_lock_has_no_codec_packages(canary.path())
-        .expect_err("the root lockfile must not resolve opus")
-        .to_string();
-    assert!(lock_error.contains("Cargo.lock"), "{lock_error}");
-    assert!(lock_error.contains("opus"), "{lock_error}");
+    Ok(root)
 }
 
 fn assert_boundary(root: &Path) -> Result<(), String> {
-    assert_root_workspace_excludes_codec_fixtures(root)?;
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = read_toml(&manifest_path)?;
+    assert_root_workspace_excludes_codec_fixtures(&manifest, &manifest_path)?;
+    assert_manifest_has_no_codec_dependencies(&manifest, &mut Vec::new(), &manifest_path)?;
     assert_lock_has_no_codec_packages(root)?;
-    assert_manifest_and_src_boundary(root)
-}
-
-fn assert_manifest_and_src_boundary(root: &Path) -> Result<(), String> {
-    let manifest = fs::read_to_string(root.join("Cargo.toml"))
-        .map_err(|error| format!("cannot read root Cargo.toml: {error}"))?;
-    assert_manifest_has_no_codec_dependencies(&manifest)?;
     assert_src_has_no_codec_imports(&root.join("src"))
 }
 
-fn assert_root_workspace_excludes_codec_fixtures(root: &Path) -> Result<(), String> {
-    let manifest = fs::read_to_string(root.join("Cargo.toml"))
-        .map_err(|error| format!("cannot read root Cargo.toml: {error}"))?;
-    let mut in_workspace = false;
-    let manifest = strip_toml_comments(&manifest);
-    let syntax = mask_toml_strings(&manifest);
-    let mut offset = 0;
-    for line in syntax.split_inclusive('\n') {
-        let line_start = offset;
-        offset += line.len();
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_workspace = trimmed == "[workspace]";
-            continue;
-        }
-        if in_workspace {
-            if let Some((key, value)) = line.split_once('=') {
-                if key.trim() == "exclude" && value.trim_start().starts_with('[') {
-                    // The parser returns at this array's closing bracket, even when
-                    // later members or tables mention the fixture generator.
-                    let array_start = line_start + key.len() + 1 + value.find('[').unwrap() + 1;
-                    if toml_array_contains_fixture(&manifest[array_start..]) {
-                        return Ok(());
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    Err("root [workspace] exclude must contain tools/codec-fixtures".to_owned())
+fn read_toml(path: &Path) -> Result<toml::Value, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    contents
+        .parse()
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))
 }
 
-fn strip_toml_comments(manifest: &str) -> String {
-    let bytes = manifest.as_bytes();
-    let mut output = bytes.to_vec();
-    let mut index = 0;
-    while index < bytes.len() {
-        if matches!(bytes[index], b'"' | b'\'') {
-            // Use the same string boundaries as the array parser, including
-            // multiline values whose content contains comments or brackets.
-            index = toml_string_span(manifest, index).map_or(bytes.len(), |(_, _, end)| end);
-        } else if bytes[index] == b'#' {
-            while index < bytes.len() && bytes[index] != b'\n' {
-                output[index] = b' ';
-                index += 1;
-            }
-        } else {
-            index += 1;
-        }
-    }
-    String::from_utf8(output).expect("blanking TOML comments preserves UTF-8")
-}
-
-fn mask_toml_strings(manifest: &str) -> String {
-    let bytes = manifest.as_bytes();
-    let mut output = bytes.to_vec();
-    let mut index = 0;
-    while index < bytes.len() {
-        if matches!(bytes[index], b'"' | b'\'') {
-            let end = toml_string_span(manifest, index).map_or(bytes.len(), |(_, _, end)| end);
-            for byte in &mut output[index..end] {
-                if *byte != b'\n' {
-                    *byte = b' ';
-                }
-            }
-            index = end;
-        } else {
-            index += 1;
-        }
-    }
-    String::from_utf8(output).expect("masking complete TOML strings preserves UTF-8")
-}
-
-fn toml_array_contains_fixture(array: &str) -> bool {
-    let bytes = array.as_bytes();
-    let mut index = 0;
-    let mut found = false;
-    while index < bytes.len() {
-        if matches!(bytes[index], b'"' | b'\'') {
-            let Some((start, end, next)) = toml_string_span(array, index) else {
-                return false;
-            };
-            found |= &array[start..end] == "tools/codec-fixtures";
-            index = next;
-        } else if bytes[index] == b']' {
-            return found;
-        } else {
-            index += 1;
-        }
-    }
-    false
-}
-
-// Returns the content range and first byte after one complete TOML string.
-// Escape spellings remain literal; only the initial newline of a multiline
-// string is trimmed. One or two quotes before its closing triple are content.
-fn toml_string_span(source: &str, start: usize) -> Option<(usize, usize, usize)> {
-    let bytes = source.as_bytes();
-    let delimiter = *bytes.get(start)?;
-    if !matches!(delimiter, b'"' | b'\'') {
-        return None;
-    }
-    let multiline = bytes.get(start..start + 3) == Some(&[delimiter; 3]);
-    let mut content = start + if multiline { 3 } else { 1 };
-    if multiline {
-        if bytes[content..].starts_with(b"\r\n") {
-            content += 2;
-        } else if bytes.get(content) == Some(&b'\n') {
-            content += 1;
-        }
-    }
-    let mut index = content;
-    while index < bytes.len() {
-        if delimiter == b'"' && bytes[index] == b'\\' {
-            index += 2;
-        } else if bytes[index] == delimiter {
-            if !multiline {
-                return Some((content, index, index + 1));
-            }
-            let quotes = bytes[index..]
+fn assert_root_workspace_excludes_codec_fixtures(
+    manifest: &toml::Value,
+    path: &Path,
+) -> Result<(), String> {
+    let excluded = manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("exclude"))
+        .and_then(toml::Value::as_array)
+        .is_some_and(|entries| {
+            entries
                 .iter()
-                .take_while(|byte| **byte == delimiter)
-                .count();
-            if quotes >= 3 {
-                return (quotes <= 5).then_some((content, index + quotes - 3, index + quotes));
-            }
-            index += quotes;
-        } else {
-            index += 1;
-        }
-    }
-    None
-}
-
-fn assert_lock_has_no_codec_packages(root: &Path) -> Result<(), String> {
-    let lock = fs::read_to_string(root.join("Cargo.lock"))
-        .map_err(|error| format!("cannot read root Cargo.lock: {error}"))?;
-    let mut in_package = false;
-    for line in lock.lines() {
-        let trimmed = line.trim();
-        if trimmed == "[[package]]" {
-            in_package = true;
-            continue;
-        }
-        if in_package {
-            for codec in FORBIDDEN {
-                if trimmed == format!("name = \"{codec}\"") {
-                    return Err(format!(
-                        "root Cargo.lock must not contain codec package `{codec}`"
-                    ));
-                }
-            }
-        }
+                .any(|entry| entry.as_str() == Some("tools/codec-fixtures"))
+        });
+    if !excluded {
+        return Err(format!(
+            "root [workspace] exclude must contain tools/codec-fixtures ({})",
+            path.display()
+        ));
     }
     Ok(())
 }
 
-fn assert_manifest_has_no_codec_dependencies(manifest: &str) -> Result<(), String> {
-    let mut section = "";
-    for line in manifest.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            section = trimmed;
-            continue;
+fn assert_manifest_has_no_codec_dependencies(
+    value: &toml::Value,
+    key_path: &mut Vec<String>,
+    manifest_path: &Path,
+) -> Result<(), String> {
+    match value {
+        toml::Value::Table(table) => {
+            if key_path.last().is_some_and(|key| {
+                matches!(
+                    key.as_str(),
+                    "dependencies" | "dev-dependencies" | "build-dependencies"
+                )
+            }) {
+                for (name, dependency) in table {
+                    let package = dependency
+                        .as_table()
+                        .and_then(|table| table.get("package"))
+                        .and_then(toml::Value::as_str);
+                    if let Some(codec) = FORBIDDEN
+                        .iter()
+                        .find(|codec| name == **codec || package == Some(**codec))
+                    {
+                        return Err(format!(
+                            "[{}] must not contain codec dependency `{codec}` ({})",
+                            key_path.join("."),
+                            manifest_path.display()
+                        ));
+                    }
+                }
+            }
+            for (key, child) in table {
+                key_path.push(key.clone());
+                assert_manifest_has_no_codec_dependencies(child, key_path, manifest_path)?;
+                key_path.pop();
+            }
         }
-        if !matches!(section, "[dependencies]" | "[dev-dependencies]") {
-            continue;
+        toml::Value::Array(entries) => {
+            for entry in entries {
+                assert_manifest_has_no_codec_dependencies(entry, key_path, manifest_path)?;
+            }
         }
-        let dependency = trimmed.split_once('=').map(|(name, _)| name.trim());
-        for codec in FORBIDDEN {
-            if dependency == Some(*codec) || trimmed.contains(&format!("package = \"{codec}\"")) {
-                return Err(format!(
-                    "{section} must not contain codec dependency `{codec}`"
-                ));
+        _ => {}
+    }
+    Ok(())
+}
+
+fn assert_lock_has_no_codec_packages(root: &Path) -> Result<(), String> {
+    let path = root.join("Cargo.lock");
+    let lock = read_toml(&path)?;
+    if let Some(packages) = lock.get("package").and_then(toml::Value::as_array) {
+        for package in packages {
+            if let Some(name) = package.get("name").and_then(toml::Value::as_str) {
+                if FORBIDDEN.contains(&name) {
+                    return Err(format!(
+                        "root Cargo.lock must not contain codec package `{name}` ({})",
+                        path.display()
+                    ));
+                }
             }
         }
     }
@@ -522,7 +490,9 @@ fn assert_src_has_no_codec_imports(src: &Path) -> Result<(), String> {
     if !src.is_dir() {
         return Ok(());
     }
-    for entry in fs::read_dir(src).map_err(|error| format!("cannot read src: {error}"))? {
+    for entry in
+        fs::read_dir(src).map_err(|error| format!("cannot read {}: {error}", src.display()))?
+    {
         let entry = entry.map_err(|error| format!("cannot read src entry: {error}"))?;
         let path = entry.path();
         if path.is_dir() {
@@ -534,7 +504,11 @@ fn assert_src_has_no_codec_imports(src: &Path) -> Result<(), String> {
         }
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        if let Some(codec) = imported_codec(&strip_rust_comments_and_strings(&source)) {
+        let file = syn::parse_file(&source)
+            .map_err(|error| format!("cannot parse Rust source {}: {error}", path.display()))?;
+        let mut imports = CodecImports::default();
+        imports.visit_file(&file);
+        if let Some(codec) = imports.forbidden {
             return Err(format!(
                 "src import must not name codec `{codec}` ({})",
                 path.display()
@@ -544,207 +518,62 @@ fn assert_src_has_no_codec_imports(src: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn imported_codec(source: &str) -> Option<&'static str> {
-    let bytes = source.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if !is_identifier_byte(bytes[index]) {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        let raw_identifier = bytes[index..].starts_with(b"r#");
-        if raw_identifier {
-            index += 2;
-        }
-        while index < bytes.len() && is_identifier_byte(bytes[index]) {
-            index += 1;
-        }
-        // `r#use` and `r#extern` are identifiers, not import keywords.
-        if raw_identifier {
-            continue;
-        }
-        let mut rest = &source[index..];
-        match &source[start..index] {
-            // Visibility tokens before `use` do not affect the import body.
-            "use" => {}
-            "extern" => {
-                rest = rest.trim_start();
-                let Some(body) = rest.strip_prefix("crate") else {
-                    continue;
-                };
-                if body
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|byte| is_identifier_byte(*byte))
-                {
-                    continue;
-                }
-                rest = body;
-            }
-            _ => continue,
-        }
-        let Some((statement, _)) = rest.split_once(';') else {
-            continue;
-        };
-        for codec in FORBIDDEN {
-            let identifier = codec.replace('-', "_");
-            for branch in statement.split(['{', ',', '}']) {
-                let branch = branch.trim_start();
-                let branch = branch.strip_prefix("::").unwrap_or(branch).trim_start();
-                let branch = branch.strip_prefix("r#").unwrap_or(branch);
-                let end = branch
-                    .as_bytes()
-                    .iter()
-                    .take_while(|byte| is_identifier_byte(**byte))
-                    .count();
-                if branch[..end] == identifier {
-                    return Some(codec);
-                }
-            }
-        }
-        index = source.len() - rest.len() + statement.len() + 1;
-    }
-    None
+#[derive(Default)]
+struct CodecImports {
+    forbidden: Option<&'static str>,
 }
 
-fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+impl<'ast> Visit<'ast> for CodecImports {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        if self.forbidden.is_none() {
+            self.forbidden = imported_codec(&item.tree);
+        }
+        syn::visit::visit_item_use(self, item);
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        if self.forbidden.is_none() {
+            self.forbidden = codec_ident(&item.ident);
+        }
+        syn::visit::visit_item_extern_crate(self, item);
+    }
 }
 
-fn strip_rust_comments_and_strings(source: &str) -> String {
-    let bytes = source.as_bytes();
-    let mut output = bytes.to_vec();
-    let mut index = 0;
-    while index < bytes.len() {
-        let start = index;
-        if bytes[index..].starts_with(b"/*") {
-            let mut depth = 1;
-            index += 2;
-            while index < bytes.len() && depth > 0 {
-                if bytes[index..].starts_with(b"/*") {
-                    depth += 1;
-                    index += 2;
-                } else if bytes[index..].starts_with(b"*/") {
-                    depth -= 1;
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-        } else if bytes[index..].starts_with(b"//") {
-            while index < bytes.len() && bytes[index] != b'\n' {
-                index += 1;
-            }
-        } else if let Some((content, hashes)) = raw_string_start(bytes, index) {
-            index = content;
-            while index < bytes.len() {
-                if bytes[index] == b'"'
-                    && bytes
-                        .get(index + 1..index + 1 + hashes)
-                        .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
-                {
-                    index += hashes + 1;
-                    break;
-                }
-                index += 1;
-            }
-        } else if bytes[index] == b'"' || bytes[index..].starts_with(b"b\"") {
-            if bytes[index] == b'b' {
-                index += 1;
-            }
-            index += 1;
-            while index < bytes.len() {
-                if bytes[index] == b'\\' {
-                    index = (index + 2).min(bytes.len());
-                } else if bytes[index] == b'"' {
-                    index += 1;
-                    break;
-                } else {
-                    index += 1;
-                }
-            }
-        } else if let Some(end) = character_literal_end(source, index) {
-            index = end;
-        } else {
-            index += 1;
-            continue;
-        }
-        // Preserve token separation and line positions; never retain literal
-        // content or merge identifiers separated by a comment.
-        for byte in &mut output[start..index] {
-            if *byte != b'\n' {
-                *byte = b' ';
-            }
-        }
+fn imported_codec(tree: &syn::UseTree) -> Option<&'static str> {
+    // Only each branch's leading segment identifies an external package.
+    // In `use std::{opus, opusic_sys}`, both names belong to `std`.
+    match tree {
+        syn::UseTree::Path(path) => codec_ident(&path.ident),
+        syn::UseTree::Name(name) => codec_ident(&name.ident),
+        syn::UseTree::Rename(rename) => codec_ident(&rename.ident),
+        syn::UseTree::Group(group) => group.items.iter().find_map(imported_codec),
+        syn::UseTree::Glob(_) => None,
     }
-    String::from_utf8(output).expect("sanitizing complete literals preserves UTF-8")
 }
 
-fn raw_string_start(bytes: &[u8], index: usize) -> Option<(usize, usize)> {
-    if index > 0 && is_identifier_byte(bytes[index - 1]) {
-        return None;
-    }
-    let mut cursor = index;
-    if bytes[cursor] == b'b' {
-        cursor += 1;
-    }
-    if bytes.get(cursor) != Some(&b'r') {
-        return None;
-    }
-    cursor += 1;
-    let hashes = bytes[cursor..]
-        .iter()
-        .take_while(|byte| **byte == b'#')
-        .count();
-    cursor += hashes;
-    (bytes.get(cursor) == Some(&b'"')).then_some((cursor + 1, hashes))
-}
-
-fn character_literal_end(source: &str, index: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    let mut cursor = index;
-    if bytes[cursor] == b'b' {
-        cursor += 1;
-    }
-    if bytes.get(cursor) != Some(&b'\'') {
-        return None;
-    }
-    cursor += 1;
-    if bytes.get(cursor) == Some(&b'\\') {
-        cursor += 1;
-        match bytes.get(cursor)? {
-            b'u' if bytes.get(cursor + 1) == Some(&b'{') => {
-                cursor += 2;
-                cursor += bytes[cursor..].iter().position(|byte| *byte == b'}')? + 1;
-            }
-            b'x' => cursor += 3,
-            _ => cursor += 1,
-        }
-    } else {
-        let ch = source.get(cursor..)?.chars().next()?;
-        if matches!(ch, '\n' | '\r' | '\'') {
-            return None;
-        }
-        cursor += ch.len_utf8();
-    }
-    // A lifetime such as `'a` lacks the immediate closing quote.
-    (bytes.get(cursor) == Some(&b'\'')).then_some(cursor + 1)
+fn codec_ident(ident: &syn::Ident) -> Option<&'static str> {
+    let package = ident.unraw().to_string().replace('_', "-");
+    FORBIDDEN.iter().copied().find(|codec| *codec == package)
 }
 
 fn write_canary(root: &Path, manifest: &str, source: &str) {
     fs::create_dir_all(root.join("src")).expect("create canary src directory");
     fs::write(root.join("Cargo.toml"), manifest).expect("write canary manifest");
+    fs::write(root.join("Cargo.lock"), "version = 4\n").expect("write canary lockfile");
     fs::write(root.join("src/lib.rs"), source).expect("write canary source");
 }
 
 struct TemporaryCanary {
+    base: PathBuf,
     path: PathBuf,
 }
 
 impl TemporaryCanary {
     fn new(kind: &str) -> Self {
-        let base = env::temp_dir();
+        let base = env::temp_dir()
+            .canonicalize()
+            .expect("resolve temporary base");
+        assert!(base.is_dir(), "temporary base must be a directory");
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock after Unix epoch")
@@ -754,7 +583,7 @@ impl TemporaryCanary {
             process::id()
         ));
         fs::create_dir(&path).expect("create isolated canary directory");
-        Self { path }
+        Self { base, path }
     }
 
     fn path(&self) -> &Path {
@@ -764,7 +593,6 @@ impl TemporaryCanary {
 
 impl Drop for TemporaryCanary {
     fn drop(&mut self) {
-        let base = env::temp_dir();
         let valid_name = self
             .path
             .file_name()
@@ -772,7 +600,7 @@ impl Drop for TemporaryCanary {
             .is_some_and(|name| name.starts_with("iamf-codec-boundary-"));
         assert_eq!(
             self.path.parent(),
-            Some(base.as_path()),
+            Some(self.base.as_path()),
             "refusing unsafe canary cleanup"
         );
         assert!(valid_name, "refusing unsafe canary cleanup");
