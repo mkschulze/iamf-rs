@@ -4,12 +4,15 @@ mod support;
 
 use opus::{Application, Bitrate, Channels, Encoder};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const FRAME_SAMPLES: usize = 960;
 const CHANNELS: usize = 2;
 const PACKETS: usize = 2;
 const END_TRIM: usize = 1;
 const MAX_PACKET_BYTES: usize = 4_000;
+
+static TEMP_DIR_SUFFIX: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
 struct Corpus {
@@ -83,6 +86,18 @@ fn verify_opus_corpus() {
     verify(&support::fixture_dir("CODEC_FIXTURE_INPUT"));
 }
 
+#[test]
+fn verify_rejects_self_consistent_manifest_shifted_one_frame_lookahead() {
+    let dir = temporary_fixture_dir();
+    write_shifted_lookahead_fixture(&dir);
+    let result = std::panic::catch_unwind(|| verify(&dir));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        result.is_err(),
+        "a shifted manifest L/S and matching shifted provenance/output digests must be rejected"
+    );
+}
+
 fn configure_encoder() -> Encoder {
     let mut encoder = Encoder::new(48_000, Channels::Stereo, Application::Audio).unwrap();
     encoder.set_bitrate(Bitrate::Bits(128_000)).unwrap();
@@ -102,7 +117,7 @@ fn configure_encoder() -> Encoder {
 
 fn generate() -> Corpus {
     let mut encoder = configure_encoder();
-    let lookahead = usize::try_from(encoder.get_lookahead().unwrap()).unwrap();
+    let lookahead = configured_lookahead(&mut encoder);
     assert!(lookahead > 0);
     let source_frames = PACKETS * FRAME_SAMPLES - lookahead - END_TRIM;
     assert!(source_frames > 0);
@@ -138,6 +153,10 @@ fn generate() -> Corpus {
         source,
         expected,
     }
+}
+
+fn configured_lookahead(encoder: &mut Encoder) -> usize {
+    usize::try_from(encoder.get_lookahead().unwrap()).unwrap()
 }
 
 fn signal(frames: usize) -> Vec<i16> {
@@ -177,6 +196,54 @@ fn artifact_names(packets: usize) -> Vec<String> {
     names
 }
 
+fn temporary_fixture_dir() -> std::path::PathBuf {
+    let suffix = TEMP_DIR_SUFFIX.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "iamf-opus-fixture-lookahead-{}-{suffix}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    dir
+}
+
+fn write_shifted_lookahead_fixture(dir: &Path) {
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/codecs/opus");
+    let fields = support::manifest(&corpus);
+    let lookahead: usize = fields["L"].parse().unwrap();
+    let source_frames: usize = fields["S"].parse().unwrap();
+    for name in ["packet-000.bin", "packet-001.bin"] {
+        std::fs::copy(corpus.join(name), dir.join(name)).unwrap();
+    }
+    let mut source = std::fs::read(corpus.join("source.s16le")).unwrap();
+    source.truncate(source.len() - CHANNELS * 2);
+    std::fs::write(dir.join("source.s16le"), &source).unwrap();
+    let expected = std::fs::read(corpus.join("expected.s16le")).unwrap();
+    let expected = expected[CHANNELS * 2..].to_vec();
+    std::fs::write(dir.join("expected.s16le"), &expected).unwrap();
+    let manifest = std::fs::read_to_string(corpus.join("MANIFEST.md")).unwrap();
+    let manifest = manifest
+        .lines()
+        .map(|line| match line {
+            line if line.starts_with("L = ") => format!("L = {}", lookahead + 1),
+            line if line.starts_with("S = ") => format!("S = {}", source_frames - 1),
+            line if line.starts_with("sha256.source.s16le = ") => {
+                format!("sha256.source.s16le = {}", support::digest(&source))
+            }
+            line if line.starts_with("sha256.expected.s16le = ") => {
+                format!("sha256.expected.s16le = {}", support::digest(&expected))
+            }
+            line => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.join("MANIFEST.md"), format!("{manifest}\n")).unwrap();
+}
+
 fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
     samples
         .iter()
@@ -212,6 +279,12 @@ fn verify(dir: &Path) {
     let source_frames = number("S");
     let packets = number("P");
     let end_trim = number("E");
+    let mut encoder = configure_encoder();
+    assert_eq!(
+        lookahead,
+        configured_lookahead(&mut encoder),
+        "manifest L must equal configured encoder lookahead"
+    );
     assert!(lookahead > 0);
     assert_eq!(packets, (source_frames + lookahead).div_ceil(FRAME_SAMPLES));
     assert!(packets >= 2);
