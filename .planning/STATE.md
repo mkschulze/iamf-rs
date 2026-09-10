@@ -4,17 +4,17 @@ milestone: v1
 current_phase: 03
 current_phase_name: FLAC and Opus Framing
 status: ready_to_execute
-stopped_at: Phase 03 Plan 03 complete; ready to execute 03-04
-last_updated: "2026-09-10T02:00:00Z"
+stopped_at: Phase 03 Plan 04 complete; ready to execute 03-05
+last_updated: "2026-09-10T03:00:00Z"
 last_activity: 2026-09-10
-last_activity_desc: Phase 03 Plan 03 complete — typed Opus configuration and framing arithmetic verified
-state_head: 073bb88
+last_activity_desc: Phase 03 Plan 04 complete — measured Opus corpus and standalone decode oracle verified
+state_head: 1f6ca8c
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 25
-  completed_plans: 20
-  percent: 80
+  completed_plans: 21
+  percent: 84
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 03 (FLAC and Opus Framing) — READY TO EXECUTE
-Plan: 3 of 8
-Status: Plan 03-03 complete; ready for 03-04
-Last activity: 2026-09-10 — typed Opus configuration and framing arithmetic verified
+Plan: 4 of 8
+Status: Plan 03-04 complete; ready for 03-05
+Last activity: 2026-09-10 — measured Opus corpus and standalone decode oracle verified
 
-Progress: [████░░░░░░] 38% of Phase 03 plans
+Progress: [█████░░░░░] 50% of Phase 03 plans
 
 ## Performance Metrics
 
@@ -129,7 +129,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute Phase 3 Plan 03-04: excluded Opus fixture generation, measured lookahead, exact packet counts, and standalone decode oracle.
+- Execute Phase 3 Plan 03-05: Opus packet/trim integration through the shared conformance gate.
 
 ### Blockers/Concerns
 
@@ -155,6 +155,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-10T02:00:00Z
-Stopped at: Phase 03 Plan 03 complete; ready to execute 03-04
-Resume file: .planning/phases/03-flac-and-opus-framing/03-04-PLAN.md
+Last session: 2026-09-10T03:00:00Z
+Stopped at: Phase 03 Plan 04 complete; ready to execute 03-05
+Resume file: .planning/phases/03-flac-and-opus-framing/03-05-PLAN.md
