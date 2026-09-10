@@ -501,6 +501,7 @@ fn round_trip(decoder: &Path, fixture: &Fixture, dir: &Path) -> RoundTrip {
     let spec = fixture.spec().expect("the fixture's spec resolves");
     let layout = OutputLayout::for_layout(spec.layout).expect("the layout maps to an -s flag");
     let pcm = fixture.single_pcm();
+    let oracle = comparison_oracle_label(spec);
     let tag = fixture.name;
 
     let peak = peak_for(spec.sample_size);
@@ -549,7 +550,7 @@ fn round_trip(decoder: &Path, fixture: &Fixture, dir: &Path) -> RoundTrip {
     // Assertion 2 — the decoded sample count equals the encoded count.
     assert_eq!(
         wav.frames, encoded_frames,
-        "{tag}: decoded {} sample frames, encoded {encoded_frames}. A wrong-length decode is \
+        "{tag}: decoded {} sample frames, expected {encoded_frames} from {oracle}. A wrong-length decode is \
          never compared sample-for-sample at all unless the count is checked first (Experiment A: \
          a one-bit sample_rate flip yielded 1570 samples instead of 8000, exit 0, no error).",
         wav.frames
@@ -968,6 +969,26 @@ impl GateReport {
     }
 }
 
+/// What the fixture's exact comparison PCM represents. This changes only
+/// diagnostics; every fixture still traverses the same gate and comparisons.
+fn comparison_oracle_label(spec: ElementSpec) -> &'static str {
+    match spec.codec {
+        FixtureCodec::Opus => "the committed standalone decode",
+        FixtureCodec::Lpcm { .. } | FixtureCodec::Flac => "the fixture's expected PCM",
+    }
+}
+
+/// The explicit trim equation that the gate observed before any reference
+/// decoder is invoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrimObservation {
+    temporal_units: u64,
+    trim_at_end: u32,
+    trim_at_start: u32,
+    pre_trim_frames: u64,
+    expected_frames: u64,
+}
+
 /// **CONF-01.** Assert that `fixture` produces a conformant IA Sequence,
 /// clause by clause.
 ///
@@ -1024,11 +1045,19 @@ fn assert_conformant(fixture: &Fixture) -> Result<GateReport, String> {
     );
 
     // ---- CONF-03 — the length forces a non-zero, differing end trim ---------
-    let (trim_at_end, trim_at_start) = assert_fixture_trim_is_forced(fixture, spec)?;
+    let trim = assert_fixture_trim_is_forced(fixture, spec)?;
     report.note(
         "CONF-03 (trim)",
         &format!(
-            "trim_at_end = {trim_at_end}, trim_at_start = {trim_at_start}, and the two differ"
+            "{} temporal units × {} samples = {} frames before trim, trim_at_end = {}, \
+             trim_at_start = {}, retains {} expected frames in {}, and the two trims differ",
+            trim.temporal_units,
+            spec.num_samples_per_frame,
+            trim.pre_trim_frames,
+            trim.trim_at_end,
+            trim.trim_at_start,
+            trim.expected_frames,
+            comparison_oracle_label(spec),
         ),
     );
 
@@ -1052,10 +1081,11 @@ fn assert_conformant(fixture: &Fixture) -> Result<GateReport, String> {
                     .unwrap_or_else(|| "PCM differs".to_owned());
                 return Err(format!(
                     "CONF-05 FAILED for {}: {} of {} samples differ after a round trip through \
-                     the pinned libiamf.\n{diagnosis}",
+                     the pinned libiamf compared exactly with {}.\n{diagnosis}",
                     fixture.name,
                     trip.differing,
-                    pcm.len()
+                    pcm.len(),
+                    comparison_oracle_label(spec),
                 ));
             }
             report.note(
@@ -1230,14 +1260,28 @@ fn assert_trim_is_forced(pcm: &[i32], spec: ElementSpec) -> Result<u32, String> 
 fn assert_fixture_trim_is_forced(
     fixture: &Fixture,
     spec: ElementSpec,
-) -> Result<(u32, u32), String> {
+) -> Result<TrimObservation, String> {
     let source = fixture
         .frame_sources
         .first()
         .ok_or_else(|| "CONF-03: the fixture has no frame source".to_owned())?;
     match source {
         FrameSource::LpcmInterleaved(pcm) => {
-            assert_trim_is_forced(pcm, spec).map(|at_end| (at_end, 0))
+            let trim_at_end = assert_trim_is_forced(pcm, spec)?;
+            let expected_frames =
+                u64::try_from(pcm.len().checked_div(spec.channels.max(1)).unwrap_or(0))
+                    .map_err(|e| format!("CONF-03: sample count does not fit u64: {e}"))?;
+            let temporal_units = expected_temporal_units(fixture, spec)?;
+            let pre_trim_frames = temporal_units
+                .checked_mul(u64::from(spec.num_samples_per_frame))
+                .ok_or_else(|| "CONF-03: temporal-unit capacity overflows u64".to_owned())?;
+            Ok(TrimObservation {
+                temporal_units,
+                trim_at_end,
+                trim_at_start: 0,
+                pre_trim_frames,
+                expected_frames,
+            })
         }
         FrameSource::PreEncoded(units) => {
             let first = units
@@ -1314,7 +1358,13 @@ fn assert_fixture_trim_is_forced(
                     spec.num_samples_per_frame
                 ));
             }
-            Ok((at_end, at_start))
+            Ok(TrimObservation {
+                temporal_units: unit_count,
+                trim_at_end: at_end,
+                trim_at_start: at_start,
+                pre_trim_frames: capacity,
+                expected_frames: expected,
+            })
         }
     }
 }
@@ -1594,6 +1644,41 @@ fn the_flac_fixture_is_conformant() {
         Ok(report) => report.print(fixture.name),
         Err(message) => panic!("{message}"),
     }
+}
+
+/// Opus must traverse the ordinary conformance gate: its comparison PCM is the
+/// committed standalone decode of the opaque packets after the first/start and
+/// final/end trims, never the lossy source PCM that generated those packets.
+#[test]
+fn the_opus_fixture_is_conformant_to_its_standalone_decode() {
+    let fixture = fixture::opus();
+    let spec = fixture.spec().expect("the Opus fixture's spec resolves");
+    let units = expected_temporal_units(&fixture, spec).expect("the Opus temporal-unit count");
+    let expected_frames = fixture
+        .single_pcm()
+        .len()
+        .checked_div(spec.channels)
+        .expect("the Opus PCM has complete stereo frames");
+    let pre_trim_frames = usize::try_from(units)
+        .expect("the Opus temporal-unit count fits usize")
+        .checked_mul(usize::try_from(spec.num_samples_per_frame).expect("the frame size fits"))
+        .expect("the Opus pre-trim capacity fits usize");
+    let report = assert_conformant(&fixture).unwrap_or_else(|message| panic!("{message}"));
+    let trim = report
+        .lines
+        .iter()
+        .find(|line| line.starts_with("CONF-03 (trim):"))
+        .expect("the shared gate reports CONF-03");
+
+    assert!(
+        trim.contains(&format!("{units} temporal units"))
+            && trim.contains(&format!("= {pre_trim_frames} frames before trim"))
+            && trim.contains(&format!("retains {expected_frames} expected frames"))
+            && trim.contains("committed standalone decode")
+            && !trim.contains("source PCM"),
+        "Opus CONF-03 must report its explicit units/trims against the committed standalone \
+         decode, never source PCM: {trim}"
+    );
 }
 
 /// **CONF-04 on the structure-only fixture.**
