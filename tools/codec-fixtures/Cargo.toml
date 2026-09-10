@@ -23,3 +23,7 @@ sha2 = "=0.10.9" # MIT OR Apache-2.0
 [[test]]
 name = "flac_fixtures"
 path = "tests/flac_fixtures.rs"
+
+[[test]]
+name = "opus_fixtures"
+path = "tests/opus_fixtures.rs"
