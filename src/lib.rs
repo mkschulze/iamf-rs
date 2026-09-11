@@ -49,6 +49,7 @@ pub const SPEC_VERSION: &str = "1.1.0";
 
 pub mod bits;
 pub mod dump;
+pub mod encoder;
 pub mod error;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]

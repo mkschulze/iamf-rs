@@ -164,6 +164,22 @@ fn codec_capability_errors_are_exact_compact_kinds() {
 }
 
 #[test]
+fn static_builder_errors_are_compact_typed_kinds() {
+    for kind in [
+        ErrorKind::UnknownCodecConfigHandle,
+        ErrorKind::UnknownAudioElementHandle,
+        ErrorKind::InvalidDescriptorReference,
+        ErrorKind::DuplicateDeclaration,
+        ErrorKind::WireIdAllocationExhausted,
+    ] {
+        let error = Error::new(kind.clone(), Location::Unlocated);
+        assert_eq!(error.kind(), &kind);
+        assert!(!error.to_string().is_empty());
+    }
+    assert!(size_of::<Error>() <= 32);
+}
+
+#[test]
 fn fresh_opus_rejects_44_1_khz_with_the_published_typed_error() {
     let error = CodecConfig::opus(2, 960, 44_100, 312)
         .expect_err("the IAMF Opus output clock is fixed at 48 kHz");

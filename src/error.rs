@@ -129,6 +129,16 @@ pub enum ErrorKind {
     SamplesPerFrameNotSupportedByCodec,
     #[error("bits per sample are not supported by the codec")]
     BitsPerSampleNotSupportedByCodec,
+    #[error("a builder declaration references an unknown codec-config handle")]
+    UnknownCodecConfigHandle,
+    #[error("a builder declaration references an unknown audio-element handle")]
+    UnknownAudioElementHandle,
+    #[error("a builder declaration has an invalid descriptor reference")]
+    InvalidDescriptorReference,
+    #[error("a builder declaration is duplicated")]
+    DuplicateDeclaration,
+    #[error("the builder cannot allocate another IAMF wire id")]
+    WireIdAllocationExhausted,
 }
 
 /// An error, with the position it happened at attached exactly once.
