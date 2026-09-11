@@ -199,9 +199,11 @@ fn total_channel_count(elements: &[&AudioElement]) -> Result<u32> {
 ///
 /// # Errors
 ///
-/// [`ErrorKind::UnsupportedLayout`] for a layout whose channel count this spec
-/// version does not fix (reserved and expanded layouts), and for a reserved
-/// `audio_element_type`. A guess there would select a profile from nothing.
+/// [`ErrorKind::UnsupportedLayout`] for a reserved loudspeaker layout or
+/// reserved expanded loudspeaker layout, whose channel count this spec version
+/// does not fix, and for a reserved `audio_element_type`. Named expanded
+/// layouts have normative channel counts. A guess for a reserved value would
+/// select a profile from nothing.
 fn element_channel_count(element: &AudioElement) -> Result<u32> {
     let unsupported = || {
         Error::new(
