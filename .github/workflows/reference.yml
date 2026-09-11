@@ -196,5 +196,6 @@ jobs:
             .reference/configure.log
             .reference/smoke.log
             target/reference-out/
+            target/conformance/
           if-no-files-found: warn
           retention-days: 7
