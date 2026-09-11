@@ -9,8 +9,9 @@ generation, pinned `libiamf` CI job) on day one — it is far larger than "produ
 exits only through a seven-clause conformance gate, not through "`libiamf` returned OK". Phase 2 adds
 the parser, the round-trip property and the fuzzer, all of which would inherit Phase 1's
 misunderstandings silently if written earlier. Phase 3 reuses Phase 1's conformance harness unchanged
-for FLAC and Opus framing. Phase 4 shapes the surface Parallax actually calls, and cannot start until
-the parameter tick-rate decision is answered. ISO-BMFF, a native decoder and scalable layers are v2 and
+for FLAC and Opus framing. Phase 4 shapes the host-independent surface Parallax actually calls and
+proves that boundary with Parallax-shaped contract fixtures. ISO-BMFF, decoder-consumer wire additions and
+high-level scalable-layer authoring are v2 and
 deliberately absent below.
 
 ## Phases
@@ -25,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Conformant LPCM Bitstream** - A standalone `.iamf` the reference decodes sample-identically, with every guardrail and every byte-level fact pinned
 - [x] **Phase 2: Parser, Round-Trip and Fuzzing** - Read the bitstream back into the model, prove both round-trip directions, and ship a fuzzer with a committed corpus (completed 2026-09-09)
 - [x] **Phase 3: FLAC and Opus Framing** - Two more codecs through the unchanged conformance harness, with zero codec crates in the shipping graph (completed 2026-09-11)
-- [ ] **Phase 4: Parallax-Facing API** - One validated `build()`, minimum-profile selection, and a dependency-free bitstream core
+- [ ] **Phase 4: Parallax-Facing API** - A validated host-independent builder, deterministic ID/profile mapping, transactional streaming and Parallax-shaped contract fixtures
 
 ## Phase Details
 
@@ -119,34 +120,38 @@ Plans:
 
 ### Phase 4: Parallax-Facing API
 
-**Goal**: Parallax can export a conformant `.iamf` through the public surface alone, with one validation point and no way to hold the encoder wrong
+**Goal**: Parallax can map a filtered immutable delivery snapshot into a conformant `.iamf` through a host-independent public surface alone, without `iamf-rs` depending on Parallax or taking ownership of rendering, codec encoding, timeline policy or delivery UI state
 **Mode:** mvp
-**Depends on**: Phase 3 (all three codecs exist before the surface that selects between them is frozen)
-**Entry condition**: ✓ **Satisfied 2026-09-08.** DEC-03 answered: the crate takes **pre-decimated blocks**. No time model, no interpolation, no float arithmetic on the encode path; `parameter_rate` remains a `build()`-time input. The decimation policy now lives in Parallax and must be shared with the ADM BWF exporter, or the two exports will disagree
-**Requirements**: API-01, API-02, API-03, API-04, API-05, DEC-03
+**Depends on**: Phase 3 (all three codec configuration/framing paths exist before the external-frame surface that selects between them is frozen)
+**Entry condition**: ✓ **Satisfied and clarified 2026-09-11.** DEC-03 requires **pre-decimated IAMF parameter blocks**. `iamf-rs` owns no time model or interpolation. In the approved IAMF-v1.1 Parallax scope Source motion is already represented in upstream Bed/HOA PCM; these blocks therefore carry IAMF mix/demixing/recon-gain data rather than Source-position curves and do not share an ADM position-decimation policy
+**Requirements**: API-01, API-02, API-03, API-04, API-05, API-06, API-07, API-08, API-09, API-10, API-11, DEC-03
 **Success Criteria** (what must be TRUE):
 
-  1. `EncoderBuilder::build()` is the single place an invalid configuration is rejected — every validation error surfaces there as a typed `#[non_exhaustive]` error, and a successfully built `Encoder` cannot subsequently be misconfigured. *(API-01)*
-  2. `build()` assigns IDs and selects the minimum profile the configuration fits, and the selected profile matches `profile_filter.cc`'s verdict for the same configuration. *(API-02)*
-  3. An export driven entirely through the public API — loudness supplied up front at `build()`, parameter data supplied in the shape DEC-03 chose, writer append-only over a plain `W: Write` — produces a file that passes `assert_conformant`. *(API-03, API-04, DEC-03)*
-  4. `cargo build --no-default-features` produces a build with no dependencies that still parses and serialises the full bitstream, and that build is what the fuzz target and the `cargo deny` baseline compile against. *(API-05)*
+  1. `EncoderBuilder::build()` rejects every static descriptor, reference, codec/frame-plan and parameter-definition error and returns an immutable encoder plus deterministic caller-handle→wire-ID manifest. Subsequent temporal-input and sink failures remain separately typed rather than being falsely promised away at build time. *(API-01, API-02, API-08)*
+  2. The sequence profile is the highest minimum required by any individual ordered Mix Presentation, including known expanded layouts; it is not computed from the unrelated-Presentation element union and matches the pinned `profile_filter.cc` verdict. *(API-03)*
+  3. The generic surface can describe multiple Presentations and shared channel-/scene-based elements, while its Parallax convenience path initially admits single-layer channel elements and Ambisonics-mono scene elements. No Preview, Export-Include, terminal, lineage or Parallax ID enters the crate. *(API-04, API-05, API-10)*
+  4. A public-API-only streaming export accepts LPCM or externally encoded FLAC/Opus frames, validates each complete temporal unit transactionally, consumes pre-decimated IAMF parameter blocks, and remains append-only over plain `W: Write`. It performs no codec encoding, DSP, resampling, loudness measurement or timeline interpolation. *(API-06, API-07, API-08, DEC-03)*
+  5. Contract fixtures cover Stereo, mixed channel+HOA, multiple Presentations sharing an element, gains/loudness/parameters and all three framing paths through the existing deterministic and external conformance gates. *(API-09)*
+  6. `cargo build --no-default-features` retains the complete production bitstream/builder surface with no linked codec or integration dependency; the documented proc-macro-only `thiserror` graph remains the sole qualification to “dependency-free”. *(API-11)*
 
-**Research**: No — blocked on the tick-rate *decision* rather than on missing research
-**Plans**: 3 plans
+**Research**: No — Phase 3 and the 2026-09-11 Parallax integration-contract audit settle the ownership, codec, timing and Presentation questions
+**Plans**: 4 plans
 
 Plans:
 
-- [ ] 04-01: `EncoderBuilder`, the single `build() -> Result<Encoder>` validation point, ID assignment and minimum-profile selection
-- [ ] 04-02: Loudness supplied up front, parameter data in the DEC-03 shape, append-only `W: Write` writer, and the end-to-end Parallax export path
-- [ ] 04-03: Feature gating over drivers and codec libraries but never the bitstream — `--no-default-features` probe build as fuzz target and `cargo deny` baseline
+- [ ] 04-01: Host-independent `EncoderBuilder`, immutable built configuration, deterministic handle→wire-ID manifest and per-Presentation global minimum-profile selection including known expanded layouts
+- [ ] 04-02: Typed LPCM/external-FLAC/external-Opus frame submission, pre-decimated parameter blocks, transactional temporal-unit validation and append-only `W: Write` lifecycle
+- [ ] 04-03: Multiple-Presentation/shared-element authoring surface plus Parallax-shaped public-contract fixtures for Stereo, mixed channel+HOA, gains, loudness and filtered export selection
+- [ ] 04-04: Minimal production feature/dependency surface, consumer handoff and synchronization of Project/README/API documentation without introducing a Parallax dependency
 
 ## Deferred Beyond v1
 
 Not in this roadmap. Tracked in REQUIREMENTS.md under v2.
 
 - **ISO-BMFF encapsulation** (BMFF-01..03) — the licence contamination milestone. `gpac` is LGPL-2.1 and forbidden, and it is the obvious reference. The ISO-BMFF binding was **not researched at all**; confirm `iamf-tools` contains its own permissively-licensed muxer before committing. Needs deep research when it is scheduled.
-- **Native decoder** (DECO-01..03) — a product decision, not a gap. Phase 1 needs `libiamf` present either way.
-- **Scalable coding** (SCAL-01..04) — recon gain and demixing weights are DSP-adjacent; this crate serialises values it is given, and nobody supplies them yet.
+- **Decoder-consumer wire additions** (DECO-01..03) — native codec decoding and timed reconstruction
+  belong to `iamf-decode-rs`; add syntax/model support here only when that consumer requires it.
+- **High-level scalable coding authoring** (SCAL-01..04) — recon gain and demixing weights are DSP-adjacent; the low-level model serialises values it is given, but the safe builder does not construct them until a caller and oracle are specified.
 
 ## Progress
 
@@ -158,9 +163,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
 | 3. FLAC and Opus Framing | 8/8 | Complete | 2026-09-11 |
-| 4. Parallax-Facing API | 0/3 | Not started | - |
+| 4. Parallax-Facing API | 0/4 | Not started | - |
 
 ---
 *Roadmap created: 2026-09-08*
 *Granularity: coarse — 4 phases, one per milestone M1–M4*
-*Coverage: 88/88 v1 requirements mapped*
+*Coverage: 94/94 v1 requirements mapped*

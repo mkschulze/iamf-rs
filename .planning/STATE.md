@@ -132,13 +132,17 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Plan Phase 4 Plan 04-01: `EncoderBuilder`, centralized `build()` validation, ID assignment, and minimum-profile selection.
+- Plan Phase 4 Plan 04-01: host-independent builder, immutable configuration, deterministic handle-to-wire-ID manifest and global profile selection.
+- Plan Phase 4 Plan 04-02: typed external frame submission, transactional temporal validation and append-only writer lifecycle.
+- Plan Phase 4 Plan 04-03: multiple-Presentation/shared-element surface and Parallax-shaped contract fixtures.
+- Plan Phase 4 Plan 04-04: minimal production dependency surface and consumer documentation/handoff.
 
 ### Blockers/Concerns
 
-- **Decimation policy now sits in Parallax.** DEC-03 chose pre-decimated blocks, so Parallax owns
-  position-curve decimation and must share it with the ADM BWF exporter — otherwise the two exports
-  disagree on the same project. Not a blocker for this crate; a tracked consequence for its consumer.
+- **IAMF parameter scheduling sits in the caller.** DEC-03 chose pre-decimated blocks. In the current
+  Parallax IAMF-v1.1 scope these blocks are mix/demixing/recon-gain data, not Source-position curves;
+  Source motion is already baked into the upstream Bed/HOA PCM. There is therefore no shared IAMF/ADM
+  position-decimation requirement.
 - **AOM Patent License 1.0 §1.2 still unread.** No longer blocking now that the licence is settled;
   remains due diligence on the inbound grant.
 - ISO-BMFF (v2) is the licence contamination milestone and was not researched at all. `gpac` is
@@ -148,7 +152,8 @@ Recent decisions affecting current work:
 
 - ~~DEC-01 spec version~~ → **IAMF v1.1.0** (2026-09-08)
 - ~~DEC-02 crate licence~~ → **`MIT OR Apache-2.0`**, licence files landed (2026-09-08)
-- ~~DEC-03 parameter tick rate~~ → **pre-decimated blocks**; Phase 4 entry condition satisfied (2026-09-08)
+- ~~DEC-03 parameter tick rate~~ → **pre-decimated IAMF blocks**; Phase 4 entry condition satisfied
+  (2026-09-08), Source-position/ADM boundary clarified (2026-09-11)
 
 ## Deferred Items
 

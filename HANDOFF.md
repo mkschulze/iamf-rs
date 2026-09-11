@@ -3,23 +3,23 @@
 **Written 2026-09-07.** Everything needed to start this crate, and everything that must be observed
 while doing it. Read this before the first line of code.
 
-Companion research lives in the Parallax repo at `docs/eclipsa/` — seven files covering the standard,
-the ecosystem, Google's reference plugin suite and the integration analysis. This document is the
-build brief; that directory is the evidence behind it.
+The current consumer contract lives in the Parallax repository at
+`docs/superpowers/specs/2026-09-11-iamf-first-rendering-and-integration-design.md`. This document is
+the historical build brief; where it differs, the dated Phase 4 context and that current consumer
+contract take precedence.
 
 ---
 
 ## 1. What this is, and what it is not
 
 **A Rust implementation of IAMF — the Immersive Audio Model and Formats bitstream.** An OBU
-serialiser and parser, the descriptor model, an encoder producing conformant `.iamf` files, and later
-a decoder.
+serialiser and parser, the descriptor model, and an encoder producing conformant `.iamf` files.
+Native codec decoding and timed Audio Element reconstruction belong to sibling `iamf-decode-rs`.
 
-**It is not a renderer.** Parallax builds its own VBAP/LBAP/HOA/binaural renderer under decision
-`D-40`, from the papers, in `f64` over `libm`, deterministic and real-time-safe. This crate never
-pans, never places a source, never touches a speaker layout as anything but a *label*. It receives
-rendered PCM plus metadata and produces bytes. **If a pull request adds DSP here, it is in the wrong
-repository.**
+**It is not a renderer.** Parallax owns Source/AGIO panning and HOA encoding, while
+`iamf-render-rs` owns OAR loudspeaker/binaural rendering. This crate never pans, places a Source or
+renders a target. It receives prepared PCM/access units plus metadata and produces bytes. **If a pull
+request adds DSP here, it is in the wrong repository.**
 
 **It is not a port of Google's Eclipsa plugins.** That was considered and rejected on 2026-09-07: the
 plugin suite's architecture is a workaround for not being the host (two plugins synchronising over
@@ -27,8 +27,9 @@ shared memory to reconstruct a scene the DAW will not show them), roughly a thir
 is JUCE UI, and the three things actually needed — encoder, decoder, muxer — are not in that
 repository at all. They are `iamf-tools`, `libiamf` and `gpac`, separate projects.
 
-**Why it exists.** Parallax needs an IAMF exporter because IAMF is now an Output path for monitoring
-and playback *and* an export format (user decision, 2026-09-07). There is **no Rust IAMF
+**Why it exists.** Parallax needs IAMF wire support for direct OAR preview and native export. Preview
+does not encode and decode an IA Sequence; it consumes the same committed delivery semantics through
+the separate renderer adapter. There is **no Rust IAMF
 implementation on crates.io** — verified 2026-09-07. A bitstream serialiser has nothing to do with an
 audio graph and is separately fuzzable, so it belongs in its own crate whether or not it is ever
 published.
@@ -42,11 +43,10 @@ published.
 | Crate name **`iamf`**, repo `iamf-rs` | `iamf` was free on crates.io on 2026-09-07. `-rs` belongs on the repo, not the crate — the Rust API guidelines discourage the suffix |
 | **`publish = false`** in `Cargo.toml` | Privacy is that field, not a codename. Publish when the library does something real, never to reserve a name |
 | Consumed by Parallax as a **path dependency** during development | Not a git pin. Parallax's own stack policy lists "git-only" as a downside; a sibling checkout avoids the reproducibility and `cargo deny` questions until this stabilises |
-| **One crate, feature-gated** | `encode` / `decode` features rather than three crates up front. Split later, where the seam actually turns out to be |
+| **One wire crate; decoder sibling** | `iamf-rs` owns model/parser/serializer/encoder mechanics; native codec decoding and timed reconstruction live in `iamf-decode-rs` |
 
-**Still open: the licence.** The repo currently carries **MIT only**. That is on Parallax's preferred
-list and works — but see §3.3 before leaving it there. The decision is cheapest now, at one commit;
-relicensing later needs every contributor's agreement.
+**Licence settled 2026-09-08:** `MIT OR Apache-2.0`, with both licence files, `NOTICE` and the AOM
+`PATENTS` file committed. Section 3 records the reasoning and remains relevant provenance.
 
 ---
 
@@ -169,8 +169,10 @@ trimming metadata). The ISO-BMFF path is what a YouTube-bound `.mp4` uses.
 - **Loudness measurement.** Parallax has a BS.1770 meter that shares its code with export
   normalisation (`MON-05`); this crate carries the numbers, it does not compute them
 - **UI of any kind**
-- **AAC-LC**, unless a decoder is built and needs it
-- **Scalable layers**, until the single-layer path ships and is proven
+- **AAC-LC codec implementation** — belongs to `iamf-decode-rs`; only required wire syntax may be
+  added here when that consumer needs it
+- **High-level scalable-layer authoring** — low-level wire structures already exist, but the safe
+  builder defers them until a caller and conformance oracle are specified
 
 ---
 
@@ -214,10 +216,13 @@ the parser** (§6) — this is the first milestone that has one.
 
 **M3 — the codecs.** FLAC and Opus framing, each proved by the same decode-and-compare loop as M1.
 
-**M4 — what Parallax actually calls.** A shaped API for the exporter, and the loudness metadata path.
+**M4 — what Parallax actually calls.** A host-independent builder and streaming API for the exporter,
+with deterministic ID/profile mapping, external codec-frame input, loudness/parameter metadata and
+Parallax-shaped contract fixtures. The production adapter remains in Parallax.
 
-**M5 and beyond, in no fixed order:** ISO-BMFF; the decoder; scalable layers with demixing and recon
-gain; ambisonics projection mode.
+**M5 and beyond, in no fixed order:** ISO-BMFF; decoder-consumer wire additions requested by
+`iamf-decode-rs`; scalable-layer high-level authoring with demixing and recon gain; Ambisonics
+projection-mode authoring.
 
 Do not reorder M1. A serialiser that has never been read by the reference decoder is an untested
 guess, however tidy the types are.
@@ -226,17 +231,9 @@ guess, however tidy the types are.
 
 ## 8. Open questions
 
-1. **The parameter tick rate.** IAMF parameter blocks carry their own rate, independent of the audio
-   sample rate. Parallax evaluates position per sample in content time, so **every export decimates a
-   position curve**, and the rate is audible on fast motion. This is the same question ADM BWF asks;
-   Parallax should answer it once for both. **It is the one open question that blocks API design here**
-   — it decides whether this crate takes curves or takes pre-decimated blocks.
-2. **Licence: MIT alone, or `MIT OR Apache-2.0`?** See §3.3.
-3. **Is the decoder wanted at all**, or is verification better done by shelling out to `libiamf`
-   during tests? M1 needs `libiamf` present either way; a native decoder is a product decision.
-4. **What does an export of 64 moving Sources become?** Per §4.1 it is a rendered 7.1.4 or 9.1.6 bed,
-   and the motion is baked. That is a Parallax UI decision, but this crate's API should not pretend
-   otherwise by accepting per-source positions it cannot express.
+1. **What does an export of 64 moving Sources become?** In the approved Parallax model it is explicit
+   upstream channel-bed or HOA scene PCM, with motion baked by the panner/HOA encoder before the IAMF
+   terminal. This crate's API must not accept Parallax Source positions it cannot express.
 
 ---
 
@@ -244,7 +241,7 @@ guess, however tidy the types are.
 
 | What | Where | Licence |
 |---|---|---|
-| The research behind this document | Parallax repo, `docs/eclipsa/` (7 files) | ours |
+| The current consumer contract and Eclipsa source evidence | Parallax repo, `docs/superpowers/specs/2026-09-11-iamf-first-rendering-and-integration-design.md` and `docs/references/repositories/spatial/eclipsa-audio-plugin/` | contract ours; source Apache-2.0 |
 | IAMF specification | `aomediacodec.github.io/iamf/` — was an *AOM Working Group Draft, 21 April 2025*; the certification programme cites **v1.0**. **Pin a version and name it in the code** | AOM |
 | Reference encoder | `AOMediaCodec/iamf-tools` | BSD — read and port |
 | Reference decoder | `AOMediaCodec/libiamf` | BSD-3-Clause-Clear — read and port |

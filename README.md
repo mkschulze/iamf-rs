@@ -3,8 +3,14 @@
 A Rust implementation of the IAMF (Immersive Audio Model and Formats) bitstream — OBU serialiser and
 parser, descriptor model, and an encoder producing conformant `.iamf` files.
 
-Not a renderer. This crate receives rendered PCM plus metadata and produces bytes; it never pans,
+Not a renderer. This crate receives prepared PCM/access units plus metadata and produces bytes; it never pans,
 places a source, or treats a speaker layout as anything but a label.
+
+The Phase 4 API is **Parallax-facing but host-independent**. `iamf-rs` owns validation, deterministic
+wire IDs/profile selection and standalone IA Sequence writing. Parallax owns its delivery projection,
+Preview/Export-Include state, codec encoding and the production adapter; `iamf-render-rs` owns OAR
+loudspeaker/binaural rendering, and `iamf-decode-rs` owns native codec decoding plus timed Audio
+Element reconstruction. No Parallax type, renderer or decoder implementation belongs in this crate.
 
 Targets **IAMF v1.1.0** (`iamf::SPEC_VERSION`).
 

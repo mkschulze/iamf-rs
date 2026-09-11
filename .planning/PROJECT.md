@@ -3,10 +3,11 @@
 ## What This Is
 
 A Rust implementation of **IAMF** — the Alliance for Open Media's Immersive Audio Model and Formats
-bitstream. It is an OBU serialiser and parser, the descriptor model, an encoder that produces
-conformant `.iamf` files, and later a decoder. It exists because there is **no Rust IAMF
+bitstream. It is an OBU serialiser and parser, the descriptor model, and an encoder that produces
+conformant `.iamf` files. Native codec decoding and timed Audio Element reconstruction live in the
+sibling `iamf-decode-rs` repository. It exists because there is **no Rust IAMF
 implementation on crates.io** (verified 2026-09-07) and Parallax — a deterministic spatial-audio DAW —
-needs IAMF as both a monitoring/playback output path and an export format.
+needs IAMF metadata/bitstream support for its `iamf-render-rs` preview path and native export format.
 
 The crate is `iamf`; the repo is `iamf-rs`. Parallax consumes it as a path dependency during
 development.
@@ -26,53 +27,39 @@ but not sufficient for conformance.** The real exit criterion is a byte-diff aga
 
 ### Validated
 
-<!-- Shipped and confirmed valuable. -->
-
-(None yet — ship to validate)
+- [x] IAMF v1.1 bit-level primitives, OBU model, descriptor and temporal-unit serialization
+- [x] Standalone IA Sequence writing accepted by the pinned reference implementations
+- [x] Context-aware parser, exact known/unknown round trips and bounded fuzzing corpus
+- [x] Deterministic profile/layout/loudness primitives and four-target byte-identity gates
+- [x] LPCM plus dependency-free FLAC/Opus configuration and framing of externally generated packets
 
 ### Active
 
-- [ ] Bit-level I/O layer (read/write non-byte-aligned fields, uleb128 both minimal and fixed-size)
-- [ ] OBU header: `[obu_type:5][obu_redundant_copy:1][type_specific_flag:1][obu_extension_flag:1]` plus uleb128 `obu_size`, conditional trim fields and extension header
-- [ ] Descriptor OBUs: IA Sequence Header (31), Codec Config (0), Audio Element (1), Mix Presentation (2)
-- [ ] Time-varying OBUs: Parameter Block (3), Temporal Delimiter (4), Audio Frame (5)
-- [ ] Serialiser producing a standalone IA Sequence (`.iamf`) — descriptors then data
-- [ ] LPCM codec framing (no external codec dependency)
-- [ ] Single-layer channel-based Audio Element, with correct channel→substream BCG packing (coupled pairs first, then mono)
-- [ ] Profile selection, including picking the minimum profile a project fits
-- [ ] Layout modelling as **four distinct types** across two OBUs — not one flat enum (see Context)
-- [ ] Loudness metadata carried into the Mix Presentation — values supplied by the caller
-- [ ] Mandatory mix-gain param definitions, including the `param_definition_mode = 1` / `default_mix_gain = 0` path that emits zero Parameter Block OBUs
-- [ ] Every sub-mix contains a stereo layout (hard encoder check in the reference)
-- [ ] Parser: read a bitstream back into the model, with descriptor-context threading for Parameter Blocks
-- [ ] Round-trip: `parse(serialize(model)) == model` universally; `serialize(parse(bytes)) == bytes` for our own output only
-- [ ] Preserve unknown data: OBU footer bytes, unknown OBU types at correct byte offset, unknown parameter data
-- [ ] Parse `iamf-tools`-produced files and assert we understand them
-- [ ] Fuzz target on the OBU parser, in an independent `fuzz/` workspace, shipping with the parser
-- [ ] FLAC codec framing (STREAMINFO-shaped `decoder_config`), proved by decode-and-compare
-- [ ] Opus codec framing (OpusHead-shaped `decoder_config`), proved by decode-and-compare
-- [ ] A shaped public API for the Parallax exporter
-- [ ] `cargo deny` in CI with Parallax's licence allow-list
-- [ ] Pinned `SPEC_VERSION` and pinned reference-implementation SHA, both named in the code
-- [ ] Byte-identity across targets, as a committed golden fixture every target must reproduce
-- [ ] Clippy hardening: `indexing_slicing`, `arithmetic_side_effects`, no `unwrap`/`expect` outside tests
-- [ ] A no-DSP guard (grep/lint) enforcing the scope boundary
+- [ ] Host-independent `EncoderBuilder` with immutable static configuration and deterministic caller-handle→wire-ID manifest
+- [ ] Presentation-local global minimum-profile selection including known expanded layouts
+- [ ] High-level multiple-Presentation/shared-element construction for single-layer channel and Ambisonics-mono scene elements
+- [ ] Typed LPCM/external-FLAC/external-Opus temporal input with transactional validation and append-only `W: Write`
+- [ ] Pre-decimated IAMF parameter blocks with no caller timeline or Source-position model
+- [ ] Parallax-shaped public-contract fixtures without a Parallax dependency
+- [ ] Minimal no-default-features production surface with no linked codec/integration dependency
 
 ### Out of Scope
 
-- **Any rendering, panning or spatial DSP** — Parallax owns that under decision `D-40`; it builds its
-  own VBAP/LBAP/HOA/binaural renderer in `f64` over `libm`. This crate receives rendered PCM plus
-  metadata and produces bytes. A PR that adds DSP here is in the wrong repository.
+- **Any rendering, panning or spatial DSP** — Parallax owns Source/AGIO panning and HOA encoding;
+  `iamf-render-rs` owns OAR loudspeaker/binaural rendering. This crate receives prepared PCM/access
+  units plus metadata and produces bytes. A PR that adds DSP here is in the wrong repository.
 - **Loudness measurement** — Parallax has a BS.1770 meter sharing code with export normalisation
   (`MON-05`). This crate carries the numbers; it does not compute them.
 - **UI of any kind** — this is a library.
-- **AAC-LC** — deferred, not absent from the ecosystem. *Correction 2026-09-08:* `iamf-tools` `main`
+- **AAC-LC codec implementation** — belongs to `iamf-decode-rs`, not this wire crate. Its decoder
+  configuration syntax may be added here when that consumer requires it. *Correction 2026-09-08:* `iamf-tools` `main`
   now ships an AAC-LC encoder, so the handoff's "three codecs shipped, not four" describes the v1.x
   tree, not HEAD. Still out of scope for v1 here; revisit if a decoder needs it.
-- **Scalable layers** (BCG/DCG ladder, demixing weights, recon gain) — deferred until the single-layer
-  path ships and is proven. *Correction 2026-09-08:* `iamf-tools` implements multi-layer and recon gain
-  **fully**; the handoff's claim that it was unimplemented came from Eclipsa, not from `iamf-tools`.
-  This remains a scope decision, but it is ours, not a limit of the reference.
+- **High-level scalable-layer authoring** (BCG/DCG ladder, demixing weights, recon gain) — the
+  low-level wire model already represents these structures, but the safe Phase 4 builder does not
+  construct them until a caller and conformance oracle are specified. *Correction 2026-09-08:*
+  `iamf-tools` implements multi-layer and recon gain fully; this is our scope decision, not a limit of
+  the reference.
 - **An object-based element path** — out of scope because the target profiles forbid it.
   *Correction 2026-09-08:* `iamf-tools` HEAD (a draft-v2.0.0 tree) *does* have an object-based element
   path. The exclusion stands on profile grounds, not on absence from the reference.
@@ -248,33 +235,28 @@ discover it late.
 | Crate named `iamf`, repo `iamf-rs` | `iamf` was free on crates.io 2026-09-07; Rust API guidelines discourage the `-rs` suffix on crate names | — Pending |
 | `publish = false` in `Cargo.toml` | Publish when the library does something real, never to reserve a name | — Pending |
 | Consumed by Parallax as a **path dependency** | Not a git pin. Avoids reproducibility and `cargo deny` questions until this stabilises | — Pending |
-| One crate, feature-gated `encode` / `decode` | Split later, where the seam actually turns out to be | — Pending |
-| **Parser lives in the ungated core**, not behind `decode` | The expensive optional thing is libFLAC/libopus, not the bitstream. Gating the parser breaks the round-trip test and doubles the `cfg` matrix. Side benefit: `--no-default-features` becomes a zero-dependency build, the ideal fuzz-target dependency | — Pending |
+| One wire crate; native decoding in sibling `iamf-decode-rs` | The seam is now explicit: this crate owns bitstream/model/parser/encoder mechanics, while codec decoding and timed reconstruction have their own dependency and runtime boundary | ✓ Good |
+| **Parser lives in the ungated core**, not behind `decode` | The expensive optional thing is codec or host integration, not the bitstream. Gating the parser breaks the round-trip test and doubles the `cfg` matrix. Side benefit: `--no-default-features` remains the minimal production and fuzz-target surface, with no linked codec or integration dependency | ✓ Good |
 | Build a library, not a port of Eclipsa | Plugin architecture works around not being the host; ~1/3 is JUCE UI; encoder/decoder/muxer live elsewhere | ✓ Good |
-| Runtime deps: `bitstream-io` + `thiserror` only | 9-crate transitive graph, satisfiable by `allow = ["MIT", "Unicode-3.0"]`. Hand-written recursive descent mirrors the reference's 22-function primitive surface — a derive macro costs auditability and buys nothing | — Pending |
+| Runtime dependency boundary: `thiserror` only; `bitstream-io` dev-only | The linked production graph contains no bitstream helper or codec. Hand-written primitives preserve native error locations and exact reference behavior; `bitstream-io` remains only a differential test oracle | ✓ Good |
 | Hand-write uleb128 | `LebGenerator` has a `kFixedSize` mode; IAMF permits non-minimal encoding and the reference uses it. The `leb128` crate emits minimal form only and cannot reproduce a reference file byte-for-byte | — Pending |
-| No FLAC/Opus crate needed | The `decoder_config` payloads are STREAMINFO fields and OpusHead fields — roughly 60 lines each over `bitstream-io` | — Pending |
+| No shipping FLAC/Opus crate needed | This crate frames caller-supplied access units and writes the small STREAMINFO/OpusHead-shaped decoder configurations with hand-written bit primitives; codec crates remain test-material tools only | ✓ Good |
 | Verify against `libiamf` by **`Command`-in-tests**, not `build.rs` | A build script would force CMake + abseil + protobuf + fdk-aac onto every `cargo build`, Parallax's included, and build-script failure blocks even `cargo check`. `libiamf` also uses git submodules for its codecs | — Pending |
 | Write our own ISO-BMFF muxer if ISO-BMFF is built | `gpac` is LGPL-2.1 and rejected by Parallax's `deny.toml` | — Pending |
 | M1 target is LPCM, single-layer, standalone `.iamf` | Smallest thing that proves the whole chain with no codec dependency | — Pending |
 | Accept **NCSA** in Parallax's licence allow-list | `libfuzzer-sys` is `(MIT OR Apache-2.0) AND NCSA`. NCSA is permissive, BSD/MIT-style, OSI-approved, no copyleft. User decision, 2026-09-07. `fuzz/` stays an independent workspace regardless — that is now a design choice, not a licence workaround | — Pending |
 | Licence: **`MIT OR Apache-2.0`** (dual) | User decision 2026-09-08. MIT grants no patent licence; Apache-2.0 §3 does, which is why the Rust convention exists and why it matters for an implementation of a standard with an explicit patent pool. Both are already on Parallax's allow-list, so the consumer is unaffected either way. The marginal cost is near zero: Apache-2.0 §4(d) wants a `NOTICE` file and GUARD-07 was already adding one for BSD attribution. Dual rather than Apache-alone because it is the ecosystem default and strictly more permissive for consumers. `LICENSE-MIT` + `LICENSE-APACHE` landed 2026-09-08 | ✓ Good |
 | Pin **IAMF v1.1.0** | User decision 2026-09-08. `libiamf` — whose acceptance *is* the Core Value — implements v1.1.0. Base-Enhanced, already in the handoff's own profile table, does not exist in v1.0. Building only what is scoped stays v1.1.0-clean automatically | ✓ Good |
-| Parameter data taken as **pre-decimated blocks**, not curves | User decision 2026-09-08. Keeps the crate mechanical: no time model, no interpolation, no float arithmetic on the encode path, and `libm` stays unneeded. It is the only path with conformance-vector coverage, and it matches the reference's own layering — `parameter_block_partitioner.cc` sits in the CLI layer, above the public API. **Cost accepted:** the decimation policy lives in Parallax and must be shared with the ADM BWF exporter, or the two exports will disagree | — Pending |
+| Parameter data taken as **pre-decimated IAMF blocks**, not curves | User decision 2026-09-08, clarified 2026-09-11. Keeps the crate mechanical: no time model or interpolation. In Parallax's IAMF-v1.1 scope Source motion is already baked into upstream Bed/HOA PCM; the submitted blocks are supported IAMF mix/demixing/recon-gain data and do not share ADM position decimation | ✓ Good |
 
 ## Open Questions
 
-1. **Is a native decoder wanted at all**, or is verification better done by shelling out to `libiamf`
-   during tests? Phase 1 needs `libiamf` present either way; a native decoder is a product decision.
-2. **Does the decoder ever run near the audio callback?** If an `.iamf` file is decoded for in-DAW
-   playback on a streaming thread, Parallax's allocation and locking rules apply to that path and the
-   API must be shaped for it from the start. Decide before writing the decoder, not after.
-3. **What does an export of 64 moving Sources become?** A rendered bed with the motion baked in. That
+1. **What does an export of 64 moving Sources become?** A rendered bed or HOA scene with the motion baked in. That
    is a Parallax UI decision, but this crate's API should not pretend otherwise by accepting
    per-source positions it cannot express.
-4. **Does `iamf-tools` contain its own ISO-BMFF muxer?** Needs confirming before committing to
+2. **Does `iamf-tools` contain its own ISO-BMFF muxer?** Needs confirming before committing to
    ISO-BMFF, since `gpac` is unavailable.
-5. **AOM Patent License 1.0 §1.2 still unread.** No longer blocking — it was the input to the licence
+3. **AOM Patent License 1.0 §1.2 still unread.** No longer blocking — it was the input to the licence
    decision, which is now settled. Remains worth reading as due diligence on the inbound grant from
    AOM, which is separate from this crate's outbound licence.
 

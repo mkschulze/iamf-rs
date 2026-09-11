@@ -120,27 +120,33 @@ Requirements for the initial release, covering milestones M1–M4. Each maps to 
 
 ### Codec framing
 
-- [ ] **CODEC-01**: FLAC STREAMINFO `decoder_config` written as hand-written bit fields — channels pinned to 1, frame sizes 0, MD5 zero, `bits_per_sample` stored as value − 1
-- [ ] **CODEC-02**: Opus `OpusHead` `decoder_config` — 11 bytes, `output_channel_count` fixed at 2, `output_gain` 0, `mapping_family` 0, output rate always 48 kHz
-- [ ] **CODEC-03**: `audio_roll_distance` derived for Opus as `-ceil(3840 / num_samples_per_frame)`
-- [ ] **CODEC-04**: Opus priming produces a non-zero `trim_at_start`, exercising trim ordering a second way
-- [ ] **CODEC-05**: A sample-rate mismatch returns `Error::SampleRateNotSupportedByCodec` — no resampler, ever
-- [ ] **CODEC-06**: `cargo deny check licenses` run on a throwaway branch that merely adds the candidate codec crates, before the codec work begins
-- [ ] **CODEC-07**: Zero codec dependencies in the shipping crate; codec crates appear only as dev-dependencies for test material
+- [x] **CODEC-01**: FLAC STREAMINFO `decoder_config` written as hand-written bit fields — channels pinned to 1, frame sizes 0, MD5 zero, `bits_per_sample` stored as value − 1
+- [x] **CODEC-02**: Opus `OpusHead` `decoder_config` — 11 bytes, `output_channel_count` fixed at 2, `output_gain` 0, `mapping_family` 0, output rate always 48 kHz
+- [x] **CODEC-03**: `audio_roll_distance` derived for Opus as `-ceil(3840 / num_samples_per_frame)`
+- [x] **CODEC-04**: Opus priming produces a non-zero `trim_at_start`, exercising trim ordering a second way
+- [x] **CODEC-05**: A sample-rate mismatch returns `Error::SampleRateNotSupportedByCodec` — no resampler, ever
+- [x] **CODEC-06**: `cargo deny check licenses` run on a throwaway branch that merely adds the candidate codec crates, before the codec work begins
+- [x] **CODEC-07**: Zero codec dependencies in the shipping crate; codec crates appear only as dev-dependencies for test material
 
 ### Parallax-facing API
 
-- [ ] **API-01**: `EncoderBuilder` with a single `build() -> Result<Encoder>` validation point
-- [ ] **API-02**: `build()` assigns IDs and selects the minimum profile
-- [ ] **API-03**: Loudness metadata supplied up front at `build()`, keeping the writer append-only so `W: Write` suffices
-- [ ] **API-04**: Parameter data accepted as pre-decimated blocks (DEC-03); the API validates tiling and serialises, and never interpolates
-- [ ] **API-05**: Feature gating covers drivers and codec libraries but **never the bitstream** — `--no-default-features` yields a dependency-free probe build usable as the fuzz target and `cargo deny` baseline
+- [ ] **API-01**: A host-independent `EncoderBuilder` is the only high-level entry point for static export configuration. `build()` validates and freezes descriptors, codec/frame plans, cross-references and parameter definitions into an immutable `Encoder`; fallible temporal input and sink I/O remain explicitly outside this static-validation claim
+- [ ] **API-02**: The builder accepts caller-local opaque handles in stable input order, assigns every codec-config, Audio Element, Mix Presentation, substream and parameter wire ID deterministically, and returns an immutable handle-to-wire-ID manifest for diagnostics and temporal-data submission. No Parallax ID type enters this crate
+- [ ] **API-03**: Minimum-profile selection evaluates every Mix Presentation independently and writes the highest profile required by any one Presentation into the sequence header. It never selects from the union of elements across unrelated Presentations, and it supports the known expanded loudspeaker layouts needed for profile counting while rejecting reserved layouts
+- [ ] **API-04**: The high-level configuration supports ordered multiple Mix Presentations, multiple valid sub-mixes at the generic IAMF layer, shared channel-based or scene-based Audio Elements, per-element rendering and mix gain, per-sub-mix output gain, layouts, labels and caller-supplied loudness. Shared Audio Elements and substreams are described and emitted once
+- [ ] **API-05**: The initial convenience constructors required by Parallax cover single-layer channel-based elements and Ambisonics-mono scene-based elements. Scalable channel layers, demixing/recon-gain authoring and Ambisonics projection remain accessible only through the existing low-level model until a separately verified high-level contract is approved
+- [ ] **API-06**: The frame API accepts LPCM frame payloads or already encoded FLAC/Opus access units together with their typed codec/frame plan. It validates codec identity, sample rate, samples per frame, substream coverage, trim agreement and temporal-unit alignment; it never performs codec encoding, resampling, panning, rendering or loudness measurement
+- [ ] **API-07**: Parameter data is accepted as pre-decimated IAMF blocks (DEC-03). The builder validates definitions; each temporal submission validates known IDs, type, rate, duration and exact tiling transactionally before emitting any byte. The crate never owns a timeline, interpolates curves or accepts Parallax Source-position automation
+- [ ] **API-08**: A built encoder starts an append-only writer over plain `W: Write`, writes descriptors once, transactionally preflights each temporal unit, becomes observably poisoned after a partial sink failure, and consumes itself on `finish()`. Static build errors, temporal-input errors and sink errors remain distinct typed `#[non_exhaustive]` errors
+- [ ] **API-09**: Public-API-only contract fixtures cover ordinary Stereo, mixed channel-based plus HOA scene elements, multiple ordered Presentations sharing an Audio Element, explicit element/output gains and loudness, pre-decimated parameter blocks, and LPCM/FLAC/Opus framing. Each emitted deliverable passes the existing structural, deterministic and external-conformance gates applicable to its codec
+- [ ] **API-10**: The high-level API contains no Parallax graph, terminal, lineage, Preview or Include-in-Export state. A Parallax-shaped contract fixture proves that a caller can filter its delivery snapshot first and then map it through public handles alone; the production adapter remains in Parallax
+- [ ] **API-11**: Bitstream parsing/serialization and the high-level encoder remain available with `--no-default-features` and no linked codec or integration dependency. The existing proc-macro-only `thiserror` graph is not misreported as literally dependency-free; fuzz and `cargo deny` continue to exercise this minimal production surface
 
 ### Decisions to settle
 
 - [x] **DEC-01**: `SPEC_VERSION = "1.1.0"` pinned in code, with the profile enum's legal range and the expanded-layout set following from it *(decided 2026-09-08)*
 - [x] **DEC-02**: Crate published under `MIT OR Apache-2.0` — `Cargo.toml` `license` field, `LICENSE-MIT` + `LICENSE-APACHE`, README licence section, and the `NOTICE` file Apache-2.0 §4(d) wants *(decided 2026-09-08; licence files landed, `Cargo.toml` follows in Phase 1)*
-- [ ] **DEC-03**: Parameter data taken as **pre-decimated blocks**; no time model, no interpolation, no float arithmetic on the encode path *(decided 2026-09-08)*
+- [x] **DEC-03**: IAMF parameter data is taken as **pre-decimated blocks**; no time model or interpolation enters this crate *(decided 2026-09-08; clarified 2026-09-11: in the v1.1 Parallax scope these blocks describe IAMF mix/demixing/recon-gain parameters, not Source positions, whose motion is already baked into upstream Bed/HOA PCM)*
 - [x] **DEC-04**: `iamf-tools` tags `v2.0.0` and `v2.1.0` fetched to check whether either is a v1.1.0-exact tree, before the type model is written
 - [x] **DEC-05**: `libiamf`'s `codec_config_obu.c` and `audio_frame_obu.c` read for payload-level rejection rules before the LPCM path is written
 
@@ -154,18 +160,18 @@ Deferred to a future release. Tracked but not in the current roadmap.
 - **BMFF-02**: Muxer written from the IAMF spec's ISO-BMFF binding section and `iamf-tools`' own muxer, never `gpac`
 - **BMFF-03**: Confirm `iamf-tools` contains a usable permissively-licensed muxer before committing to this work
 
-### Decoder
+### Decoder consumer boundary
 
-- **DECO-01**: Native decoder, if the product decision favours it over shelling out to `libiamf` in tests
-- **DECO-02**: If the decoder is ever used for in-DAW playback, allocation and locking rules apply to that path and the API must be shaped for it from the start
-- **DECO-03**: AAC-LC decoder config, needed by a decoder but not by this encoder
+- **DECO-01**: Keep the parsed wire model consumable by the sibling `iamf-decode-rs`; native codec decoding and timed Audio Element reconstruction never enter this repository
+- **DECO-02**: Streaming/RT allocation and locking constraints belong to `iamf-decode-rs`; this crate exposes bounded parsed data without assuming its consumer thread
+- **DECO-03**: Add AAC-LC decoder-config wire syntax here only when required by `iamf-decode-rs`; the AAC codec implementation remains outside this crate
 
-### Scalable coding
+### High-level scalable coding authoring
 
-- **SCAL-01**: Multi-layer channel configurations (the BCG/DCG ladder)
-- **SCAL-02**: Demixing weights
-- **SCAL-03**: Recon gain
-- **SCAL-04**: Ambisonics projection mode
+- **SCAL-01**: Safe builder construction for multi-layer channel configurations (the BCG/DCG ladder)
+- **SCAL-02**: Safe builder construction for demixing weights
+- **SCAL-03**: Safe builder construction for recon gain
+- **SCAL-04**: Safe builder construction for Ambisonics projection mode
 
 ## Out of Scope
 
@@ -173,7 +179,7 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Rendering, panning, or any spatial DSP | Parallax owns it under `D-40`. A PR adding DSP here is in the wrong repository |
+| Rendering, panning, or any spatial DSP | Parallax owns Source/AGIO panning and HOA encoding; `iamf-render-rs` owns OAR rendering. A PR adding DSP here is in the wrong repository |
 | A resampler for codec sample-rate mismatch | The single most likely first DSP breach. Correct answer is a typed error (CODEC-05) |
 | Loudness measurement | Parallax's BS.1770 meter shares code with export normalisation (`MON-05`). This crate carries the numbers |
 | UI of any kind | This is a library |
@@ -262,28 +268,34 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | FUZZ-03 | Phase 2 | Complete |
 | FUZZ-04 | Phase 2 | Complete |
 | FUZZ-05 | Phase 2 | Complete |
-| CODEC-01 | Phase 3 | Pending |
-| CODEC-02 | Phase 3 | Pending |
-| CODEC-03 | Phase 3 | Pending |
-| CODEC-04 | Phase 3 | Pending |
-| CODEC-05 | Phase 3 | Pending |
-| CODEC-06 | Phase 3 | Pending |
-| CODEC-07 | Phase 3 | Pending |
+| CODEC-01 | Phase 3 | Complete |
+| CODEC-02 | Phase 3 | Complete |
+| CODEC-03 | Phase 3 | Complete |
+| CODEC-04 | Phase 3 | Complete |
+| CODEC-05 | Phase 3 | Complete |
+| CODEC-06 | Phase 3 | Complete |
+| CODEC-07 | Phase 3 | Complete |
 | API-01 | Phase 4 | Pending |
 | API-02 | Phase 4 | Pending |
 | API-03 | Phase 4 | Pending |
 | API-04 | Phase 4 | Pending |
 | API-05 | Phase 4 | Pending |
+| API-06 | Phase 4 | Pending |
+| API-07 | Phase 4 | Pending |
+| API-08 | Phase 4 | Pending |
+| API-09 | Phase 4 | Pending |
+| API-10 | Phase 4 | Pending |
+| API-11 | Phase 4 | Pending |
 | DEC-01 | Phase 1 | Complete |
 | DEC-02 | Phase 1 | Complete |
-| DEC-03 | Phase 4 | Pending |
+| DEC-03 | Phase 4 | Complete |
 | DEC-04 | Phase 1 | Complete |
 | DEC-05 | Phase 1 | Complete |
 
 **Coverage:**
 
-- v1 requirements: 88 total
-- Mapped to phases: 88 ✓
+- v1 requirements: 94 total
+- Mapped to phases: 94 ✓
 - Unmapped: 0 ✓
 
 **Per phase:**
@@ -293,8 +305,8 @@ Populated during roadmap creation (2026-09-08). Every v1 requirement maps to exa
 | Phase 1 | Conformant LPCM Bitstream | 63 |
 | Phase 2 | Parser, Round-Trip and Fuzzing | 12 |
 | Phase 3 | FLAC and Opus Framing | 7 |
-| Phase 4 | Parallax-Facing API | 6 |
+| Phase 4 | Parallax-Facing API | 12 |
 
 ---
 *Requirements defined: 2026-09-08*
-*Last updated: 2026-09-08 after roadmap creation — traceability populated, 88/88 mapped*
+*Last updated: 2026-09-11 after Phase 3 closure and the Parallax integration-contract audit — traceability populated, 94/94 mapped*
