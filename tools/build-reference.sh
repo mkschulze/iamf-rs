@@ -104,10 +104,17 @@ mkdir -p "$CODEC_LIB_DIR" "$CODEC_DISABLED_DIR"
 if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
   log "enabling bundled FLAC/Opus codec archives (x86_64 Linux reference host)"
   restored=0
-  for f in "$CODEC_DISABLED_DIR"/*.a "$CODEC_DISABLED_DIR"/*.lib; do
+  for f in "$CODEC_DISABLED_DIR"/libopus.* "$CODEC_DISABLED_DIR"/libFLAC.*; do
     [ -e "$f" ] || continue
     mv "$f" "$CODEC_LIB_DIR/"
     restored=$((restored + 1))
+  done
+  # AAC is outside this project's reference scope. Leaving its archive absent
+  # avoids compiling an unused decoder and, more importantly, avoids an
+  # unnecessary static-link dependency in the standalone iamfdec tool.
+  for f in "$CODEC_LIB_DIR"/libfdk-aac.*; do
+    [ -e "$f" ] || continue
+    mv "$f" "$CODEC_DISABLED_DIR/"
   done
   echo "  restored $restored archive(s) (0 on a clean checkout is expected)"
   DEP_CODECS_DISABLED=false
@@ -151,6 +158,22 @@ else
 fi
 
 log "cmake configure + build (iamfdec)"
+# libiamf@v1.1.0 records codec libraries only on its shared target.  Its
+# static archive therefore leaves Opus and FLAC unresolved in the separate
+# iamfdec CMake project, which otherwise links only `iamf m`.  Patch that
+# *tool-project* link line, never libiamf's decoder sources, and refuse to
+# build if the pinned upstream layout changes.
+IAMFDEC_CMAKE="$SRC/code/test/tools/iamfdec/CMakeLists.txt"
+if [ "$DEP_CODECS_DISABLED" = false ]; then
+  if ! grep -Fqx '  target_link_libraries (iamfdec iamf m)' "$IAMFDEC_CMAKE"; then
+    echo "FATAL: pinned iamfdec CMake link line changed; refusing an unchecked patch" >&2
+    exit 1
+  fi
+  sed -i.bak \
+    's/  target_link_libraries (iamfdec iamf m)/  target_link_libraries (iamfdec iamf m opus FLAC)/' \
+    "$IAMFDEC_CMAKE"
+  rm -f "$IAMFDEC_CMAKE.bak"
+fi
 if ! (
   cd "$SRC/code/test/tools/iamfdec"
   cmake -DCMAKE_INSTALL_PREFIX="$PREFIX" .
