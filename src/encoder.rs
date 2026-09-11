@@ -232,6 +232,7 @@ impl EncoderBuilder {
     }
 
     /// Declare one substream. Reusing its handle explicitly shares encoded audio.
+    /// Every declared substream must be referenced by at least one element at build.
     pub fn add_substream(&mut self) -> SubstreamHandle {
         self.declare_substream(None)
     }
@@ -247,6 +248,7 @@ impl EncoderBuilder {
 
     /// Declare a mix-gain parameter. Its template id is ignored; all other fields
     /// define the parameter used by exactly one emitted gain definition.
+    /// Unused parameter declarations are rejected at build.
     pub fn add_mix_gain_parameter(&mut self, gain: MixGainParamDefinition) -> ParameterHandle {
         self.declare_parameter(None, gain)
     }
@@ -545,6 +547,17 @@ impl EncoderBuilder {
             }
         }
 
+        for index in 0..self.substreams.len() {
+            if !self.audio_elements.iter().any(|declaration| {
+                declaration
+                    .substreams
+                    .iter()
+                    .any(|handle| handle.index == index)
+            }) {
+                return Err(invalid("unused_substream"));
+            }
+        }
+
         let descriptors = DescriptorSet {
             sequence_header: IaSequenceHeader::new(0, 0),
             codec_configs: self.codec_configs.clone(),
@@ -625,6 +638,9 @@ impl EncoderBuilder {
                 used_parameters.push(*handle);
                 *gain = parameter.gain.clone();
             }
+        }
+        if used_parameters.len() != self.parameters.len() {
+            return Err(invalid("unused_parameter"));
         }
         Ok(())
     }

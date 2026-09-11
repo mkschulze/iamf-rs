@@ -577,6 +577,36 @@ fn repeated_parameter_handle_is_rejected_even_when_substreams_are_shared() {
 }
 
 #[test]
+fn build_rejects_an_unused_explicit_parameter_handle() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let audio = builder.add_audio_element(codec, stereo_element());
+    builder.add_mix_presentation(vec![audio], stereo_presentation());
+    builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(900, 16_000));
+
+    let error = builder
+        .build()
+        .expect_err("unused parameter declarations have no emitted wire definition");
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), Location::Field("unused_parameter"));
+}
+
+#[test]
+fn build_rejects_an_unused_explicit_substream_handle() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let audio = builder.add_audio_element(codec, stereo_element());
+    builder.add_mix_presentation(vec![audio], stereo_presentation());
+    builder.add_substream();
+
+    let error = builder
+        .build()
+        .expect_err("unused substreams have no emitted audio element reference");
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), Location::Field("unused_substream"));
+}
+
+#[test]
 fn explicit_substream_sharing_with_distinct_parameters_produces_valid_descriptors() {
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
