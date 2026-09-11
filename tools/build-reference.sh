@@ -151,11 +151,15 @@ else
 fi
 
 log "cmake configure + build (iamfdec)"
-(
+if ! (
   cd "$SRC/code/test/tools/iamfdec"
   cmake -DCMAKE_INSTALL_PREFIX="$PREFIX" .
   make -j"$NPROC"
-) > "$REF_DIR/build-iamfdec.log" 2>&1
+) > "$REF_DIR/build-iamfdec.log" 2>&1; then
+  echo "FATAL: iamfdec build failed; showing $REF_DIR/build-iamfdec.log" >&2
+  cat "$REF_DIR/build-iamfdec.log" >&2
+  exit 1
+fi
 
 IAMFDEC="$SRC/code/test/tools/iamfdec/iamfdec"
 LIBIAMF_A="$(find "$PREFIX" "$SRC/code" -name 'libiamf.a' -print 2>/dev/null | head -1)"
