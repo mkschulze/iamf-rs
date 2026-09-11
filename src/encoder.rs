@@ -258,7 +258,20 @@ impl EncoderBuilder {
                 .map(|declaration| declaration.presentation.clone())
                 .collect(),
         };
-        let _registry = ParamDefinitionRegistry::from_descriptors(&descriptors)?;
+        let registry = ParamDefinitionRegistry::from_descriptors(&descriptors)?;
+        for (index, entry) in registry.entries().iter().enumerate() {
+            if registry
+                .entries()
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|other| other.definition.parameter_id == entry.definition.parameter_id)
+            {
+                return Err(Error::new(
+                    ErrorKind::DuplicateDeclaration,
+                    Location::Field("parameter_id"),
+                ));
+            }
+        }
         Ok(())
     }
 

@@ -157,6 +157,29 @@ fn build_rejects_a_malformed_extension_definition_before_accepting_the_encoder()
     assert_eq!(error.at(), Location::InputOffset(0));
 }
 
+#[test]
+fn build_rejects_duplicate_authored_parameter_definition_ids() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = builder.add_audio_element(codec, stereo_element());
+    let mut presentation = stereo_presentation();
+    presentation
+        .sub_mixes
+        .first_mut()
+        .expect("the stereo fixture has one sub-mix")
+        .output_mix_gain
+        .definition
+        .parameter_id = 100;
+    let _presentation = builder.add_mix_presentation(vec![element], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("static authoring cannot use one parameter id for two definitions");
+
+    assert_eq!(error.kind(), &ErrorKind::DuplicateDeclaration);
+    assert_eq!(error.at(), Location::Field("parameter_id"));
+}
+
 fn lpcm_config() -> CodecConfig {
     CodecConfig::lpcm(
         42,
