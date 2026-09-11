@@ -11,6 +11,7 @@ const CHANNELS: usize = 2;
 const PACKETS: usize = 2;
 const END_TRIM: usize = 1;
 const MAX_PACKET_BYTES: usize = 4_000;
+const LIBIAMF_EXPECTED: &str = "libiamf-expected.s16le";
 
 static TEMP_DIR_SUFFIX: AtomicUsize = AtomicUsize::new(0);
 
@@ -309,6 +310,16 @@ fn verify(dir: &Path) {
     actual.sort();
     let mut expected_names = vec!["MANIFEST.md".to_owned()];
     expected_names.extend(artifact_names(packets));
+    let libiamf_expected = dir.join(LIBIAMF_EXPECTED);
+    let has_libiamf_expected = libiamf_expected.is_file();
+    assert_eq!(
+        has_libiamf_expected,
+        fields.contains_key("sha256.libiamf-expected.s16le"),
+        "the optional pinned libiamf PCM needs both file and manifest digest"
+    );
+    if has_libiamf_expected {
+        expected_names.push(LIBIAMF_EXPECTED.to_owned());
+    }
     expected_names.sort();
     assert_eq!(actual, expected_names);
 
@@ -363,4 +374,12 @@ fn verify(dir: &Path) {
         expected,
         "fresh decoder output must be exact"
     );
+    if has_libiamf_expected {
+        let libiamf_expected = std::fs::read(libiamf_expected).unwrap();
+        assert_eq!(libiamf_expected.len(), expected.len());
+        assert_eq!(
+            fields.get("sha256.libiamf-expected.s16le"),
+            Some(&support::digest(&libiamf_expected))
+        );
+    }
 }

@@ -8,7 +8,8 @@ root workspace. Neither root `cargo test --locked` nor root
 ignored generators and independent decoder verifiers.
 
 Immutable artifacts are `packet-*.bin`, PCM files (the committed files are
-`source.s16le` and `expected.s16le`; also include `*.pcm` if added), and
+`source.s16le`, `expected.s16le`, and the pinned-reference `libiamf-expected.s16le`;
+also include `*.pcm` if added), and
 `MANIFEST.md` below both codec directories. This README is editable documentation,
 not a generated immutable artifact. Scratch output is not part of the inventory.
 
@@ -42,10 +43,10 @@ artifacts only.
 | CODEC-05 | FLAC rate, frame-size and depth errors have exact kinds/locations; accepted lower block boundary | `descriptors` | `flac_constructor_rejects_exact_rate_frame_and_depth_boundaries`; `flac_constructor_accepts_sixteen_samples_without_validation_findings` |
 | CODEC-05 | Opus 44.1 kHz typed error and compact public error surface | `error_shape` | `fresh_opus_rejects_44_1_khz_with_the_published_typed_error`; `codec_capability_errors_are_exact_compact_kinds` |
 | CODEC-01, CODEC-06 | FLAC pinned tool versions, exact inventory/order, every packet and PCM SHA-256 | `codec_fixtures` | `flac_manifest_authenticates_exactly_three_packets_and_both_pcm_files` |
-| CODEC-02, CODEC-06 | Opus pinned metadata, source/expected/packet digests, inventory/order; reject malformed provenance | `codec_fixtures` | `opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output`; `opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata` |
+| CODEC-02, CODEC-06 | Opus pinned metadata, source/independent/libiamf PCM digests, inventory/order; reject malformed provenance | `codec_fixtures` | `opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output`; `opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata` |
 | CODEC-01, CODEC-06 | Independent Claxon decode of committed FLAC packets equals original PCM | excluded tool `flac_fixtures` (explicit, ignored) | `verify_flac_corpus` |
 | CODEC-02, CODEC-04, CODEC-06 | Fresh standalone Opus decoder consumes exact committed packets, trims L/E, equals expected PCM | excluded tool `opus_fixtures` (explicit, ignored) | `verify_opus_corpus` |
-| CODEC-01, CODEC-02, CODEC-04 | Shared libiamf exact decode/strict-parser conformance gates | `conformance` (reference-dependent) | `the_flac_fixture_is_conformant`; `the_opus_fixture_is_conformant_to_its_standalone_decode` |
+| CODEC-01, CODEC-02, CODEC-04 | Shared libiamf exact decode/strict-parser conformance gates | `conformance` (reference-dependent) | `the_flac_fixture_is_conformant`; `the_opus_fixture_is_conformant_to_the_pinned_libiamf_decode` |
 | CODEC-07 | Root manifest/lock/source excludes codec dependencies; workspace exclusion and import canaries | `codec_dependency_boundary` | `codec_dependencies_and_src_imports_remain_outside_the_root_crate`; `workspace_exclusion_canaries_are_limited_to_the_exclude_value`; `import_canaries_have_the_expected_polarity` |
 
 The root FLAC sample check only decodes the committed fixed-block Verbatim
@@ -94,9 +95,11 @@ ordinary root replay does not. Review the tool versions and lockfile before an
 intentional generation run. Afterwards:
 
 1. Run both independent verifiers above. Check packet inventory/order and all
-   packet/source/expected SHA-256 values against each manifest; review L, S, P,
+   packet/source/independent/libiamf PCM SHA-256 values against each manifest; review L, S, P,
    E, padded frame counts and channel order. FLAC expected PCM must equal source
    PCM; Opus expected PCM must equal the standalone decode of those exact packets.
+   The four documented one-LSB differences in libiamf-expected.s16le must remain
+   exact unless the pinned libiamf reference is deliberately changed.
 2. Run `cargo test --locked --test codec_fixtures` for the root artifact contract,
    and the named descriptor/property/parser/fuzz tests for framing regressions.
 3. Inspect `git diff --binary -- tests/fixtures/codecs` alongside the textual

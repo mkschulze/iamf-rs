@@ -657,7 +657,7 @@ fn opus_fixture_keeps_manifest_packets_and_asymmetric_priming_on_the_wire() {
     assert_eq!(opus.input_sample_rate, 48_000);
     assert_eq!(opus.output_gain, 0);
     assert_eq!(opus.mapping_family, 0);
-    assert_eq!(fixture.single_pcm(), corpus.expected);
+    assert_eq!(fixture.single_pcm(), corpus.libiamf_expected);
     assert_eq!(fixture.sample_frames(), corpus.source_frames);
 
     let source = fixture.frame_sources.first().expect("one frame source");
@@ -741,6 +741,34 @@ fn opus_fixture_keeps_manifest_packets_and_asymmetric_priming_on_the_wire() {
             .map(|unit| unit.trimming)
             .collect::<Vec<_>>(),
         "the encoded trim fields decode END then START for each temporal unit"
+    );
+}
+
+/// The independent Opus decoder and the pinned libiamf reference decoder each
+/// retain their own exact PCM oracle.  The reference path differs from the
+/// standalone libopus 1.6.1 decoder at four documented rounding points.
+#[test]
+fn opus_fixture_uses_the_pinned_libiamf_pcm_oracle() {
+    let corpus = fixture::load_opus_corpus();
+    let fixture = fixture::opus();
+
+    let differences = fixture
+        .single_pcm()
+        .iter()
+        .zip(&corpus.expected)
+        .enumerate()
+        .filter(|(_, (reference, standalone))| reference != standalone)
+        .map(|(index, (reference, standalone))| (index, *standalone, *reference))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        differences,
+        [
+            (887, 1433, 1432),
+            (1642, -5421, -5422),
+            (2798, -1473, -1474),
+            (3008, -7284, -7285),
+        ]
     );
 }
 

@@ -317,6 +317,7 @@ fn opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output(
         );
     }
     assert_eq!(corpus.expected.len(), corpus.source_frames * 2);
+    assert_eq!(corpus.libiamf_expected.len(), corpus.source_frames * 2);
 }
 
 #[test]
@@ -340,6 +341,11 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     ]);
     assert!(validate_opus_metadata(&fields).is_err());
     fields.insert("sha256.source.s16le".to_owned(), "digest".to_owned());
+    assert!(validate_opus_metadata(&fields).is_err());
+    fields.insert(
+        "sha256.libiamf-expected.s16le".to_owned(),
+        "digest".to_owned(),
+    );
     for (key, expected) in [
         ("sample_rate", "48000"),
         ("channels", "2"),
@@ -363,6 +369,12 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     fields.remove("sha256.expected.s16le");
     assert!(validate_opus_metadata(&fields).is_err());
     fields.insert("sha256.expected.s16le".to_owned(), "digest".to_owned());
+    fields.remove("sha256.libiamf-expected.s16le");
+    assert!(validate_opus_metadata(&fields).is_err());
+    fields.insert(
+        "sha256.libiamf-expected.s16le".to_owned(),
+        "digest".to_owned(),
+    );
     let packets = vec!["packet-000.bin".to_owned(), "packet-001.bin".to_owned()];
     assert!(validate_opus_digest_keys(&fields, &packets).is_err());
     fields.insert("sha256.packet-000.bin".to_owned(), "digest".to_owned());
@@ -413,6 +425,7 @@ fn write_sha256_inventory() {
             "flac/source.s16le",
             "opus/MANIFEST.md",
             "opus/expected.s16le",
+            "opus/libiamf-expected.s16le",
             "opus/packet-000.bin",
             "opus/packet-001.bin",
             "opus/source.s16le",
