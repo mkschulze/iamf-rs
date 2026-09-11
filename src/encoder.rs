@@ -246,7 +246,7 @@ impl EncoderBuilder {
     }
 
     /// Declare a mix-gain parameter. Its template id is ignored; all other fields
-    /// define the shared parameter used by explicit presentation references.
+    /// define the parameter used by exactly one emitted gain definition.
     pub fn add_mix_gain_parameter(&mut self, gain: MixGainParamDefinition) -> ParameterHandle {
         self.declare_parameter(None, gain)
     }
@@ -309,6 +309,7 @@ impl EncoderBuilder {
     /// Declare a presentation referencing explicitly declared gains. References
     /// follow wire order: element gains then output gain for each sub-mix.
     /// The template's complete gain fields are replaced by these declarations.
+    /// A parameter handle may appear only once across all presentations.
     pub fn add_mix_presentation_with_parameters(
         &mut self,
         audio_elements: Vec<AudioElementHandle>,
@@ -579,6 +580,7 @@ impl EncoderBuilder {
     }
 
     fn resolve_parameter_references(&mut self) -> Result<()> {
+        let mut used_parameters = Vec::new();
         for declaration in &mut self.mix_presentations {
             let gains = declaration
                 .presentation
@@ -614,6 +616,13 @@ impl EncoderBuilder {
                     .ok_or_else(|| {
                         Error::new(ErrorKind::UnknownParameterHandle, Location::Unlocated)
                     })?;
+                if used_parameters.contains(handle) {
+                    return Err(Error::new(
+                        ErrorKind::DuplicateDeclaration,
+                        Location::Field("parameter_id"),
+                    ));
+                }
+                used_parameters.push(*handle);
                 *gain = parameter.gain.clone();
             }
         }

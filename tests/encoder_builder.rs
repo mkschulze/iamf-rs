@@ -553,7 +553,7 @@ fn all_substream_and_parameter_ids_are_allocated_and_manifested() {
 }
 
 #[test]
-fn explicit_substream_and_parameter_handles_can_be_shared() {
+fn repeated_parameter_handle_is_rejected_even_when_substreams_are_shared() {
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
     let stream = builder.add_substream();
@@ -570,25 +570,37 @@ fn explicit_substream_and_parameter_handles_can_be_shared() {
         vec![gain, gain],
         stereo_presentation(),
     );
+    assert_eq!(
+        builder.build().unwrap_err().kind(),
+        &ErrorKind::DuplicateDeclaration
+    );
+}
+
+#[test]
+fn explicit_substream_sharing_with_distinct_parameters_produces_valid_descriptors() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let stream = builder.add_substream();
+    for _ in 0..2 {
+        let audio =
+            builder.add_audio_element_with_substreams(codec, vec![stream], stereo_element());
+        let element_gain =
+            builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(900, 16_000));
+        let output_gain =
+            builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(900, 16_000));
+        builder.add_mix_presentation_with_parameters(
+            vec![audio],
+            vec![element_gain, output_gain],
+            stereo_presentation(),
+        );
+    }
     let (encoder, manifest) = builder.build().unwrap();
     assert_eq!(manifest.substream_id(stream), Some(0));
-    assert_eq!(manifest.parameter_id(gain), Some(0));
     assert_eq!(encoder.descriptors().audio_elements.len(), 2);
     for element in &encoder.descriptors().audio_elements {
         assert_eq!(element.audio_substream_ids, vec![0]);
     }
-    for presentation in &encoder.descriptors().mix_presentations {
-        assert_eq!(
-            presentation
-                .sub_mixes
-                .first()
-                .unwrap()
-                .output_mix_gain
-                .definition
-                .parameter_id,
-            0
-        );
-    }
+    assert!(encoder.descriptors().validate().is_empty());
 }
 
 #[test]
