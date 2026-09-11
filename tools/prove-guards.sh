@@ -47,9 +47,9 @@ SUMMARY=()
 # ---------------------------------------------------------------------------
 # Reset the proof crate to a pristine copy of the crate as committed.
 #
-# `[workspace]` is appended so the copy is its own workspace root. Without it
-# cargo walks up to the real Cargo.toml and refuses to build a package that is
-# not a member of that workspace.
+# The committed manifest is already a workspace root. Retaining that table is
+# essential: appending a second `[workspace]` table makes Cargo reject the
+# proof crate before cargo-deny or Clippy can exercise a guardrail.
 # ---------------------------------------------------------------------------
 reset_crate() {
     rm -rf "${PROOF_DIR}"
@@ -61,7 +61,6 @@ reset_crate() {
        "${REPO_ROOT}/rust-toolchain.toml" \
        "${PROOF_DIR}/"
     cp -R "${REPO_ROOT}/src" "${PROOF_DIR}/src"
-    printf '\n[workspace]\n' >> "${PROOF_DIR}/Cargo.toml"
 }
 
 record() {

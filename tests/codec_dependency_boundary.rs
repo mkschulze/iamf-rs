@@ -556,6 +556,7 @@ fn codec_ident(ident: &syn::Ident) -> Option<&'static str> {
     FORBIDDEN.iter().copied().find(|codec| *codec == package)
 }
 
+#[allow(clippy::expect_used)] // Test canary setup must fail loudly on filesystem errors.
 fn write_canary(root: &Path, manifest: &str, source: &str) {
     fs::create_dir_all(root.join("src")).expect("create canary src directory");
     fs::write(root.join("Cargo.toml"), manifest).expect("write canary manifest");
@@ -569,6 +570,7 @@ struct TemporaryCanary {
 }
 
 impl TemporaryCanary {
+    #[allow(clippy::expect_used)] // Test-only scratch-directory setup.
     fn new(kind: &str) -> Self {
         let base = env::temp_dir()
             .canonicalize()
@@ -592,6 +594,7 @@ impl TemporaryCanary {
 }
 
 impl Drop for TemporaryCanary {
+    #[allow(clippy::expect_used)] // A failed cleanup must not conceal test residue.
     fn drop(&mut self) {
         let valid_name = self
             .path
@@ -604,12 +607,10 @@ impl Drop for TemporaryCanary {
             "refusing unsafe canary cleanup"
         );
         assert!(valid_name, "refusing unsafe canary cleanup");
-        assert!(
-            !fs::symlink_metadata(&self.path)
-                .expect("inspect canary")
-                .file_type()
-                .is_symlink()
-        );
+        assert!(!fs::symlink_metadata(&self.path)
+            .expect("inspect canary")
+            .file_type()
+            .is_symlink());
         fs::remove_dir_all(&self.path).expect("remove isolated canary directory");
     }
 }

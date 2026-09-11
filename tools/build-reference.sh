@@ -79,7 +79,7 @@ fi
 echo "  checked out $ACTUAL_SHA"
 
 # ---------------------------------------------------------------------------
-# 2. The non-obvious step: move the shipped codec archives aside.
+# 2. Select codec support for the host architecture.
 # ---------------------------------------------------------------------------
 # code/dep_codecs/lib/ ships x86_64-Linux .a files (libopus.a, libFLAC.a,
 # libfdk-aac.a) alongside Windows .lib files. CODEC_CAP=ON is the default and
@@ -92,20 +92,36 @@ echo "  checked out $ACTUAL_SHA"
 # excludes the src/iamf_dec/<codec> source directories. The LPCM path is always
 # compiled and needs no codec library at all -- Phase 1 is LPCM-only.
 #
-# Phase 3 (FLAC/Opus) WILL need real opus/FLAC libraries here. When that
-# happens the resulting iamfdec has a different hash; the manifest records
-# `dep_codecs_disabled` precisely so that becomes a visible manifest change
-# rather than a mystery.
-log "moving dep_codecs/lib aside (x86_64-Linux archives; LPCM needs no codec)"
-mkdir -p "$SRC/code/dep_codecs/lib_disabled"
-moved=0
-for f in "$SRC"/code/dep_codecs/lib/*.a "$SRC"/code/dep_codecs/lib/*.lib; do
-  [ -e "$f" ] || continue
-  mv "$f" "$SRC/code/dep_codecs/lib_disabled/"
-  moved=$((moved + 1))
-done
-echo "  moved $moved archive(s) (0 on a re-run is expected)"
-DEP_CODECS_DISABLED=true
+# Phase 3's FLAC and Opus conformance fixtures require these shipped
+# x86_64-Linux archives. Keep them available on that matching host, which is
+# exactly where the reference workflow runs. On every other architecture they
+# must remain disabled: CMake would otherwise select an incompatible archive
+# and fail at link time before the LPCM smoke test can run.
+CODEC_LIB_DIR="$SRC/code/dep_codecs/lib"
+CODEC_DISABLED_DIR="$SRC/code/dep_codecs/lib_disabled"
+mkdir -p "$CODEC_LIB_DIR" "$CODEC_DISABLED_DIR"
+
+if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
+  log "enabling bundled FLAC/Opus codec archives (x86_64 Linux reference host)"
+  restored=0
+  for f in "$CODEC_DISABLED_DIR"/*.a "$CODEC_DISABLED_DIR"/*.lib; do
+    [ -e "$f" ] || continue
+    mv "$f" "$CODEC_LIB_DIR/"
+    restored=$((restored + 1))
+  done
+  echo "  restored $restored archive(s) (0 on a clean checkout is expected)"
+  DEP_CODECS_DISABLED=false
+else
+  log "disabling bundled codec archives (unsupported reference host)"
+  moved=0
+  for f in "$CODEC_LIB_DIR"/*.a "$CODEC_LIB_DIR"/*.lib; do
+    [ -e "$f" ] || continue
+    mv "$f" "$CODEC_DISABLED_DIR/"
+    moved=$((moved + 1))
+  done
+  echo "  moved $moved archive(s) (0 on a re-run is expected)"
+  DEP_CODECS_DISABLED=true
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Build libiamf, then iamfdec (a SEPARATE CMake project at v1.1.0).
@@ -121,13 +137,18 @@ log "cmake configure + build (libiamf)"
   make install
 ) > "$REF_DIR/build-libiamf.log" 2>&1
 
-# These three lines are the EXPECTED confirmation that this is the LPCM-only
-# configuration -- they are not errors. Two harmless
-#   ranlib: file: libiamf.a(h2b_rdr.c.o) has no symbols
-# warnings from the binauralizer stubs also appear.
-log "codec-exclusion confirmation (expected: opus, fdk-aac, FLAC not found)"
-grep -iE 'the (opus|fdk-aac|FLAC) library was not found' "$CONFIGURE_LOG" \
-  || echo "  WARNING: the configure log did not carry the codec-not-found lines; see $CONFIGURE_LOG"
+if [ "$DEP_CODECS_DISABLED" = true ]; then
+  # These lines confirm the LPCM-only fallback used on non-Linux hosts.
+  log "codec-exclusion confirmation (expected: opus, fdk-aac, FLAC not found)"
+  grep -iE 'the (opus|fdk-aac|FLAC) library was not found' "$CONFIGURE_LOG" \
+    || echo "  WARNING: the configure log did not carry the codec-not-found lines; see $CONFIGURE_LOG"
+else
+  log "codec-enable confirmation (FLAC and Opus must be configured)"
+  if grep -qiE 'the (opus|FLAC) library was not found' "$CONFIGURE_LOG"; then
+    echo "FATAL: the Linux reference build did not configure FLAC and Opus support" >&2
+    exit 1
+  fi
+fi
 
 log "cmake configure + build (iamfdec)"
 (
