@@ -122,11 +122,9 @@ impl LoudspeakerLayout {
     /// `kLayout3_1_2_ch`'s comment contains a stray double slash
     /// (`L/C/R//Ltf/Rtf/LFE`); it lists six labels, not seven.
     ///
-    /// `None` for `Reserved` (no labels are defined) and for `Expanded` (the
-    /// count depends on the `expanded_loudspeaker_layout` byte, which Phase 1
-    /// preserves without interpreting). A caller that needs a number for one of
-    /// those is asking a question the format has not answered, and a guess
-    /// there would select a profile from nothing.
+    /// `None` for `Reserved`, which has no labels defined. Expanded layouts
+    /// delegate to their named expanded value; its reserved values still have
+    /// no fixed count.
     // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.h ChannelAudioLayerConfig::LoudspeakerLayout
     #[must_use]
     pub const fn channel_count(self) -> Option<u32> {
@@ -141,7 +139,8 @@ impl LoudspeakerLayout {
             Self::Ch7_1_4 => Some(12), // + Ltf/Rtf/Ltb/Rtb.
             Self::Ch3_1_2 => Some(6),  // L/C/R/Ltf/Rtf/LFE.
             Self::Binaural => Some(2), // L/R.
-            Self::Reserved(_) | Self::Expanded(_) => None,
+            Self::Reserved(_) => None,
+            Self::Expanded(expanded) => expanded.channel_count(),
         }
     }
 
@@ -192,6 +191,32 @@ pub enum ExpandedLoudspeakerLayout {
 }
 
 impl ExpandedLoudspeakerLayout {
+    /// How many channels this named expanded layout carries.
+    ///
+    /// The expanded-layout values 0 through 12 name fixed speaker groups in
+    /// IAMF v1.1. A reserved value has no defined channel set, so callers must
+    /// reject it rather than infer a profile from a guessed count.
+    // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.h ChannelAudioLayerConfig::ExpandedLoudspeakerLayout
+    #[must_use]
+    pub const fn channel_count(self) -> Option<u32> {
+        match self {
+            Self::Lfe => Some(1),
+            Self::StereoS
+            | Self::StereoSs
+            | Self::StereoRs
+            | Self::StereoTf
+            | Self::StereoTb
+            | Self::StereoF
+            | Self::StereoSi
+            | Self::StereoTpSi => Some(2),
+            Self::Top4Ch => Some(4),
+            Self::Ch3_0 => Some(3),
+            Self::Ch9_1_6 => Some(16),
+            Self::Top6Ch => Some(6),
+            Self::Reserved(_) => None,
+        }
+    }
+
     /// The byte this layout occupies.
     #[must_use]
     pub const fn value(self) -> u8 {

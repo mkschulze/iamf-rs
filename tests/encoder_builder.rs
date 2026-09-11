@@ -1,7 +1,8 @@
 //! Public-boundary tests for the immutable high-level encoder configuration.
 
 use iamf::encoder::EncoderBuilder;
-use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
+use iamf::model::Profile;
 use iamf::obu::{
     AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
@@ -180,6 +181,58 @@ fn build_rejects_duplicate_authored_parameter_definition_ids() {
     assert_eq!(error.at(), Location::Field("parameter_id"));
 }
 
+#[test]
+fn unrelated_presentations_do_not_sum_their_element_or_channel_limits() {
+    // Two independent 16-channel Presentations would exceed the sequence-wide
+    // 28-channel cap if their elements were incorrectly unioned. Each
+    // Presentation itself needs only Simple.
+    let (_, manifest) = two_presentation_builder().build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Simple);
+}
+
+#[test]
+fn shared_element_is_counted_in_each_presentation_that_references_it() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let shared = builder.add_audio_element(codec, stereo_element());
+    let first = builder.add_audio_element(codec, stereo_element());
+    let second = builder.add_audio_element(codec, stereo_element());
+
+    let _first_presentation = builder.add_mix_presentation(
+        vec![shared, first],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+    let _second_presentation = builder.add_mix_presentation(
+        vec![shared, second],
+        presentation_for_elements(&[99, 101], 200, 210),
+    );
+
+    let (_, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Base);
+}
+
+#[test]
+fn largest_presentation_sets_the_sequence_profile() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = builder.add_audio_element(codec, stereo_element());
+    let second = builder.add_audio_element(codec, stereo_element());
+    let third = builder.add_audio_element(codec, stereo_element());
+    let small = builder.add_audio_element(codec, stereo_element());
+
+    let _large_presentation = builder.add_mix_presentation(
+        vec![first, second, third],
+        presentation_for_elements(&[99, 100, 101], 100, 110),
+    );
+    let _small_presentation =
+        builder.add_mix_presentation(vec![small], presentation_for_elements(&[102], 200, 210));
+
+    let (encoder, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+    assert_eq!(encoder.descriptors().sequence_header.primary_profile, 2);
+    assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
+}
+
 fn lpcm_config() -> CodecConfig {
     CodecConfig::lpcm(
         42,
@@ -206,18 +259,70 @@ fn stereo_element() -> AudioElement {
 }
 
 fn stereo_presentation() -> MixPresentation {
+    presentation_for_elements(&[99], 100, 101)
+}
+
+fn two_presentation_builder() -> EncoderBuilder {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = builder.add_audio_element(
+        codec,
+        element_with_layout(LoudspeakerLayout::Expanded(
+            ExpandedLoudspeakerLayout::Ch9_1_6,
+        )),
+    );
+    let second = builder.add_audio_element(
+        codec,
+        element_with_layout(LoudspeakerLayout::Expanded(
+            ExpandedLoudspeakerLayout::Ch9_1_6,
+        )),
+    );
+    let _first_presentation =
+        builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));
+    let _second_presentation =
+        builder.add_mix_presentation(vec![second], presentation_for_elements(&[100], 200, 210));
+    builder
+}
+
+fn element_with_layout(layout: LoudspeakerLayout) -> AudioElement {
+    let channels = layout.channel_count().unwrap_or(0);
+    AudioElement::channel_based(
+        99,
+        42,
+        (0..channels).collect(),
+        ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+            layout,
+            u8::try_from(channels).unwrap_or(0),
+            1,
+        )),
+    )
+}
+
+fn presentation_for_elements(
+    element_ids: &[u32],
+    element_parameter_id: u32,
+    output_parameter_id: u32,
+) -> MixPresentation {
     MixPresentation {
         mix_presentation_id: 7,
         annotations_language: vec![b"en".to_vec()],
         localized_presentation_annotations: vec![b"stereo".to_vec()],
         sub_mixes: vec![SubMix {
-            elements: vec![SubMixAudioElement {
-                audio_element_id: 99,
-                localized_element_annotations: vec![b"bed".to_vec()],
-                rendering_config: RenderingConfig::stereo(),
-                element_mix_gain: MixGainParamDefinition::mode_1(100, 16_000),
-            }],
-            output_mix_gain: MixGainParamDefinition::mode_1(101, 16_000),
+            elements: (element_parameter_id..)
+                .zip(element_ids.iter())
+                .map(
+                    |(element_parameter_id, &audio_element_id)| SubMixAudioElement {
+                        audio_element_id,
+                        localized_element_annotations: vec![b"bed".to_vec()],
+                        rendering_config: RenderingConfig::stereo(),
+                        element_mix_gain: MixGainParamDefinition::mode_1(
+                            element_parameter_id,
+                            16_000,
+                        ),
+                    },
+                )
+                .collect(),
+            output_mix_gain: MixGainParamDefinition::mode_1(output_parameter_id, 16_000),
             layouts: vec![LayoutWithLoudness {
                 layout: Layout::SoundSystem(SoundSystem::A0_2_0),
                 reserved: 0,

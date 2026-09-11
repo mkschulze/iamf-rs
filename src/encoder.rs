@@ -4,7 +4,7 @@
 //! static validation has accepted the complete declaration set.
 
 use crate::error::{Error, ErrorKind, Location, Result};
-use crate::model::DescriptorSet;
+use crate::model::{select_minimum_profile, DescriptorSet, Profile};
 use crate::obu::{
     AudioElement, CodecConfig, IaSequenceHeader, MixPresentation, ParamDefinitionRegistry,
 };
@@ -39,6 +39,7 @@ pub struct IdManifest {
     codec_configs: Vec<(CodecConfigHandle, u32)>,
     audio_elements: Vec<(AudioElementHandle, u32)>,
     mix_presentations: Vec<(MixPresentationHandle, u32)>,
+    sequence_profile: Profile,
 }
 
 impl IdManifest {
@@ -58,6 +59,12 @@ impl IdManifest {
     #[must_use]
     pub fn mix_presentation_id(&self, handle: MixPresentationHandle) -> Option<u32> {
         lookup_id(&self.mix_presentations, handle)
+    }
+
+    /// The minimum profile required by the most demanding Mix Presentation.
+    #[must_use]
+    pub const fn sequence_profile(&self) -> Profile {
+        self.sequence_profile
     }
 }
 
@@ -163,7 +170,7 @@ impl EncoderBuilder {
     pub fn build(self) -> Result<(Encoder, IdManifest)> {
         self.validate_declarations()?;
 
-        let manifest = IdManifest {
+        let mut manifest = IdManifest {
             codec_configs: allocate_ids(self.codec_configs.len(), |index| CodecConfigHandle {
                 generation: self.generation,
                 index,
@@ -178,6 +185,7 @@ impl EncoderBuilder {
                     index,
                 }
             })?,
+            sequence_profile: Profile::Simple,
         };
 
         let mut descriptors = DescriptorSet::new(IaSequenceHeader::new(0, 0));
@@ -213,6 +221,12 @@ impl EncoderBuilder {
             presentation.mix_presentation_id = u32::try_from(index).map_err(allocation_error)?;
             descriptors.mix_presentations.push(presentation);
         }
+
+        let (primary_profile, additional_profile) =
+            select_sequence_profile(&descriptors.mix_presentations, &descriptors.audio_elements)?;
+        descriptors.sequence_header =
+            IaSequenceHeader::new(primary_profile.to_wire(), additional_profile.to_wire());
+        manifest.sequence_profile = primary_profile;
 
         Ok((Encoder { descriptors }, manifest))
     }
@@ -298,6 +312,48 @@ impl EncoderBuilder {
             .get(handle.index)
             .ok_or_else(|| Error::new(ErrorKind::UnknownAudioElementHandle, Location::Unlocated))
     }
+}
+
+/// Select a sequence profile from Presentation-local minima.
+///
+/// Audio Elements are resolved once for each sub-mix reference, so a shared
+/// declaration contributes to every Presentation that uses it. Presentations
+/// are never unioned: their concurrent-element and channel limits apply one
+/// Presentation at a time, and the IA Sequence Header receives the highest
+/// resulting pair.
+fn select_sequence_profile(
+    presentations: &[MixPresentation],
+    elements: &[AudioElement],
+) -> Result<(Profile, Profile)> {
+    let mut selected = (Profile::Simple, Profile::Simple);
+
+    for presentation in presentations {
+        let presentation_elements: Result<Vec<&AudioElement>> = presentation
+            .sub_mixes
+            .iter()
+            .flat_map(|sub_mix| &sub_mix.elements)
+            .map(|reference| {
+                let index = usize::try_from(reference.audio_element_id).map_err(|_| {
+                    Error::new(
+                        ErrorKind::InvalidDescriptorReference,
+                        Location::Field("mix_presentation.audio_elements"),
+                    )
+                })?;
+                elements.get(index).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidDescriptorReference,
+                        Location::Field("mix_presentation.audio_elements"),
+                    )
+                })
+            })
+            .collect();
+        let candidate = select_minimum_profile(&presentation_elements?)?;
+        if candidate.0 > selected.0 {
+            selected = candidate;
+        }
+    }
+
+    Ok(selected)
 }
 
 impl Default for EncoderBuilder {

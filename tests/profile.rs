@@ -17,12 +17,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use iamf::error::ErrorKind;
-use iamf::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig, LoudspeakerLayout};
+use iamf::model::layout::{
+    AmbisonicsConfig, AmbisonicsMonoConfig, ExpandedLoudspeakerLayout, LoudspeakerLayout,
+};
 use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
 };
-use iamf::model::{Profile, Q7_8, lufs_to_q7_8, select_minimum_profile};
+use iamf::model::{lufs_to_q7_8, select_minimum_profile, Profile, Q7_8};
 use iamf::obu::{
     AudioElement, AudioElementType, ChannelAudioLayerConfig, IaSequenceHeader, Loudness,
     ScalableChannelLayoutConfig,
@@ -202,6 +204,48 @@ fn a_single_five_one_six_channel_element_selects_simple() {
 }
 
 #[test]
+fn expanded_9_1_6_has_sixteen_channels_and_selects_simple_when_alone() {
+    // A wrong expanded-layout count, or failing to delegate from the enclosing
+    // layout, would either reject this supported layout or choose the wrong
+    // profile for a one-element Presentation.
+    assert_eq!(ExpandedLoudspeakerLayout::Ch9_1_6.channel_count(), Some(16));
+    let elements = vec![element(
+        0,
+        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+    )];
+    assert_eq!(
+        select(&elements).map(|(profile, _)| profile),
+        Ok(Profile::Simple)
+    );
+}
+
+#[test]
+fn every_named_expanded_layout_has_its_normative_channel_count() {
+    // These literal counts are the layout definitions. A swapped or guessed
+    // mapping changes profile selection for an otherwise valid element.
+    let cases = [
+        (ExpandedLoudspeakerLayout::Lfe, Some(1)),
+        (ExpandedLoudspeakerLayout::StereoS, Some(2)),
+        (ExpandedLoudspeakerLayout::StereoSs, Some(2)),
+        (ExpandedLoudspeakerLayout::StereoRs, Some(2)),
+        (ExpandedLoudspeakerLayout::StereoTf, Some(2)),
+        (ExpandedLoudspeakerLayout::StereoTb, Some(2)),
+        (ExpandedLoudspeakerLayout::Top4Ch, Some(4)),
+        (ExpandedLoudspeakerLayout::Ch3_0, Some(3)),
+        (ExpandedLoudspeakerLayout::Ch9_1_6, Some(16)),
+        (ExpandedLoudspeakerLayout::StereoF, Some(2)),
+        (ExpandedLoudspeakerLayout::StereoSi, Some(2)),
+        (ExpandedLoudspeakerLayout::StereoTpSi, Some(2)),
+        (ExpandedLoudspeakerLayout::Top6Ch, Some(6)),
+        (ExpandedLoudspeakerLayout::Reserved(13), None),
+    ];
+
+    for (layout, expected) in cases {
+        assert_eq!(layout.channel_count(), expected, "{layout:?}");
+    }
+}
+
+#[test]
 fn sixteen_channels_in_one_element_select_simple() {
     assert_eq!(SIMPLE_MAX_CHANNELS, 16);
     let elements = elements_totalling(16);
@@ -328,7 +372,7 @@ fn a_layout_with_no_fixed_channel_count_is_a_typed_error_not_a_guess() {
               escape, as src/ does."
 )]
 mod quantisation {
-    use super::{ErrorKind, Loudness, Q7_8, lufs_to_q7_8};
+    use super::{lufs_to_q7_8, ErrorKind, Loudness, Q7_8};
 
     /// `lufs_to_q7_8`, or the raw `i16` a failure should not have produced.
     fn q7_8(lufs: f64) -> Result<i16, ErrorKind> {
