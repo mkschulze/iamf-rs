@@ -3,12 +3,14 @@
 use iamf::encoder::{EncoderBuilder, FrameInput, SubmittedParameterBlock, TemporalUnitInput};
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, ChannelAudioLayerConfig, CodecConfig, Layout, LayoutWithLoudness, Loudness,
-    LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, ObuType, ParameterBlock,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    AudioElement, BlockDurationFields, ChannelAudioLayerConfig, CodecConfig, Layout,
+    LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixGainParameterData,
+    MixPresentation, ObuType, ParameterBlock, ParameterData, ParameterSubblock, RenderingConfig,
+    SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
 use iamf::sequence::{parse_sequence, SequenceObu};
 use iamf::ErrorKind;
+use std::io::{self, Write};
 
 #[test]
 fn invalid_complete_unit_writes_no_temporal_bytes() -> iamf::Result<()> {
@@ -165,6 +167,102 @@ fn ungoverned_parameter_block_writes_no_temporal_bytes() -> iamf::Result<()> {
     Ok(())
 }
 
+#[test]
+fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
+    #[derive(Debug)]
+    struct PartialThenFail {
+        accepted: usize,
+        limit: usize,
+    }
+
+    impl Write for PartialThenFail {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.accepted == self.limit {
+                return Err(io::Error::other("terminal failure"));
+            }
+            let remaining = self.limit.saturating_sub(self.accepted);
+            let written = remaining.min(bytes.len());
+            self.accepted = self.accepted.saturating_add(written);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (encoder, left, right) = stereo_builder()?;
+    let prologue_len = encoder.clone().start(Vec::new())?.finish()?.len();
+    let mut writer = encoder.start(PartialThenFail {
+        accepted: 0,
+        limit: prologue_len + 1,
+    })?;
+
+    let first = writer
+        .push_temporal_unit(stereo_temporal_unit(left, right))
+        .expect_err("a temporal write partially reaches the refusing sink");
+    assert_eq!(first.kind(), &ErrorKind::SinkWrite);
+    assert_eq!(
+        writer.bytes_written(),
+        u64::try_from(prologue_len + 1).expect("test sink limit fits in u64")
+    );
+
+    let retry = writer
+        .push_temporal_unit(stereo_temporal_unit(left, right))
+        .expect_err("a poisoned high-level writer cannot emit another unit");
+    assert_eq!(retry.kind(), &ErrorKind::SequenceWriterPoisoned);
+
+    let finish = writer
+        .finish()
+        .expect_err("a poisoned high-level writer cannot return its sink");
+    assert_eq!(finish.kind(), &ErrorKind::SequenceWriterPoisoned);
+    Ok(())
+}
+
+#[test]
+fn parameter_subblocks_must_tile_the_declared_duration() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames: vec![
+                (left, FrameInput::Lpcm(stereo_pcm_frame())),
+                (right, FrameInput::Lpcm(stereo_pcm_frame())),
+            ],
+            parameter_blocks: vec![SubmittedParameterBlock {
+                parameter,
+                block: ParameterBlock {
+                    parameter_id: 0,
+                    duration_fields: Some(BlockDurationFields {
+                        duration: 10,
+                        constant_subblock_duration: 0,
+                    }),
+                    subblocks: vec![
+                        ParameterSubblock {
+                            subblock_duration: Some(4),
+                            data: ParameterData::MixGain(MixGainParameterData::Step {
+                                start_point_value: 0,
+                            }),
+                        },
+                        ParameterSubblock {
+                            subblock_duration: Some(5),
+                            data: ParameterData::MixGain(MixGainParameterData::Step {
+                                start_point_value: 0,
+                            }),
+                        },
+                    ],
+                },
+            }],
+            trimming: None,
+        })
+        .expect_err("subblock durations must exactly tile the declared duration");
+    assert_eq!(error.kind(), &ErrorKind::SubblockDurationMismatch);
+    assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
 fn mono_builder(
     config: CodecConfig,
 ) -> iamf::Result<(
@@ -232,6 +330,65 @@ fn stereo_builder() -> iamf::Result<(
     );
     builder.add_mix_presentation(vec![element], presentation());
     builder.build().map(|(encoder, _)| (encoder, left, right))
+}
+
+fn stereo_builder_with_parameter() -> iamf::Result<(
+    iamf::encoder::Encoder,
+    iamf::encoder::SubstreamHandle,
+    iamf::encoder::SubstreamHandle,
+    iamf::encoder::ParameterHandle,
+)> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(CodecConfig::lpcm(
+        0,
+        128,
+        LpcmDecoderConfig {
+            sample_format_flags: SampleFormatFlags::LittleEndian,
+            sample_size: 16,
+            sample_rate: 16_000,
+        },
+    ));
+    let left = builder.add_substream();
+    let right = builder.add_substream();
+    let element = builder.add_audio_element_with_substreams(
+        codec,
+        vec![left, right],
+        AudioElement::channel_based(
+            0,
+            0,
+            vec![0, 1],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                LoudspeakerLayout::Stereo,
+                2,
+                0,
+            )),
+        ),
+    );
+    let parameter = builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(0, 16_000));
+    let output_parameter =
+        builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(1, 16_000));
+    builder.add_mix_presentation_with_parameters(
+        vec![element],
+        vec![parameter, output_parameter],
+        presentation(),
+    );
+    builder
+        .build()
+        .map(|(encoder, _)| (encoder, left, right, parameter))
+}
+
+fn stereo_temporal_unit(
+    left: iamf::encoder::SubstreamHandle,
+    right: iamf::encoder::SubstreamHandle,
+) -> TemporalUnitInput {
+    TemporalUnitInput {
+        frames: vec![
+            (left, FrameInput::Lpcm(stereo_pcm_frame())),
+            (right, FrameInput::Lpcm(stereo_pcm_frame())),
+        ],
+        parameter_blocks: Vec::new(),
+        trimming: None,
+    }
 }
 
 fn reverse_substream_order_builder() -> iamf::Result<(

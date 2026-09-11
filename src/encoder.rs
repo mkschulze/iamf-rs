@@ -268,15 +268,29 @@ impl<W: Write> EncodingWriter<W> {
             frames.push(AudioFrame::new(id, frame_payload(frame)).into_obu(input.trimming));
         }
 
+        let parameter_definitions = ParamDefinitionRegistry::from_descriptors(&self.descriptors)?;
         let mut parameter_blocks = Vec::with_capacity(input.parameter_blocks.len());
         for submitted in input.parameter_blocks {
-            let parameter_id = self.parameter_id(submitted.parameter)?;
+            let parameter_id = self.parameter_id(submitted.parameter, &parameter_definitions)?;
             if submitted.block.parameter_id != parameter_id {
                 return Err(temporal_input(
                     ErrorKind::ParameterIdMismatch,
                     "parameter_id",
                 ));
             }
+            let governing = parameter_definitions.get(parameter_id).ok_or_else(|| {
+                temporal_input(
+                    ErrorKind::UnknownTemporalParameterHandle,
+                    "parameter_handle",
+                )
+            })?;
+            let mut parameter_validation = crate::bits::BitWriter::new();
+            crate::obu::write_parameter_block(
+                &mut parameter_validation,
+                &governing.definition,
+                &governing.context,
+                &submitted.block,
+            )?;
             parameter_blocks.push(Obu::new(
                 ObuHeader::new(ObuType::ParameterBlock),
                 submitted.block,
@@ -325,7 +339,11 @@ impl<W: Write> EncodingWriter<W> {
         }
     }
 
-    fn parameter_id(&self, handle: ParameterHandle) -> Result<u32> {
+    fn parameter_id(
+        &self,
+        handle: ParameterHandle,
+        definitions: &ParamDefinitionRegistry,
+    ) -> Result<u32> {
         if handle.generation != self.generation {
             return Err(temporal_input(
                 ErrorKind::UnknownTemporalParameterHandle,
@@ -338,10 +356,7 @@ impl<W: Write> EncodingWriter<W> {
                 "parameter_handle",
             )
         })?;
-        if ParamDefinitionRegistry::from_descriptors(&self.descriptors)?
-            .get(id)
-            .is_some()
-        {
+        if definitions.get(id).is_some() {
             Ok(id)
         } else {
             Err(temporal_input(
