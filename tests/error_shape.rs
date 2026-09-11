@@ -168,6 +168,8 @@ fn static_builder_errors_are_compact_typed_kinds() {
     for kind in [
         ErrorKind::UnknownCodecConfigHandle,
         ErrorKind::UnknownAudioElementHandle,
+        ErrorKind::UnknownSubstreamHandle,
+        ErrorKind::UnknownParameterHandle,
         ErrorKind::InvalidDescriptorReference,
         ErrorKind::DuplicateDeclaration,
         ErrorKind::WireIdAllocationExhausted,

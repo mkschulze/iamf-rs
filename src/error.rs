@@ -133,6 +133,10 @@ pub enum ErrorKind {
     UnknownCodecConfigHandle,
     #[error("a builder declaration references an unknown audio-element handle")]
     UnknownAudioElementHandle,
+    #[error("a builder declaration references an unknown substream handle")]
+    UnknownSubstreamHandle,
+    #[error("a builder declaration references an unknown parameter handle")]
+    UnknownParameterHandle,
     #[error("a builder declaration has an invalid descriptor reference")]
     InvalidDescriptorReference,
     #[error("a builder declaration is duplicated")]
