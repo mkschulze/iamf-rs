@@ -165,12 +165,15 @@ log "cmake configure + build (iamfdec)"
 # build if the pinned upstream layout changes.
 IAMFDEC_CMAKE="$SRC/code/test/tools/iamfdec/CMakeLists.txt"
 if [ "$DEP_CODECS_DISABLED" = false ]; then
-  if ! grep -Fqx '  target_link_libraries (iamfdec iamf m)' "$IAMFDEC_CMAKE"; then
+  # v1.1.0 ships this CMake file with CRLF line endings, so do not make the
+  # guard depend on a byte-for-byte line terminator. The link directive itself
+  # is unique in the no-binauralizer branch.
+  if ! grep -Fq 'target_link_libraries (iamfdec iamf m)' "$IAMFDEC_CMAKE"; then
     echo "FATAL: pinned iamfdec CMake link line changed; refusing an unchecked patch" >&2
     exit 1
   fi
   sed -i.bak \
-    's/  target_link_libraries (iamfdec iamf m)/  target_link_libraries (iamfdec iamf m opus FLAC)/' \
+    's/target_link_libraries (iamfdec iamf m)/target_link_libraries (iamfdec iamf m opus FLAC)/' \
     "$IAMFDEC_CMAKE"
   rm -f "$IAMFDEC_CMAKE.bak"
 fi
