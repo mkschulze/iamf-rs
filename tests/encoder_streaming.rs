@@ -4,9 +4,10 @@ use iamf::encoder::{EncoderBuilder, FrameInput, SubmittedParameterBlock, Tempora
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
     AudioElement, ChannelAudioLayerConfig, CodecConfig, Layout, LayoutWithLoudness, Loudness,
-    LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, ParameterBlock, RenderingConfig,
-    SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, ObuType, ParameterBlock,
+    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
+use iamf::sequence::{parse_sequence, SequenceObu};
 use iamf::ErrorKind;
 
 #[test]
@@ -38,6 +39,7 @@ fn duplicate_frame_handle_writes_no_temporal_bytes() -> iamf::Result<()> {
             frames: vec![
                 (left, FrameInput::Lpcm(stereo_pcm_frame())),
                 (left, FrameInput::Lpcm(stereo_pcm_frame())),
+                (_right, FrameInput::Lpcm(stereo_pcm_frame())),
             ],
             parameter_blocks: Vec::new(),
             trimming: None,
@@ -45,6 +47,23 @@ fn duplicate_frame_handle_writes_no_temporal_bytes() -> iamf::Result<()> {
         .unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::DuplicateTemporalSubstream);
     assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn temporal_frames_follow_first_descriptor_substream_order() -> iamf::Result<()> {
+    let (encoder, first_declared, second_declared) = reverse_substream_order_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+
+    writer.push_temporal_unit(TemporalUnitInput {
+        frames: vec![
+            (first_declared, FrameInput::Lpcm(stereo_pcm_frame())),
+            (second_declared, FrameInput::Lpcm(stereo_pcm_frame())),
+        ],
+        parameter_blocks: Vec::new(),
+        trimming: None,
+    })?;
+
     Ok(())
 }
 
@@ -86,13 +105,31 @@ fn lpcm_flac_and_opus_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> 
     ] {
         let (encoder, frame) = result?;
         let mut writer = encoder.start(Vec::new())?;
-        let before = writer.bytes_written();
+        let expected_payload = match &frame.1 {
+            FrameInput::Lpcm(payload) | FrameInput::Flac(payload) | FrameInput::Opus(payload) => {
+                payload.clone()
+            }
+        };
         writer.push_temporal_unit(TemporalUnitInput {
             frames: vec![(frame.0, frame.1)],
             parameter_blocks: Vec::new(),
             trimming: None,
         })?;
-        assert!(writer.bytes_written() > before);
+        let written = writer.finish()?;
+        let frames: Vec<_> = parse_sequence(&written)?
+            .obus
+            .into_iter()
+            .filter_map(|obu| match obu {
+                SequenceObu::AudioFrame(frame) => Some(frame),
+                _ => None,
+            })
+            .collect();
+        let [frame] = frames.as_slice() else {
+            panic!("a matching typed input writes exactly one Audio Frame OBU");
+        };
+        assert_eq!(frame.header.obu_type, ObuType::AudioFrameId0);
+        assert_eq!(frame.payload.substream_id, 0);
+        assert_eq!(frame.payload.payload, expected_payload);
     }
     Ok(())
 }
@@ -195,6 +232,43 @@ fn stereo_builder() -> iamf::Result<(
     );
     builder.add_mix_presentation(vec![element], presentation());
     builder.build().map(|(encoder, _)| (encoder, left, right))
+}
+
+fn reverse_substream_order_builder() -> iamf::Result<(
+    iamf::encoder::Encoder,
+    iamf::encoder::SubstreamHandle,
+    iamf::encoder::SubstreamHandle,
+)> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(CodecConfig::lpcm(
+        0,
+        128,
+        LpcmDecoderConfig {
+            sample_format_flags: SampleFormatFlags::LittleEndian,
+            sample_size: 16,
+            sample_rate: 16_000,
+        },
+    ));
+    let first_allocated = builder.add_substream();
+    let second_allocated = builder.add_substream();
+    let element = builder.add_audio_element_with_substreams(
+        codec,
+        vec![second_allocated, first_allocated],
+        AudioElement::channel_based(
+            0,
+            0,
+            vec![0, 1],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                LoudspeakerLayout::Stereo,
+                2,
+                0,
+            )),
+        ),
+    );
+    builder.add_mix_presentation(vec![element], presentation());
+    builder
+        .build()
+        .map(|(encoder, _)| (encoder, second_allocated, first_allocated))
 }
 
 fn presentation() -> MixPresentation {

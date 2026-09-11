@@ -226,7 +226,26 @@ impl<W: Write> EncodingWriter<W> {
         self.sequence.push_temporal_unit(&unit)
     }
 
+    /// Flush the append-only sequence and return its sink.
+    ///
+    /// This consumes the writer, preserving the underlying writer's poisoned
+    /// state and its compile-time prohibition on submissions after finishing.
+    pub fn finish(self) -> Result<W> {
+        self.sequence.finish()
+    }
+
     fn preflight(&self, input: TemporalUnitInput) -> Result<TemporalUnit> {
+        let mut submitted_handles = Vec::with_capacity(input.frames.len());
+        for (handle, _) in &input.frames {
+            if submitted_handles.contains(handle) {
+                return Err(temporal_input(
+                    ErrorKind::DuplicateTemporalSubstream,
+                    "frames",
+                ));
+            }
+            submitted_handles.push(*handle);
+        }
+
         let expected = self.declared_substreams();
         if input.frames.len() != expected.len() {
             return Err(temporal_input(
@@ -236,15 +255,8 @@ impl<W: Write> EncodingWriter<W> {
         }
 
         let mut frames = Vec::with_capacity(input.frames.len());
-        let mut seen = Vec::with_capacity(input.frames.len());
         for ((handle, frame), expected_id) in input.frames.into_iter().zip(expected) {
             let id = self.substream_id(handle)?;
-            if seen.contains(&id) {
-                return Err(temporal_input(
-                    ErrorKind::DuplicateTemporalSubstream,
-                    "frames",
-                ));
-            }
             if id != expected_id {
                 return Err(temporal_input(
                     ErrorKind::TemporalSubstreamOrderMismatch,
@@ -254,7 +266,6 @@ impl<W: Write> EncodingWriter<W> {
             let (config, channels) = self.substream_plan(id)?;
             self.validate_frame(&config, channels, &frame)?;
             frames.push(AudioFrame::new(id, frame_payload(frame)).into_obu(input.trimming));
-            seen.push(id);
         }
 
         let mut parameter_blocks = Vec::with_capacity(input.parameter_blocks.len());
@@ -288,7 +299,6 @@ impl<W: Write> EncodingWriter<W> {
                 }
             }
         }
-        ids.sort_unstable();
         ids
     }
 
