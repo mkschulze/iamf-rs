@@ -15,12 +15,44 @@ use iamf::sequence::{
 };
 use proptest::prelude::*;
 use sequence_cases::{
-    canonical_case_strategy, canonical_parsed_strategy, flac_codec_config_strategy,
+    CanonicalCase, canonical_case_strategy, canonical_parsed_strategy, flac_codec_config_strategy,
     opus_codec_config_strategy,
 };
 
+// Enrich the existing canonical shapes locally: their original LPCM strategies
+// and fixed byte-offset sentinels remain unchanged for existing consumers.
+fn canonical_codec_case_strategy() -> impl Strategy<Value = CanonicalCase> {
+    (
+        canonical_case_strategy(),
+        prop_oneof![flac_codec_config_strategy(), opus_codec_config_strategy()],
+        proptest::collection::vec(any::<u8>(), 1..=16),
+    )
+        .prop_map(|(mut case, mut codec, trailing)| {
+            codec.codec_config_id = 7;
+            codec.trailing = trailing;
+            case.descriptors.codec_configs = vec![codec];
+            case
+        })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn canonical_codec_sequences_round_trip(case in canonical_codec_case_strategy()) {
+        for codec in &case.descriptors.codec_configs {
+            prop_assert!(codec.flac_config().is_some() || codec.opus_config().is_some());
+            prop_assert!(!codec.trailing.is_empty());
+            prop_assert!(codec.validate().is_empty());
+        }
+        let expected = ParsedSequence::from_parts(&case.descriptors, &case.units)
+            .expect("codec-enriched canonical parts flatten");
+        let bytes = write_sequence(Vec::new(), &case.descriptors, case.units)
+            .expect("codec-enriched streaming sequence writes");
+        let parsed = parse_sequence(&bytes).expect("typed codec sequence parses");
+        prop_assert_eq!(&parsed, &expected);
+        prop_assert_eq!(write_parsed_sequence(Vec::new(), &parsed).unwrap(), bytes);
+    }
 
     #[test]
     fn model_round_trip(sequence in canonical_parsed_strategy()) {

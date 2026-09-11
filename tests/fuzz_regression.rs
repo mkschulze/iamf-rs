@@ -3,9 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use arbitrary::Unstructured;
+use arbitrary::{Arbitrary, Unstructured};
 use iamf::fuzzing::sequence_from_fuzz_bytes;
-use iamf::sequence::{SequenceObu, parse_sequence, write_parsed_sequence};
+use iamf::obu::CodecConfig;
+use iamf::sequence::{ParsedSequence, SequenceObu, parse_sequence, write_parsed_sequence};
 use sha2::{Digest, Sha256};
 
 const PARSE_CORPUS: &str = "fuzz/corpus/parse_sequence";
@@ -114,6 +115,62 @@ fn replay_model(path: &Path, data: &[u8]) {
         "byte mismatch for {}",
         path.display()
     );
+    // Derive bounded codec choices without consuming or changing the original
+    // corpus format. Both typed variants replay every original sequence shape.
+    let choices = Sha256::digest(data);
+    for opus in [false, true] {
+        let enriched = with_fuzz_codec(sequence.clone(), &mut Unstructured::new(&choices), opus);
+        let bytes = write_parsed_sequence(Vec::new(), &enriched)
+            .expect("codec-enriched corpus model writes");
+        let parsed = parse_sequence(&bytes).expect("codec-enriched corpus model parses");
+        assert_eq!(parsed, enriched, "codec replay for {}", path.display());
+        assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+    }
+}
+
+fn with_fuzz_codec(
+    mut sequence: ParsedSequence,
+    input: &mut Unstructured<'_>,
+    opus: bool,
+) -> ParsedSequence {
+    let frame_choice = u16::arbitrary(input).expect("bounded frame choice");
+    let rate_choice = u32::arbitrary(input).expect("bounded rate choice");
+    let depth_choice = u8::arbitrary(input).expect("bounded depth choice");
+    let pre_skip = u16::arbitrary(input)
+        .expect("bounded pre-skip choice")
+        .max(1);
+    let trailing_len = usize::from(u8::arbitrary(input).expect("bounded trailing choice"))
+        .checked_rem(16)
+        .expect("nonzero divisor")
+        .saturating_add(1);
+    let trailing = input
+        .bytes(trailing_len)
+        .expect("at most sixteen trailing bytes");
+    for obu in &mut sequence.obus {
+        if let SequenceObu::CodecConfig(obu) = obu {
+            let id = obu.payload.codec_config_id;
+            let codec = if opus {
+                CodecConfig::opus(id, u32::from(frame_choice).max(1), 48_000, pre_skip)
+            } else {
+                CodecConfig::flac(
+                    id,
+                    u32::from(frame_choice.max(16)),
+                    rate_choice
+                        .checked_rem(655_350)
+                        .expect("nonzero divisor")
+                        .saturating_add(1),
+                    depth_choice
+                        .checked_rem(29)
+                        .expect("nonzero divisor")
+                        .saturating_add(4),
+                )
+            }
+            .expect("bounded legal typed codec");
+            obu.payload = codec;
+            obu.trailing.extend_from_slice(trailing);
+        }
+    }
+    sequence
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -158,6 +215,50 @@ fn roundtrip_replay_covers_every_seed_and_minimized_artifact() {
     for path in corpus.iter().chain(&artifacts) {
         let bytes = read_replay_input(path);
         replay_model(path, &bytes);
+    }
+}
+
+#[test]
+fn codec_enriched_fuzz_replay_preserves_typed_configs_trailing_and_sequence_shapes() {
+    for shape in 2_u8..=7 {
+        for fill in [0, 0x55, 0xff] {
+            for opus in [false, true] {
+                // Enough bounded input for every existing non-empty shape, including
+                // unknown-OBU placement. Original on-disk corpus seeds stay untouched.
+                let mut data = vec![shape];
+                data.extend_from_slice(&[fill; 96]);
+                let original = sequence_from_fuzz_bytes(&mut Unstructured::new(&data))
+                    .expect("bounded shape seed");
+                let sequence =
+                    with_fuzz_codec(original.clone(), &mut Unstructured::new(&[fill; 32]), opus);
+                assert_eq!(sequence.obus.len(), original.obus.len());
+                for (before, after) in original.obus.iter().zip(&sequence.obus) {
+                    if !matches!(before, SequenceObu::CodecConfig(_)) {
+                        assert_eq!(before, after, "non-codec shape is preserved");
+                    }
+                }
+                let codecs = sequence
+                    .obus
+                    .iter()
+                    .filter_map(|obu| match obu {
+                        SequenceObu::CodecConfig(codec) => Some(codec),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert!(!codecs.is_empty());
+                for codec in codecs {
+                    assert_eq!(codec.payload.opus_config().is_some(), opus);
+                    assert_eq!(codec.payload.flac_config().is_some(), !opus);
+                    assert!(!codec.trailing.is_empty());
+                    assert!(codec.payload.validate().is_empty());
+                }
+                let bytes =
+                    write_parsed_sequence(Vec::new(), &sequence).expect("typed fuzz model writes");
+                let parsed = parse_sequence(&bytes).expect("typed fuzz model parses");
+                assert_eq!(parsed, sequence);
+                assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+            }
+        }
     }
 }
 

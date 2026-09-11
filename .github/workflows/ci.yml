@@ -123,6 +123,16 @@ jobs:
       - name: Test
         run: cargo test --locked --target ${{ matrix.target }}
 
+      # CODEC-01 through CODEC-07 are targeted explicitly on every supported
+      # architecture. These remain root-crate tests: the excluded fixture
+      # generator is intentionally not built by this matrix.
+      - name: Codec framing regressions on this target
+        run: >
+          cargo test --locked --target ${{ matrix.target }}
+          --test descriptors --test error_shape --test round_trip
+          --test temporal --test sequence_parse --test codec_fixtures
+          --test codec_dependency_boundary
+
       - name: Replay permanent fuzz corpus on stable
         run: >
           cargo test --locked --features fuzzing --target ${{ matrix.target }}
@@ -189,6 +199,35 @@ jobs:
         run: >
           cargo deny --manifest-path fuzz/Cargo.toml --config fuzz/deny.toml
           --all-features check
+
+      # CODEC-07 has a portable Rust canary in the four-target matrix above;
+      # its shell proof also checks the locked root graph on Linux. It must run
+      # from the root manifest, never from the excluded generator workspace.
+      - name: Assert codec dependencies remain outside the root crate (CODEC-07)
+        run: bash tools/check-codec-dependency-boundary.sh
+
+      # The generator is deliberately an excluded workspace with codec-native
+      # dependencies. Linux is its only CI host: compiling it here cannot pull
+      # those dependencies into the shipping root graph or the four-target
+      # matrix. `--no-run` catches source and bundled-Opus build regressions
+      # without ever generating or overwriting committed fixtures.
+      - name: Compile codec fixture generator without running it
+        run: >
+          cargo test --locked --manifest-path tools/codec-fixtures/Cargo.toml
+          --no-run
+
+      - name: cargo deny check (isolated codec fixture generator)
+        run: >
+          cargo deny --manifest-path tools/codec-fixtures/Cargo.toml
+          --config tools/codec-fixtures/deny.toml --all-features check
+
+      # These are deliberately the ignored verifier entry points, with an
+      # INPUT directory. Do not replace them with generate_* tests: CI verifies
+      # committed corpus bytes and must never regenerate them.
+      - name: Verify committed codec fixture corpora
+        run: |
+          CODEC_FIXTURE_INPUT=tests/fixtures/codecs/flac cargo test --locked --manifest-path tools/codec-fixtures/Cargo.toml --test flac_fixtures -- --ignored --exact verify_flac_corpus
+          CODEC_FIXTURE_INPUT=tests/fixtures/codecs/opus cargo test --locked --manifest-path tools/codec-fixtures/Cargo.toml --test opus_fixtures -- --ignored --exact verify_opus_corpus
 
       - name: Assert libFuzzer remains outside the root lock and linked graph
         shell: bash

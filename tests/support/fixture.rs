@@ -309,8 +309,9 @@ pub struct EncodedTemporalUnit {
     pub substream_payloads: Vec<Vec<u8>>,
 }
 
-/// The committed raw Opus corpus, read by test targets only.  Its expected PCM
-/// is the standalone decoder output, never the source PCM used to encode it.
+/// The committed raw Opus corpus, read by test targets only.  It retains both
+/// the independent standalone decode and the exact PCM emitted by the pinned
+/// libiamf reference decoder; neither is the source PCM used to encode it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpusCorpus {
     pub lookahead: usize,
@@ -318,6 +319,7 @@ pub struct OpusCorpus {
     pub end_trim: usize,
     pub source_frames: usize,
     pub units: Vec<EncodedTemporalUnit>,
+    pub libiamf_expected: Vec<i32>,
     pub expected: Vec<i32>,
 }
 
@@ -352,7 +354,11 @@ pub fn validate_opus_metadata(fields: &BTreeMap<String, String>) -> Result<(), S
             return Err(format!("Opus manifest metadata {key} = {expected}"));
         }
     }
-    for key in ["sha256.source.s16le", "sha256.expected.s16le"] {
+    for key in [
+        "sha256.source.s16le",
+        "sha256.expected.s16le",
+        "sha256.libiamf-expected.s16le",
+    ] {
         if !fields.contains_key(key) {
             return Err(format!("Opus manifest field {key}"));
         }
@@ -386,7 +392,7 @@ pub fn validate_opus_packet(bytes: &[u8], expected_len: usize) -> Result<(), Str
     Ok(())
 }
 
-/// Require digests for precisely the source, independent expected PCM and all packets.
+/// Require digests for precisely the source, both PCM oracles, and all packets.
 pub fn validate_opus_digest_keys(
     fields: &BTreeMap<String, String>,
     packet_names: &[String],
@@ -394,6 +400,7 @@ pub fn validate_opus_digest_keys(
     let mut expected = BTreeSet::from([
         "sha256.source.s16le".to_owned(),
         "sha256.expected.s16le".to_owned(),
+        "sha256.libiamf-expected.s16le".to_owned(),
     ]);
     expected.extend(packet_names.iter().map(|name| format!("sha256.{name}")));
     let actual = fields
@@ -486,12 +493,13 @@ pub fn load_opus_corpus() -> OpusCorpus {
     let mut required = vec![
         "MANIFEST.md".to_owned(),
         "expected.s16le".to_owned(),
+        "libiamf-expected.s16le".to_owned(),
         "source.s16le".to_owned(),
     ];
     required.extend(canonical.iter().cloned());
     required.sort();
     validate_opus_inventory(&inventory, &required).expect("Opus corpus inventory");
-    let mut digest_names = vec!["source.s16le", "expected.s16le"]
+    let mut digest_names = vec!["source.s16le", "expected.s16le", "libiamf-expected.s16le"]
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
@@ -548,12 +556,28 @@ pub fn load_opus_corpus() -> OpusCorpus {
         .checked_mul(2)
         .expect("Opus stereo sample length overflow");
     assert_eq!(expected.len(), expected_samples, "expected stereo frames");
+    let libiamf_expected_bytes = opus_artifact("libiamf-expected.s16le");
+    let digest = format!("{:x}", Sha256::digest(&libiamf_expected_bytes));
+    assert_eq!(
+        fields.get("sha256.libiamf-expected.s16le"),
+        Some(&digest)
+    );
+    let libiamf_expected = libiamf_expected_bytes
+        .chunks_exact(2)
+        .map(|pair| i32::from(i16::from_le_bytes(pair.try_into().expect("two PCM bytes"))))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        libiamf_expected.len(),
+        expected_samples,
+        "libiamf expected stereo frames"
+    );
     OpusCorpus {
         lookahead,
         packets,
         end_trim,
         source_frames,
         units,
+        libiamf_expected,
         expected,
     }
 }
@@ -1028,8 +1052,9 @@ pub fn flac() -> Fixture {
 ///
 /// The corpus loader is the sole owner of the measured `L`, `P`, `E` and `S`
 /// values.  Packets remain opaque: this helper only supplies the typed IAMF
-/// descriptors, the loader's independent decode oracle, and the temporal-unit
-/// trim metadata that belongs beside each raw packet.
+/// descriptors, the loader's pinned libiamf decode oracle, and the temporal-unit
+/// trim metadata that belongs beside each raw packet.  The independent decode
+/// remains authenticated in the corpus for a separate oracle check.
 #[allow(clippy::expect_used)] // The committed corpus has bounded manifest values.
 pub fn opus() -> Fixture {
     let corpus = load_opus_corpus();
@@ -1070,7 +1095,7 @@ pub fn opus() -> Fixture {
             audio_elements: vec![element],
             mix_presentations: vec![presentation],
         },
-        expected_pcm: vec![corpus.expected],
+        expected_pcm: vec![corpus.libiamf_expected],
         frame_sources: vec![FrameSource::PreEncoded(corpus.units)],
     }
 }

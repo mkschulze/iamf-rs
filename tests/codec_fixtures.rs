@@ -20,6 +20,50 @@ fn corpus() -> PathBuf {
 }
 
 #[allow(clippy::expect_used)] // Missing committed artifacts must fail loudly.
+fn codec_artifact_sha256_inventory() -> Vec<(String, String)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codecs");
+    let mut inventory = Vec::new();
+    for codec in std::fs::read_dir(root).expect("committed codec corpus directory") {
+        let codec = codec.expect("codec corpus directory entry");
+        if !codec.file_type().expect("codec corpus entry type").is_dir() {
+            continue;
+        }
+        let codec_name = codec
+            .file_name()
+            .into_string()
+            .expect("UTF-8 codec corpus directory name");
+        for artifact in std::fs::read_dir(codec.path()).expect("committed codec directory") {
+            let artifact = artifact.expect("codec artifact directory entry");
+            if !artifact
+                .file_type()
+                .expect("codec artifact entry type")
+                .is_file()
+            {
+                continue;
+            }
+            let name = artifact
+                .file_name()
+                .into_string()
+                .expect("UTF-8 codec artifact filename");
+            if name == "MANIFEST.md"
+                || (name.starts_with("packet-") && name.ends_with(".bin"))
+                || name.ends_with(".s16le")
+            {
+                let digest = format!(
+                    "{:x}",
+                    Sha256::digest(
+                        std::fs::read(artifact.path()).expect("committed codec artifact")
+                    )
+                );
+                inventory.push((format!("{codec_name}/{name}"), digest));
+            }
+        }
+    }
+    inventory.sort_by(|left, right| left.0.cmp(&right.0));
+    inventory
+}
+
+#[allow(clippy::expect_used)] // Missing committed artifacts must fail loudly.
 fn artifact(name: &str) -> Vec<u8> {
     std::fs::read(corpus().join(name)).expect("committed FLAC artifact must exist")
 }
@@ -273,6 +317,7 @@ fn opus_manifest_authenticates_arithmetic_packets_trims_and_exact_stereo_output(
         );
     }
     assert_eq!(corpus.expected.len(), corpus.source_frames * 2);
+    assert_eq!(corpus.libiamf_expected.len(), corpus.source_frames * 2);
 }
 
 #[test]
@@ -296,6 +341,11 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     ]);
     assert!(validate_opus_metadata(&fields).is_err());
     fields.insert("sha256.source.s16le".to_owned(), "digest".to_owned());
+    assert!(validate_opus_metadata(&fields).is_err());
+    fields.insert(
+        "sha256.libiamf-expected.s16le".to_owned(),
+        "digest".to_owned(),
+    );
     for (key, expected) in [
         ("sample_rate", "48000"),
         ("channels", "2"),
@@ -319,6 +369,12 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     fields.remove("sha256.expected.s16le");
     assert!(validate_opus_metadata(&fields).is_err());
     fields.insert("sha256.expected.s16le".to_owned(), "digest".to_owned());
+    fields.remove("sha256.libiamf-expected.s16le");
+    assert!(validate_opus_metadata(&fields).is_err());
+    fields.insert(
+        "sha256.libiamf-expected.s16le".to_owned(),
+        "digest".to_owned(),
+    );
     let packets = vec!["packet-000.bin".to_owned(), "packet-001.bin".to_owned()];
     assert!(validate_opus_digest_keys(&fields, &packets).is_err());
     fields.insert("sha256.packet-000.bin".to_owned(), "digest".to_owned());
@@ -343,4 +399,54 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     assert!(validate_opus_packet(b"OpusHead", 8).is_err());
     assert!(validate_opus_packet(b"OggS", 4).is_err());
     assert!(validate_opus_packet(b"raw", 4).is_err());
+}
+
+#[test]
+fn write_sha256_inventory() {
+    let inventory = codec_artifact_sha256_inventory();
+    assert!(!inventory.is_empty(), "immutable artifact inventory");
+    assert!(
+        inventory
+            .windows(2)
+            .all(|pair| matches!(pair, [left, right] if left.0 < right.0)),
+        "artifact inventory is sorted by relative path"
+    );
+    assert_eq!(
+        inventory
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "flac/MANIFEST.md",
+            "flac/expected.s16le",
+            "flac/packet-000.bin",
+            "flac/packet-001.bin",
+            "flac/packet-002.bin",
+            "flac/source.s16le",
+            "opus/MANIFEST.md",
+            "opus/expected.s16le",
+            "opus/libiamf-expected.s16le",
+            "opus/packet-000.bin",
+            "opus/packet-001.bin",
+            "opus/source.s16le",
+        ]
+    );
+    assert!(inventory.iter().all(|(_, digest)| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }));
+
+    if let Some(destination) = std::env::var_os("CODEC_SHA256_INVENTORY") {
+        let destination = PathBuf::from(destination);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).expect("inventory parent directory");
+        }
+        let mut output = String::new();
+        for (path, digest) in &inventory {
+            output.push_str(digest);
+            output.push_str("  ");
+            output.push_str(path);
+            output.push('\n');
+        }
+        std::fs::write(destination, output).expect("write opt-in inventory");
+    }
 }

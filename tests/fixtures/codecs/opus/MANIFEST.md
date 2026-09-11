@@ -32,6 +32,13 @@ two 960-frame packets minus L and one trailing padding frame; P is ceil((S + L)/
 Each packet is raw Opus data only: no Ogg container and no OpusHead.
 expected.s16le is independently decoded by a fresh decoder from all P packets,
 then trimmed by L leading and E trailing stereo frames; source.s16le is provenance only.
+libiamf-expected.s16le is the exact 16-bit PCM decoded from the same IAMF fixture
+by pinned libiamf v1.1.0 (f06e919e2ad5502a2adc4bdd4e146f2e7e7ffb63) in the
+reference workflow.  It differs from expected.s16le only at interleaved samples
+887 (1433 -> 1432), 1642 (-5421 -> -5422), 2798 (-1473 -> -1474), and
+3008 (-7284 -> -7285), all one-LSB rounding differences.  The reference gate
+compares against this pinned libiamf oracle exactly; the excluded fixture tool
+continues to authenticate expected.s16le independently.
 
 Run from the repository root (relative paths resolve there):
 
@@ -42,6 +49,7 @@ CODEC_FIXTURE_INPUT=tests/fixtures/codecs/opus cargo test --locked --manifest-pa
 
 sha256.source.s16le = 6a77c6d63d50050a3ba0d94fb929186dc65cb3a546b5d31bd79dfd6c501de48f
 sha256.expected.s16le = a8e6e9ab27992ecfa3bcb2de1095634041640ff0efd74534970b2a05ffabaa2e
+sha256.libiamf-expected.s16le = 9b3c06e94ed47cc5a99fe0cd18bc63d841f772ba0308950c1ecba0b5db2891ae
 packet_len.packet-000.bin = 320
 sha256.packet-000.bin = 6be750d461fbf35144932c497581e521c5cf7b0b0dcd1d045c042616ffcecd59
 packet_len.packet-001.bin = 320

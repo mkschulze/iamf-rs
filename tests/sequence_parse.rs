@@ -3,6 +3,7 @@
 #[path = "support/test_000003.rs"]
 mod support;
 
+use hex_literal::hex;
 use iamf::bits::BitWriter;
 use iamf::error::{ErrorKind, Location};
 use iamf::model::DescriptorSet;
@@ -18,6 +19,86 @@ use iamf::sequence::{
     write_parsed_sequence,
 };
 use support::published_descriptor_set;
+
+// These literals independently fix both codec prefix lengths and their common
+// nine-byte Codec Config header (after the two-byte OBU header).
+const FLAC_OBU: &[u8] = &hex!(
+    "00 2f 01 66 4c 61 43 80 01 00 00
+     80 00 00 22 00 80 00 80 00 00 00 00 00 00
+     0b b8 02 f0 00 00 00 00
+     00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+);
+const OPUS_OBU: &[u8] = &hex!(
+    "00 14 02 4f 70 75 73 c0 07 ff fc
+     01 02 01 38 00 00 bb 80 00 00 00"
+);
+
+#[allow(clippy::expect_used, clippy::panic)] // Hand-derived bounded test vectors.
+fn assert_every_codec_prefix_is_bounded(obu: &[u8], codec_id: [u8; 4], prefix_len: usize) {
+    use iamf::obu::DecoderConfig;
+
+    let prologue = hex!("f8 06 69 61 6d 66 00 00");
+    // More than a whole codec prefix follows the OBU, so an unbounded reader
+    // would incorrectly steal the delimiter/frame bytes and claim typed data.
+    let mut suffix = vec![0x20, 0x00, 0x30, 0x40];
+    suffix.extend_from_slice(&[0xa5; 64]);
+    for length in 0..=prefix_len {
+        let end = 11_usize.saturating_add(length);
+        let mut bounded = obu.get(..end).expect("fixed prefix slice").to_vec();
+        *bounded.get_mut(1).expect("one-byte OBU size") =
+            u8::try_from(9_usize.saturating_add(length)).expect("small payload");
+        let bytes = [prologue.as_slice(), &bounded, &suffix].concat();
+        let parsed = parse_sequence(&bytes).expect("complete enclosing OBU parses at every length");
+        assert_eq!(parsed.obus.len(), 4, "length {length}");
+        let Some(SequenceObu::CodecConfig(codec)) = parsed.obus.get(1) else {
+            panic!("bounded known codec must keep its sequence position");
+        };
+        assert_eq!(codec.payload.codec_id, codec_id);
+        assert!(codec.trailing.is_empty());
+        assert!(codec.payload.trailing.is_empty());
+        if length < prefix_len {
+            assert_eq!(
+                codec.payload.decoder_config,
+                DecoderConfig::Raw {
+                    codec_id,
+                    bytes: obu.get(11..end).expect("raw prefix bytes").to_vec(),
+                }
+            );
+        } else if codec_id == *b"fLaC" {
+            assert!(codec.payload.flac_config().is_some());
+        } else {
+            assert!(codec.payload.opus_config().is_some());
+        }
+        assert!(matches!(
+            parsed.obus.get(2),
+            Some(SequenceObu::TemporalDelimiter(_))
+        ));
+        let Some(SequenceObu::AudioFrame(frame)) = parsed.obus.get(3) else {
+            panic!("following frame remains independently framed");
+        };
+        assert_eq!(frame.payload.payload, [0xa5; 64]);
+        assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+
+        if length < prefix_len {
+            // Keep the original declared size: an actual truncated OBU must
+            // fail transactionally at the absolute payload start (8 + 2).
+            let truncated = [prologue.as_slice(), obu.get(..end).expect("truncated OBU")].concat();
+            let error = parse_sequence(&truncated).expect_err("enclosing OBU is incomplete");
+            assert_eq!(error.kind(), &ErrorKind::UnexpectedEndOfInput);
+            assert_eq!(error.at(), Location::InputOffset(10));
+        }
+    }
+}
+
+#[test]
+fn every_flac_prefix_length_in_a_sequence_is_raw_until_38_and_truncation_is_positioned() {
+    assert_every_codec_prefix_is_bounded(FLAC_OBU, *b"fLaC", 38);
+}
+
+#[test]
+fn every_opus_prefix_length_in_a_sequence_is_raw_until_11_and_truncation_is_positioned() {
+    assert_every_codec_prefix_is_bounded(OPUS_OBU, *b"Opus", 11);
+}
 
 fn definition(parameter_id: u32) -> ParamDefinition {
     ParamDefinition::mode_1(parameter_id, 48_000)

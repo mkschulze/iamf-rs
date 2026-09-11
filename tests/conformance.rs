@@ -973,7 +973,7 @@ impl GateReport {
 /// diagnostics; every fixture still traverses the same gate and comparisons.
 fn comparison_oracle_label(spec: ElementSpec) -> &'static str {
     match spec.codec {
-        FixtureCodec::Opus => "the committed standalone decode",
+        FixtureCodec::Opus => "the pinned libiamf decode",
         FixtureCodec::Lpcm { .. } | FixtureCodec::Flac => "the fixture's expected PCM",
     }
 }
@@ -1646,11 +1646,11 @@ fn the_flac_fixture_is_conformant() {
     }
 }
 
-/// Opus must traverse the ordinary conformance gate: its comparison PCM is the
-/// committed standalone decode of the opaque packets after the first/start and
-/// final/end trims, never the lossy source PCM that generated those packets.
+/// Opus must traverse the ordinary conformance gate against the exact PCM from
+/// the pinned libiamf decoder.  The fixture separately authenticates the
+/// independent standalone decode; neither oracle is the lossy source PCM.
 #[test]
-fn the_opus_fixture_is_conformant_to_its_standalone_decode() {
+fn the_opus_fixture_is_conformant_to_the_pinned_libiamf_decode() {
     let fixture = fixture::opus();
     let spec = fixture.spec().expect("the Opus fixture's spec resolves");
     let units = expected_temporal_units(&fixture, spec).expect("the Opus temporal-unit count");
@@ -1674,10 +1674,10 @@ fn the_opus_fixture_is_conformant_to_its_standalone_decode() {
         trim.contains(&format!("{units} temporal units"))
             && trim.contains(&format!("= {pre_trim_frames} frames before trim"))
             && trim.contains(&format!("retains {expected_frames} expected frames"))
-            && trim.contains("committed standalone decode")
+            && trim.contains("pinned libiamf decode")
             && !trim.contains("source PCM"),
-        "Opus CONF-03 must report its explicit units/trims against the committed standalone \
-         decode, never source PCM: {trim}"
+        "Opus CONF-03 must report its explicit units/trims against the pinned libiamf decode, \
+         never source PCM: {trim}"
     );
 }
 
