@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Conformant LPCM Bitstream** - A standalone `.iamf` the reference decodes sample-identically, with every guardrail and every byte-level fact pinned
 - [x] **Phase 2: Parser, Round-Trip and Fuzzing** - Read the bitstream back into the model, prove both round-trip directions, and ship a fuzzer with a committed corpus (completed 2026-09-09)
-- [ ] **Phase 3: FLAC and Opus Framing** - Two more codecs through the unchanged conformance harness, with zero codec crates in the shipping graph
+- [x] **Phase 3: FLAC and Opus Framing** - Two more codecs through the unchanged conformance harness, with zero codec crates in the shipping graph (completed 2026-09-11)
 - [ ] **Phase 4: Parallax-Facing API** - One validated `build()`, minimum-profile selection, and a dependency-free bitstream core
 
 ## Phase Details
@@ -113,9 +113,9 @@ Plans:
 - [x] 03-03: Typed faithful Opus configuration, sample-rate rejection, and checked roll derivation
 - [x] 03-04: Excluded Opus fixture generation with measured lookahead, exact packet count, and standalone decode oracle
 - [x] 03-05: Opus packet/trim integration through the shared conformance gate
-- [ ] 03-06: Shipping dependency-boundary canaries and scoped codec-tool licence policy
-- [ ] 03-07: Offline parser/property/fuzz regression closure and immutable artifact proof
-- [ ] 03-08: Four-target CI and pinned reference-evidence closure
+- [x] 03-06: Shipping dependency-boundary canaries and scoped codec-tool licence policy
+- [x] 03-07: Offline parser/property/fuzz regression closure and immutable artifact proof
+- [x] 03-08: Four-target CI and pinned reference-evidence closure
 
 ### Phase 4: Parallax-Facing API
 
@@ -157,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
-| 3. FLAC and Opus Framing | 4/8 | In progress | 2026-09-10 |
+| 3. FLAC and Opus Framing | 8/8 | Complete | 2026-09-11 |
 | 4. Parallax-Facing API | 0/3 | Not started | - |
 
 ---

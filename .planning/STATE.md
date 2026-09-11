@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1
-current_phase: 03
-current_phase_name: FLAC and Opus Framing
-status: ready_to_execute
-stopped_at: Phase 03 Plan 05 complete; ready to execute 03-06
-last_updated: "2026-09-10T03:00:00Z"
-last_activity: 2026-09-10
-last_activity_desc: Phase 03 Plan 05 complete — Opus packets and asymmetric trims now traverse the shared conformance gate
-state_head: da2d7ef
+current_phase: 04
+current_phase_name: Parallax-Facing API
+status: ready_to_plan
+stopped_at: Phase 03 complete; ready to plan Phase 04
+last_updated: "2026-09-11T00:00:00Z"
+last_activity: 2026-09-11
+last_activity_desc: Phase 03 complete — four-target CI and both pinned external reference gates pass for FLAC and Opus framing
+state_head: 324b046
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 25
-  completed_plans: 22
-  percent: 88
+  completed_phases: 3
+  total_plans: 28
+  completed_plans: 25
+  percent: 89
 ---
 
 # Project State
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-08)
 
 **Core value:** A `.iamf` file this crate writes is read back by the reference decoder `libiamf` with the PCM sample-identical — and accepted by `iamf-tools`' stricter parser, because `libiamf` alone is a permissive oracle.
-**Current focus:** Phase 03 — FLAC and Opus Framing
+**Current focus:** Phase 04 — Parallax-Facing API
 
 ## Current Position
 
-Phase: 03 (FLAC and Opus Framing) — READY TO EXECUTE
-Plan: 5 of 8
-Status: Plan 03-05 complete; ready for 03-06
-Last activity: 2026-09-10 — Opus packets and asymmetric trims traverse the shared conformance gate
+Phase: 04 (Parallax-Facing API) — READY TO PLAN
+Plan: 0 of 3
+Status: Phase 03 is complete; ready to plan 04-01
+Last activity: 2026-09-11 — four-target CI and both pinned external reference gates passed for FLAC and Opus framing
 
-Progress: [██████░░░░] 62% of Phase 03 plans
+Progress: [░░░░░░░░░░] 0% of Phase 04 plans
 
 ## Performance Metrics
 
@@ -126,10 +126,13 @@ Recent decisions affecting current work:
 - [Phase 03]: Eight sequential plans isolate typed configs, fixture generation, shared-gate integration, dependency boundaries, offline regressions, and CI closure.
 - [Phase 03]: Complete 11-byte Opus configurations parse as typed syntax, while short or trailing foreign bytes remain exact raw/trailing fidelity data.
 - [Phase 03]: Fresh Opus construction is pinned to 48 kHz and derives its roll distance with checked integer arithmetic; no runtime codec or resampler enters the shipping graph.
+- [Phase 03]: The dependency boundary is enforced by portable Rust canaries and a Linux shell proof; codec tooling remains an excluded, separately licensed workspace.
+- [Phase 03]: The independent libopus PCM remains authenticated separately from the exact pinned-libiamf Opus PCM baseline; the four known one-LSB decoder-rounding differences are explicit, never tolerated broadly.
+- [Phase 03]: Four native target paths and the pinned libiamf/iamf-tools workflow passed the codec framing gates; failure artefacts include conformance output.
 
 ### Pending Todos
 
-- Execute Phase 3 Plan 03-06: Shipping dependency-boundary canaries and scoped codec-tool licence policy.
+- Plan Phase 4 Plan 04-01: `EncoderBuilder`, centralized `build()` validation, ID assignment, and minimum-profile selection.
 
 ### Blockers/Concerns
 
@@ -155,6 +158,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-10T03:00:00Z
-Stopped at: Phase 03 Plan 05 complete; ready to execute 03-06
-Resume file: .planning/phases/03-flac-and-opus-framing/03-06-PLAN.md
+Last session: 2026-09-11T00:00:00Z
+Stopped at: Phase 03 complete; ready to plan Phase 04
+Resume file: .planning/ROADMAP.md
