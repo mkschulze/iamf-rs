@@ -143,6 +143,22 @@ pub enum ErrorKind {
     DuplicateDeclaration,
     #[error("the builder cannot allocate another IAMF wire id")]
     WireIdAllocationExhausted,
+    #[error("a temporal unit references an unknown substream handle")]
+    UnknownTemporalSubstreamHandle,
+    #[error("a temporal unit references an unknown parameter handle")]
+    UnknownTemporalParameterHandle,
+    #[error("a temporal unit is missing one or more declared substreams")]
+    MissingTemporalSubstream,
+    #[error("a temporal unit submits the same substream more than once")]
+    DuplicateTemporalSubstream,
+    #[error("temporal frames are not in declared substream order")]
+    TemporalSubstreamOrderMismatch,
+    #[error("the submitted frame kind does not match the frozen codec configuration")]
+    FrameCodecMismatch,
+    #[error("the LPCM frame payload is not sample-byte aligned")]
+    LpcmFrameByteAlignment,
+    #[error("the LPCM frame payload does not carry the frozen sample count")]
+    LpcmFrameSampleCountMismatch,
 }
 
 /// An error, with the position it happened at attached exactly once.

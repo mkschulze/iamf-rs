@@ -5,13 +5,16 @@
 
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
-use crate::model::{DescriptorSet, Profile, select_minimum_profile};
+use crate::model::{select_minimum_profile, DescriptorSet, Profile};
 use crate::obu::{
-    AudioElement, AudioElementType, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig,
-    DecoderConfig, IaSequenceHeader, MixGainParamDefinition, MixPresentation,
-    ParamDefinitionRegistry,
+    AudioElement, AudioElementType, AudioFrame, CodecConfig, DecoderConfig, IaSequenceHeader,
+    MixGainParamDefinition, MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry,
+    ParameterBlock, Trimming, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
+use std::io::Write;
+
+use crate::sequence::{SequenceWriter, TemporalUnit};
 
 static NEXT_BUILDER_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -126,10 +129,19 @@ fn lookup_id<H: Copy + PartialEq>(entries: &[(H, u32)], handle: H) -> Option<u32
 }
 
 /// A completed, immutable descriptor configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Encoder {
     descriptors: DescriptorSet,
+    generation: u64,
 }
+
+impl PartialEq for Encoder {
+    fn eq(&self, other: &Self) -> bool {
+        self.descriptors == other.descriptors
+    }
+}
+
+impl Eq for Encoder {}
 
 impl Encoder {
     /// The frozen descriptor model this encoder will write.
@@ -137,6 +149,277 @@ impl Encoder {
     pub const fn descriptors(&self) -> &DescriptorSet {
         &self.descriptors
     }
+
+    /// Begin writing this frozen configuration to `sink`.
+    ///
+    /// The descriptor prologue is written immediately. Subsequent temporal
+    /// input is validated as a complete unit before the underlying sequence
+    /// writer receives it, so an input error cannot emit a partial unit.
+    pub fn start<W: Write>(self, sink: W) -> Result<EncodingWriter<W>> {
+        let mut sequence = SequenceWriter::new(sink);
+        sequence.push_descriptors(&self.descriptors)?;
+        Ok(EncodingWriter {
+            sequence,
+            descriptors: self.descriptors,
+            generation: self.generation,
+        })
+    }
+}
+
+/// One caller-owned, pre-encoded Audio Frame payload.
+///
+/// This type deliberately has no encoder, decoder, resampler, or PCM
+/// conversion operation. FLAC and Opus access units are handed through
+/// verbatim; LPCM bytes are only checked against the frozen frame plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameInput {
+    /// IAMF-LPCM sample bytes in the codec configuration's declared format.
+    Lpcm(Vec<u8>),
+    /// One already encoded FLAC access unit.
+    Flac(Vec<u8>),
+    /// One already encoded Opus access unit.
+    Opus(Vec<u8>),
+}
+
+/// A Parameter Block submitted against its frozen caller-local definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmittedParameterBlock {
+    /// The definition accepted during [`EncoderBuilder::build`].
+    pub parameter: ParameterHandle,
+    /// The already decimated IAMF parameter data to write.
+    pub block: ParameterBlock,
+}
+
+/// One complete temporal unit supplied to an [`EncodingWriter`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemporalUnitInput {
+    /// Frames in the frozen substream declaration order.
+    pub frames: Vec<(SubstreamHandle, FrameInput)>,
+    /// Parameter Blocks in their requested wire order.
+    pub parameter_blocks: Vec<SubmittedParameterBlock>,
+    /// The single trim plan shared by every frame in the unit.
+    pub trimming: Option<Trimming>,
+}
+
+/// A high-level temporal writer backed by exactly one [`SequenceWriter`].
+#[derive(Debug)]
+pub struct EncodingWriter<W: Write> {
+    sequence: SequenceWriter<W>,
+    descriptors: DescriptorSet,
+    generation: u64,
+}
+
+impl<W: Write> EncodingWriter<W> {
+    /// Bytes successfully handed to the sink, including the descriptor prologue.
+    #[must_use]
+    pub const fn bytes_written(&self) -> u64 {
+        self.sequence.bytes_written()
+    }
+
+    /// Validate and append one complete temporal unit.
+    ///
+    /// All caller input is lowered before the underlying writer is called.
+    /// Therefore a typed input failure leaves the sink exactly at the previous
+    /// temporal-unit boundary.
+    pub fn push_temporal_unit(&mut self, input: TemporalUnitInput) -> Result<()> {
+        let unit = self.preflight(input)?;
+        self.sequence.push_temporal_unit(&unit)
+    }
+
+    fn preflight(&self, input: TemporalUnitInput) -> Result<TemporalUnit> {
+        let expected = self.declared_substreams();
+        if input.frames.len() != expected.len() {
+            return Err(temporal_input(
+                ErrorKind::MissingTemporalSubstream,
+                "frames",
+            ));
+        }
+
+        let mut frames = Vec::with_capacity(input.frames.len());
+        let mut seen = Vec::with_capacity(input.frames.len());
+        for ((handle, frame), expected_id) in input.frames.into_iter().zip(expected) {
+            let id = self.substream_id(handle)?;
+            if seen.contains(&id) {
+                return Err(temporal_input(
+                    ErrorKind::DuplicateTemporalSubstream,
+                    "frames",
+                ));
+            }
+            if id != expected_id {
+                return Err(temporal_input(
+                    ErrorKind::TemporalSubstreamOrderMismatch,
+                    "frames",
+                ));
+            }
+            let (config, channels) = self.substream_plan(id)?;
+            self.validate_frame(&config, channels, &frame)?;
+            frames.push(AudioFrame::new(id, frame_payload(frame)).into_obu(input.trimming));
+            seen.push(id);
+        }
+
+        let mut parameter_blocks = Vec::with_capacity(input.parameter_blocks.len());
+        for submitted in input.parameter_blocks {
+            let parameter_id = self.parameter_id(submitted.parameter)?;
+            if submitted.block.parameter_id != parameter_id {
+                return Err(temporal_input(
+                    ErrorKind::ParameterIdMismatch,
+                    "parameter_id",
+                ));
+            }
+            parameter_blocks.push(Obu::new(
+                ObuHeader::new(ObuType::ParameterBlock),
+                submitted.block,
+            ));
+        }
+
+        Ok(TemporalUnit {
+            temporal_delimiter: None,
+            parameter_blocks,
+            audio_frames: frames,
+        })
+    }
+
+    fn declared_substreams(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
+        for element in &self.descriptors.audio_elements {
+            for id in &element.audio_substream_ids {
+                if !ids.contains(id) {
+                    ids.push(*id);
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    fn substream_id(&self, handle: SubstreamHandle) -> Result<u32> {
+        if handle.generation != self.generation {
+            return Err(temporal_input(
+                ErrorKind::UnknownTemporalSubstreamHandle,
+                "substream_handle",
+            ));
+        }
+        let id = u32::try_from(handle.index).map_err(|_| {
+            temporal_input(
+                ErrorKind::UnknownTemporalSubstreamHandle,
+                "substream_handle",
+            )
+        })?;
+        if self.declared_substreams().contains(&id) {
+            Ok(id)
+        } else {
+            Err(temporal_input(
+                ErrorKind::UnknownTemporalSubstreamHandle,
+                "substream_handle",
+            ))
+        }
+    }
+
+    fn parameter_id(&self, handle: ParameterHandle) -> Result<u32> {
+        if handle.generation != self.generation {
+            return Err(temporal_input(
+                ErrorKind::UnknownTemporalParameterHandle,
+                "parameter_handle",
+            ));
+        }
+        let id = u32::try_from(handle.index).map_err(|_| {
+            temporal_input(
+                ErrorKind::UnknownTemporalParameterHandle,
+                "parameter_handle",
+            )
+        })?;
+        if ParamDefinitionRegistry::from_descriptors(&self.descriptors)?
+            .get(id)
+            .is_some()
+        {
+            Ok(id)
+        } else {
+            Err(temporal_input(
+                ErrorKind::UnknownTemporalParameterHandle,
+                "parameter_handle",
+            ))
+        }
+    }
+
+    fn substream_plan(&self, id: u32) -> Result<(CodecConfig, u8)> {
+        for element in &self.descriptors.audio_elements {
+            for (position, candidate) in element.audio_substream_ids.iter().enumerate() {
+                if *candidate == id {
+                    let config = self
+                        .descriptors
+                        .codec_configs
+                        .iter()
+                        .find(|config| config.codec_config_id == element.codec_config_id)
+                        .ok_or_else(|| {
+                            temporal_input(ErrorKind::FrameCodecMismatch, "codec_config")
+                        })?;
+                    return Ok((config.clone(), substream_channels(element, position)));
+                }
+            }
+        }
+        Err(temporal_input(
+            ErrorKind::UnknownTemporalSubstreamHandle,
+            "substream_handle",
+        ))
+    }
+
+    fn validate_frame(&self, config: &CodecConfig, channels: u8, frame: &FrameInput) -> Result<()> {
+        match (&config.decoder_config, frame) {
+            (DecoderConfig::Lpcm(lpcm), FrameInput::Lpcm(payload)) => {
+                let bytes_per_sample = u64::from(lpcm.sample_size)
+                    .checked_div(8)
+                    .filter(|bytes| *bytes > 0)
+                    .ok_or_else(|| {
+                        temporal_input(ErrorKind::LpcmFrameByteAlignment, "frame.payload")
+                    })?;
+                let payload_length = u64::try_from(payload.len()).map_err(|_| {
+                    temporal_input(ErrorKind::LpcmFrameSampleCountMismatch, "frame.payload")
+                })?;
+                if payload_length.checked_rem(bytes_per_sample) != Some(0) {
+                    return Err(temporal_input(
+                        ErrorKind::LpcmFrameByteAlignment,
+                        "frame.payload",
+                    ));
+                }
+                let expected = u64::from(config.num_samples_per_frame)
+                    .checked_mul(u64::from(channels))
+                    .and_then(|samples| samples.checked_mul(bytes_per_sample))
+                    .ok_or_else(|| {
+                        temporal_input(ErrorKind::LpcmFrameSampleCountMismatch, "frame.payload")
+                    })?;
+                if payload_length != expected {
+                    return Err(temporal_input(
+                        ErrorKind::LpcmFrameSampleCountMismatch,
+                        "frame.payload",
+                    ));
+                }
+                Ok(())
+            }
+            (DecoderConfig::Flac(_), FrameInput::Flac(_))
+            | (DecoderConfig::Opus(_), FrameInput::Opus(_)) => Ok(()),
+            (DecoderConfig::Lpcm(_), FrameInput::Flac(_))
+            | (DecoderConfig::Lpcm(_), FrameInput::Opus(_))
+            | (DecoderConfig::Flac(_), FrameInput::Lpcm(_))
+            | (DecoderConfig::Flac(_), FrameInput::Opus(_))
+            | (DecoderConfig::Opus(_), FrameInput::Lpcm(_))
+            | (DecoderConfig::Opus(_), FrameInput::Flac(_))
+            | (DecoderConfig::Raw { .. }, _) => {
+                Err(temporal_input(ErrorKind::FrameCodecMismatch, "frame.codec"))
+            }
+        }
+    }
+}
+
+fn frame_payload(frame: FrameInput) -> Vec<u8> {
+    match frame {
+        FrameInput::Lpcm(payload) | FrameInput::Flac(payload) | FrameInput::Opus(payload) => {
+            payload
+        }
+    }
+}
+
+fn temporal_input(kind: ErrorKind, field: &'static str) -> Error {
+    Error::new(kind, Location::Field(field))
 }
 
 #[derive(Debug, Clone)]
@@ -439,7 +722,13 @@ impl EncoderBuilder {
             IaSequenceHeader::new(primary_profile.to_wire(), additional_profile.to_wire());
         manifest.sequence_profile = primary_profile;
 
-        Ok((Encoder { descriptors }, manifest))
+        Ok((
+            Encoder {
+                descriptors,
+                generation: self.generation,
+            },
+            manifest,
+        ))
     }
 
     fn validate_declarations(&self) -> Result<()> {
