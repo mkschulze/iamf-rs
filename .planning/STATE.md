@@ -12,9 +12,9 @@ state_head: 324b046
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 28
+  total_plans: 29
   completed_plans: 25
-  percent: 89
+  percent: 86
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-08)
 ## Current Position
 
 Phase: 04 (Parallax-Facing API) — READY TO PLAN
-Plan: 0 of 3
+Plan: 0 of 4
 Status: Phase 03 is complete; ready to plan 04-01
 Last activity: 2026-09-11 — four-target CI and both pinned external reference gates passed for FLAC and Opus framing
 
