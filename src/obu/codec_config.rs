@@ -767,7 +767,7 @@ impl CodecConfig {
     }
 }
 
-/// `GetRequiredAudioRollDistance()` — `0` for LPCM and FLAC.
+/// `GetRequiredAudioRollDistance()` — `0` for LPCM and FLAC, `-1` for AAC-LC.
 ///
 /// This is the **encoder-path derivation** (DESC-02). The reader never calls
 /// it to replace a wire value; `validate()` calls it to name a mismatch (D-06).
@@ -778,7 +778,8 @@ impl CodecConfig {
 pub const fn required_audio_roll_distance(decoder_config: &DecoderConfig) -> i16 {
     match decoder_config {
         DecoderConfig::Lpcm(_) | DecoderConfig::Flac(_) => 0,
-        DecoderConfig::Opus(_) | DecoderConfig::AacLc(_) | DecoderConfig::Raw { .. } => 0,
+        DecoderConfig::AacLc(_) => AAC_LC_AUDIO_ROLL_DISTANCE,
+        DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => 0,
     }
 }
 

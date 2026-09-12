@@ -26,8 +26,8 @@ use iamf::obu::{
     IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig,
     Obu, ObuHeader, ObuType, OpusDecoderConfig, OutputGain, SampleFormatFlags,
     ScalableChannelLayoutConfig, read_audio_element, read_codec_config, read_ia_sequence_header,
-    read_mix_presentation, read_obu_with, write_audio_element, write_codec_config,
-    write_ia_sequence_header, write_mix_presentation, write_obu_with,
+    read_mix_presentation, read_obu_with, required_audio_roll_distance, write_audio_element,
+    write_codec_config, write_ia_sequence_header, write_mix_presentation, write_obu_with,
 };
 
 /// The published `test_000003` configuration, shared with `tests/sequence.rs`.
@@ -174,6 +174,7 @@ fn canonical_aac_lc_config_is_the_v1_1_descriptor() -> iamf::Result<()> {
     assert_eq!(config.codec_id, *b"mp4a");
     assert_eq!(config.num_samples_per_frame, 1024);
     assert_eq!(config.audio_roll_distance, -1);
+    assert_eq!(required_audio_roll_distance(&config.decoder_config), -1);
     assert_eq!(
         obu_bytes(
             &Obu::new(ObuHeader::new(ObuType::CodecConfig), config.clone()),
@@ -194,6 +195,51 @@ fn canonical_aac_lc_config_is_the_v1_1_descriptor() -> iamf::Result<()> {
     );
     assert!(config.validate().is_empty());
     Ok(())
+}
+
+#[test]
+fn aac_lc_constructor_maps_only_non_reserved_mpeg4_sample_rates() {
+    for (sample_rate, expected_index) in [
+        (96_000, 0),
+        (88_200, 1),
+        (64_000, 2),
+        (48_000, 3),
+        (44_100, 4),
+        (32_000, 5),
+        (24_000, 6),
+        (22_050, 7),
+        (16_000, 8),
+        (12_000, 9),
+        (11_025, 10),
+        (8_000, 11),
+        (7_350, 12),
+    ] {
+        let config = CodecConfig::aac_lc(2, sample_rate)
+            .unwrap_or_else(|error| panic!("{sample_rate} Hz should be accepted: {error:?}"));
+        assert_eq!(
+            config
+                .aac_lc_config()
+                .expect("AAC-LC constructor returns typed config")
+                .sampling_frequency_index,
+            expected_index,
+        );
+    }
+
+    for (label, sample_rate) in [
+        ("reserved sampling-frequency index 13", 13),
+        ("reserved sampling-frequency index 14", 14),
+        ("explicit-frequency escape index 15", 15),
+        ("arbitrary unsupported rate", 47_999),
+    ] {
+        let error = CodecConfig::aac_lc(2, sample_rate)
+            .expect_err("{label} must not construct an AAC-LC descriptor");
+        assert_eq!(
+            error.kind(),
+            &ErrorKind::SampleRateNotSupportedByCodec,
+            "{label}"
+        );
+        assert_eq!(error.at(), Location::Field("sample_rate"));
+    }
 }
 
 #[test]
