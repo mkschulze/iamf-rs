@@ -547,41 +547,40 @@ pub(crate) fn validate_parameter_block(
         validate_parameter_data_kind(&subblock.data, context)?;
     }
 
-    let (expected_count, carries_subblock_duration, declared_duration) =
-        if let Some(fields) = block.duration_fields {
-            let count = if fields.constant_subblock_duration == 0 {
-                u32::try_from(block.subblocks.len()).map_err(|_| {
-                    Error::new(ErrorKind::ObuTooLarge, Location::Field("num_subblocks"))
-                })?
-            } else {
-                subblocks_implied_by(
-                    fields.duration,
-                    fields.constant_subblock_duration,
-                    Location::Field("subblocks"),
-                )?
-            };
-            let carries = fields.constant_subblock_duration == 0;
-            (count, carries, carries.then_some(fields.duration))
+    let (expected_count, carries_subblock_duration, declared_duration) = if let Some(fields) =
+        block.duration_fields
+    {
+        let count = if fields.constant_subblock_duration == 0 {
+            u32::try_from(block.subblocks.len())
+                .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::Field("num_subblocks")))?
         } else {
-            let fields = def.duration_fields.as_ref().ok_or_else(|| {
-                Error::new(
-                    ErrorKind::ParameterModeMismatch,
-                    Location::Field("duration_fields"),
-                )
-            })?;
-            let count = if fields.constant_subblock_duration == 0 {
-                u32::try_from(fields.subblock_durations.len()).map_err(|_| {
-                    Error::new(ErrorKind::ObuTooLarge, Location::Field("subblocks"))
-                })?
-            } else {
-                subblocks_implied_by(
-                    fields.duration,
-                    fields.constant_subblock_duration,
-                    Location::Field("subblocks"),
-                )?
-            };
-            (count, false, None)
+            subblocks_implied_by(
+                fields.duration,
+                fields.constant_subblock_duration,
+                Location::Field("subblocks"),
+            )?
         };
+        let carries = fields.constant_subblock_duration == 0;
+        (count, carries, carries.then_some(fields.duration))
+    } else {
+        let fields = def.duration_fields.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::ParameterModeMismatch,
+                Location::Field("duration_fields"),
+            )
+        })?;
+        let count = if fields.constant_subblock_duration == 0 {
+            u32::try_from(fields.subblock_durations.len())
+                .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::Field("subblocks")))?
+        } else {
+            subblocks_implied_by(
+                fields.duration,
+                fields.constant_subblock_duration,
+                Location::Field("subblocks"),
+            )?
+        };
+        (count, false, None)
+    };
 
     let actual_count = u32::try_from(block.subblocks.len())
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::Field("subblocks")))?;
@@ -601,12 +600,14 @@ pub(crate) fn validate_parameter_block(
             ));
         }
         if let Some(duration) = subblock.subblock_duration {
-            duration_sum = duration_sum.checked_add(u64::from(duration)).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::SubblockDurationMismatch,
-                    Location::Field("subblock_duration"),
-                )
-            })?;
+            duration_sum = duration_sum
+                .checked_add(u64::from(duration))
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::SubblockDurationMismatch,
+                        Location::Field("subblock_duration"),
+                    )
+                })?;
         }
     }
     if declared_duration.is_some_and(|duration| duration_sum != u64::from(duration)) {
@@ -667,9 +668,7 @@ fn subblocks_implied_by(
     constant_subblock_duration: u32,
     at: Location,
 ) -> Result<u32> {
-    let overflow = || {
-        Error::new(ErrorKind::SubblockDurationMismatch, at)
-    };
+    let overflow = || Error::new(ErrorKind::SubblockDurationMismatch, at);
     let whole = duration
         .checked_div(constant_subblock_duration)
         .ok_or_else(overflow)?;
@@ -726,12 +725,10 @@ fn read_parameter_data(
         // `parameter_data_size` then exactly that many bytes. The length goes
         // through `read_uint8_span`, which caps it against `bytes_remaining()`
         // before reserving.
-        ParameterDataContext::Demixing => Ok(ParameterData::Demixing(
-            DemixingInfoParameterData {
-                dmixp_mode: u8::try_from(r.read_unsigned(3)?).unwrap_or(0),
-                reserved: u8::try_from(r.read_unsigned(5)?).unwrap_or(0),
-            },
-        )),
+        ParameterDataContext::Demixing => Ok(ParameterData::Demixing(DemixingInfoParameterData {
+            dmixp_mode: u8::try_from(r.read_unsigned(3)?).unwrap_or(0),
+            reserved: u8::try_from(r.read_unsigned(5)?).unwrap_or(0),
+        })),
         ParameterDataContext::ReconGain {
             recon_gain_is_present,
         } => {
@@ -746,7 +743,8 @@ fn read_parameter_data(
                 for index in 0_u32..12 {
                     if recon_gain_flag & (1_u32 << index) != 0 {
                         let value = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
-                        if let Some(slot) = recon_gain.get_mut(usize::try_from(index).unwrap_or(0)) {
+                        if let Some(slot) = recon_gain.get_mut(usize::try_from(index).unwrap_or(0))
+                        {
                             *slot = value;
                         }
                     }

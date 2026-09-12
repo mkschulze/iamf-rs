@@ -338,11 +338,7 @@ pub(crate) fn obu_size_for(after: &BitWriter, payload_len: usize) -> Result<u32>
     // The size field's own length depends on the value it carries, so the bound
     // is computed from the candidate rather than from a constant.
     let size_of_obu_size = crate::bits::minimal_uleb128_len(obu_size);
-    validate_obu_size(
-        obu_size,
-        size_of_obu_size,
-        Location::OutputOffset(0),
-    )?;
+    validate_obu_size(obu_size, size_of_obu_size, Location::OutputOffset(0))?;
     Ok(obu_size)
 }
 
@@ -351,8 +347,7 @@ pub(crate) fn validate_obu_size(
     size_of_obu_size: usize,
     at: Location,
 ) -> Result<()> {
-    let obu_size = usize::try_from(obu_size)
-        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, at))?;
+    let obu_size = usize::try_from(obu_size).map_err(|_| Error::new(ErrorKind::ObuTooLarge, at))?;
     let max = ENTIRE_OBU_SIZE_MAX
         .checked_sub(1)
         .and_then(|v| v.checked_sub(size_of_obu_size))
@@ -504,7 +499,7 @@ mod tests {
     //! through the public path — every after-size field is a whole number of
     //! bytes — and this is the only place it can be exercised at all.
 
-    use super::{ENTIRE_OBU_SIZE_MAX, ObuType, obu_size_for};
+    use super::{obu_size_for, ObuType, ENTIRE_OBU_SIZE_MAX};
     use crate::bits::BitWriter;
     use crate::error::ErrorKind;
 
