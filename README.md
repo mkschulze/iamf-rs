@@ -14,11 +14,11 @@ parser, descriptor model, and an encoder producing conformant `.iamf` files.
 Not a renderer. This crate receives prepared PCM/access units plus metadata and produces bytes; it never pans,
 places a source, or treats a speaker layout as anything but a label.
 
-The Phase 4 API is **Parallax-facing but host-independent**. `iamf-rs` owns validation, deterministic
-wire IDs/profile selection and standalone IA Sequence writing. Parallax owns its delivery projection,
-Preview/Export-Include state, codec encoding and the production adapter; `iamf-render-rs` owns OAR
-loudspeaker/binaural rendering, and `iamf-decode-rs` owns native codec decoding plus timed Audio
-Element reconstruction. No Parallax type, renderer or decoder implementation belongs in this crate.
+The high-level API is **host-independent**. `iamf-rs` owns validation,
+deterministic wire IDs/profile selection and standalone IA Sequence writing.
+The calling application owns delivery selection, codec encoding and its
+adapter. Rendering and native codec decoding are separate responsibilities;
+no renderer or decoder implementation belongs in this crate.
 
 Targets **IAMF v1.1.0** (`iamf::SPEC_VERSION`).
 
@@ -44,14 +44,16 @@ and returns the sink. Frames are either LPCM bytes or already encoded FLAC/Opus 
 caller also supplies loudness values and already-decimated IAMF parameter blocks; this crate carries
 and validates them but does not derive them.
 
-The production adapter belongs to Parallax, which filters its immutable delivery snapshot and owns
-delivery UI state, source/terminal identity, panning/HOA preparation, codec encoding, resampling,
-loudness measurement, timeline interpolation, preview rendering, and carrier/container work. This
-crate has no Parallax dependency and performs none of those responsibilities.
+The production adapter belongs to the calling application, which filters its
+immutable delivery snapshot and owns delivery UI state, source identity,
+panning/HOA preparation, codec encoding, resampling, loudness measurement,
+timeline interpolation, rendering, and carrier/container work. This crate
+performs none of those responsibilities.
 
-Public Rust snippets intentionally use only this crate's surface. In particular, they contain no
-Parallax import or name, source-position model, preview/include field, codec-encoder dependency, or
-renderer dependency:
+Public Rust snippets intentionally use only this crate's surface. In
+particular, they contain no application-specific type or import,
+source-position model, UI-state field, codec-encoder dependency, or renderer
+dependency:
 
 ```rust
 let builder = iamf::encoder::EncoderBuilder::new();
