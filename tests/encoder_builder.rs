@@ -4,7 +4,7 @@ use iamf::encoder::EncoderBuilder;
 use iamf::model::Profile;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, Layout,
+    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, DecoderConfig, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
     RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
@@ -103,6 +103,23 @@ fn build_rejects_a_presentation_whose_declared_handles_do_not_match_its_elements
         error.at(),
         Location::Field("mix_presentation.audio_elements")
     );
+}
+
+#[test]
+fn build_rejects_aac_buffer_size_db_that_exceeds_its_24_bit_wire_field() -> iamf::Result<()> {
+    let mut config = CodecConfig::aac_lc(0, 48_000)?;
+    let DecoderConfig::AacLc(aac_lc) = &mut config.decoder_config else {
+        panic!("AAC constructor must create a typed descriptor");
+    };
+    aac_lc.buffer_size_db = 0x0100_0000;
+    let mut builder = EncoderBuilder::new();
+    let _codec = builder.add_codec_config(config);
+    let error = builder
+        .build()
+        .expect_err("invalid AAC buffer_size_db must fail before encoder start");
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), Location::Field("descriptors"));
+    Ok(())
 }
 
 #[test]

@@ -58,6 +58,7 @@ const AAC_LC_OBJECT_TYPE_INDICATION: u8 = 0x40;
 const AAC_LC_STREAM_TYPE: u8 = 0x05;
 const AAC_LC_AUDIO_OBJECT_TYPE: u8 = 2;
 const AAC_LC_CHANNEL_CONFIGURATION: u8 = 2;
+const AAC_LC_MAX_BUFFER_SIZE_DB: u32 = 0x00ff_ffff;
 const AAC_LC_NUM_SAMPLES_PER_FRAME: u32 = 1024;
 const AAC_LC_AUDIO_ROLL_DISTANCE: i16 = -1;
 
@@ -663,6 +664,15 @@ impl CodecConfig {
             }
         }
         if let Some(aac_lc) = self.aac_lc_config() {
+            if aac_lc.buffer_size_db > AAC_LC_MAX_BUFFER_SIZE_DB {
+                findings.push(field(
+                    "buffer_size_db",
+                    format!(
+                        "buffer_size_db is {}, outside 0..={AAC_LC_MAX_BUFFER_SIZE_DB}",
+                        aac_lc.buffer_size_db
+                    ),
+                ));
+            }
             if aac_lc.object_type_indication != AAC_LC_OBJECT_TYPE_INDICATION {
                 findings.push(field(
                     "object_type_indication",
@@ -901,28 +911,21 @@ pub fn write_codec_config(w: &mut BitWriter, v: &CodecConfig) -> Result<()> {
 
 /// Find the MPEG-4 sampling-frequency index for an AAC-LC encoder input.
 #[must_use]
-const fn aac_lc_sampling_frequency_index(sample_rate: u32) -> Option<u8> {
-    let mut index = 0;
-    while index < AAC_LC_SAMPLE_RATES.len() {
-        if AAC_LC_SAMPLE_RATES[index] == sample_rate {
-            // `AAC_LC_SAMPLE_RATES` has thirteen entries, so this conversion
-            // is bounded by 12.
-            return Some(index as u8);
-        }
-        index += 1;
-    }
-    None
+fn aac_lc_sampling_frequency_index(sample_rate: u32) -> Option<u8> {
+    AAC_LC_SAMPLE_RATES
+        .iter()
+        .position(|&rate| rate == sample_rate)
+        .and_then(|index| u8::try_from(index).ok())
 }
 
 /// The only descriptor envelope shape this model types. A malformed MPEG-4
 /// descriptor remains a raw blob so it can round-trip byte-for-byte.
 fn is_aac_lc_descriptor(descriptor: &[u8]) -> bool {
-    descriptor.len() == AAC_LC_DECODER_CONFIG_BYTES
-        && descriptor[0] == 0x04
-        && descriptor[1] == 13
-        && descriptor[3] & 1 == 1
-        && descriptor[15] == 0x05
-        && descriptor[16] == 2
+    matches!(
+        descriptor,
+        [0x04, 13, _, stream_and_flags, .., 0x05, 2, _, _]
+            if descriptor.len() == AAC_LC_DECODER_CONFIG_BYTES && stream_and_flags & 1 == 1
+    )
 }
 
 // ref: IAMF v1.1.0 §3.11.2 AAC-LC Specific; ISO/IEC 14496-1 DecoderConfigDescriptor
