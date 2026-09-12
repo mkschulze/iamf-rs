@@ -5,11 +5,11 @@
 
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
-use crate::model::{select_minimum_profile, DescriptorSet, Profile};
+use crate::model::{DescriptorSet, Profile, select_minimum_profile};
 use crate::obu::{
-    AudioElement, AudioElementType, AudioFrame, CodecConfig, DecoderConfig, IaSequenceHeader,
-    MixGainParamDefinition, MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry,
-    ParameterBlock, Trimming, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
+    AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
+    CodecConfig, DecoderConfig, IaSequenceHeader, MixGainParamDefinition, MixPresentation, Obu,
+    ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::io::Write;
@@ -265,6 +265,7 @@ impl<W: Write> EncodingWriter<W> {
                 ));
             }
             let (config, channels) = self.substream_plan(id)?;
+            validate_temporal_trimming(input.trimming, &config)?;
             self.validate_frame(&config, channels, &frame)?;
             frames.push(AudioFrame::new(id, frame_payload(frame)).into_obu(input.trimming));
         }
@@ -285,6 +286,7 @@ impl<W: Write> EncodingWriter<W> {
                     "parameter_handle",
                 )
             })?;
+            validate_submitted_parameter_block(&governing.definition, &submitted.block)?;
             let mut parameter_validation = crate::bits::BitWriter::new();
             crate::obu::write_parameter_block(
                 &mut parameter_validation,
@@ -446,6 +448,49 @@ fn frame_payload(frame: FrameInput) -> Vec<u8> {
 
 fn temporal_input(kind: ErrorKind, field: &'static str) -> Error {
     Error::new(kind, Location::Field(field))
+}
+
+fn validate_temporal_trimming(trimming: Option<Trimming>, config: &CodecConfig) -> Result<()> {
+    if trimming.is_some_and(|trimming| {
+        trimming
+            .at_start
+            .checked_add(trimming.at_end)
+            .is_none_or(|total| total > config.num_samples_per_frame)
+    }) {
+        return Err(temporal_input(
+            ErrorKind::TemporalUnitTrimMismatch,
+            "trimming",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_submitted_parameter_block(
+    definition: &crate::obu::ParamDefinition,
+    block: &ParameterBlock,
+) -> Result<()> {
+    let Some(fields) = definition
+        .param_definition_mode()
+        .then_some(block.duration_fields)
+        .flatten()
+    else {
+        return Ok(());
+    };
+
+    if fields.duration == 0
+        || block.subblocks.is_empty()
+        || (fields.constant_subblock_duration == 0
+            && block
+                .subblocks
+                .iter()
+                .any(|subblock| subblock.subblock_duration == Some(0)))
+    {
+        return Err(temporal_input(
+            ErrorKind::SubblockDurationMismatch,
+            "subblock_duration",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

@@ -1,15 +1,15 @@
 //! Public streaming tests for the immutable high-level encoder.
 
+use iamf::ErrorKind;
 use iamf::encoder::{EncoderBuilder, FrameInput, SubmittedParameterBlock, TemporalUnitInput};
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
     AudioElement, BlockDurationFields, ChannelAudioLayerConfig, CodecConfig, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixGainParameterData,
     MixPresentation, ObuType, ParameterBlock, ParameterData, ParameterSubblock, RenderingConfig,
-    SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming,
 };
-use iamf::sequence::{parse_sequence, SequenceObu};
-use iamf::ErrorKind;
+use iamf::sequence::{SequenceObu, parse_sequence};
 use std::io::{self, Write};
 
 #[test]
@@ -86,6 +86,54 @@ fn wrong_codec_frame_writes_no_temporal_bytes() -> iamf::Result<()> {
         })
         .unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::FrameCodecMismatch);
+    assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn trims_exceeding_the_frozen_frame_size_write_no_temporal_bytes() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames: vec![
+                (left, FrameInput::Lpcm(stereo_pcm_frame())),
+                (right, FrameInput::Lpcm(stereo_pcm_frame())),
+            ],
+            parameter_blocks: Vec::new(),
+            trimming: Some(Trimming {
+                at_end: 29,
+                at_start: 100,
+            }),
+        })
+        .expect_err("combined trims larger than 128 samples are not a frame plan");
+    assert_eq!(error.kind(), &ErrorKind::TemporalUnitTrimMismatch);
+    assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn overflowing_trim_sum_writes_no_temporal_bytes() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames: vec![
+                (left, FrameInput::Lpcm(stereo_pcm_frame())),
+                (right, FrameInput::Lpcm(stereo_pcm_frame())),
+            ],
+            parameter_blocks: Vec::new(),
+            trimming: Some(Trimming {
+                at_end: 1,
+                at_start: u32::MAX,
+            }),
+        })
+        .expect_err("trim arithmetic must not wrap before comparison with the frame plan");
+    assert_eq!(error.kind(), &ErrorKind::TemporalUnitTrimMismatch);
     assert_eq!(writer.bytes_written(), before);
     Ok(())
 }
@@ -292,6 +340,108 @@ fn parameter_subblocks_must_tile_the_declared_duration() -> iamf::Result<()> {
         .expect_err("subblock durations must exactly tile the declared duration");
     assert_eq!(error.kind(), &ErrorKind::SubblockDurationMismatch);
     assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn mode_1_submitted_blocks_reject_zero_duration_and_zero_duration_subblocks() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+
+    for block in [
+        ParameterBlock {
+            parameter_id: 0,
+            duration_fields: Some(BlockDurationFields {
+                duration: 0,
+                constant_subblock_duration: 0,
+            }),
+            subblocks: Vec::new(),
+        },
+        ParameterBlock {
+            parameter_id: 0,
+            duration_fields: Some(BlockDurationFields {
+                duration: 10,
+                constant_subblock_duration: 0,
+            }),
+            subblocks: Vec::new(),
+        },
+        ParameterBlock {
+            parameter_id: 0,
+            duration_fields: Some(BlockDurationFields {
+                duration: 10,
+                constant_subblock_duration: 0,
+            }),
+            subblocks: vec![
+                ParameterSubblock {
+                    subblock_duration: Some(0),
+                    data: ParameterData::MixGain(MixGainParameterData::Step {
+                        start_point_value: 0,
+                    }),
+                },
+                ParameterSubblock {
+                    subblock_duration: Some(10),
+                    data: ParameterData::MixGain(MixGainParameterData::Step {
+                        start_point_value: 0,
+                    }),
+                },
+            ],
+        },
+    ] {
+        let mut writer = encoder.clone().start(Vec::new())?;
+        let before = writer.bytes_written();
+
+        let error = writer
+            .push_temporal_unit(TemporalUnitInput {
+                frames: vec![
+                    (left, FrameInput::Lpcm(stereo_pcm_frame())),
+                    (right, FrameInput::Lpcm(stereo_pcm_frame())),
+                ],
+                parameter_blocks: vec![SubmittedParameterBlock { parameter, block }],
+                trimming: None,
+            })
+            .expect_err("mode-1 authoring requires positive block and subblock durations");
+        assert_eq!(error.kind(), &ErrorKind::SubblockDurationMismatch);
+        assert_eq!(writer.bytes_written(), before);
+    }
+    Ok(())
+}
+
+#[test]
+fn mode_1_submitted_blocks_require_non_empty_positive_exact_tiling() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+
+    writer.push_temporal_unit(TemporalUnitInput {
+        frames: vec![
+            (left, FrameInput::Lpcm(stereo_pcm_frame())),
+            (right, FrameInput::Lpcm(stereo_pcm_frame())),
+        ],
+        parameter_blocks: vec![SubmittedParameterBlock {
+            parameter,
+            block: ParameterBlock {
+                parameter_id: 0,
+                duration_fields: Some(BlockDurationFields {
+                    duration: 10,
+                    constant_subblock_duration: 0,
+                }),
+                subblocks: vec![
+                    ParameterSubblock {
+                        subblock_duration: Some(4),
+                        data: ParameterData::MixGain(MixGainParameterData::Step {
+                            start_point_value: 0,
+                        }),
+                    },
+                    ParameterSubblock {
+                        subblock_duration: Some(6),
+                        data: ParameterData::MixGain(MixGainParameterData::Step {
+                            start_point_value: 0,
+                        }),
+                    },
+                ],
+            },
+        }],
+        trimming: None,
+    })?;
+
     Ok(())
 }
 
