@@ -222,6 +222,7 @@ impl<W: Write> EncodingWriter<W> {
     /// Therefore a typed input failure leaves the sink exactly at the previous
     /// temporal-unit boundary.
     pub fn push_temporal_unit(&mut self, input: TemporalUnitInput) -> Result<()> {
+        self.sequence.check_not_poisoned()?;
         let unit = self.preflight(input)?;
         self.sequence.push_temporal_unit(&unit)
     }

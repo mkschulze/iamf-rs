@@ -207,10 +207,42 @@ fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
         u64::try_from(prologue_len + 1).expect("test sink limit fits in u64")
     );
 
-    let retry = writer
-        .push_temporal_unit(stereo_temporal_unit(left, right))
-        .expect_err("a poisoned high-level writer cannot emit another unit");
-    assert_eq!(retry.kind(), &ErrorKind::SequenceWriterPoisoned);
+    let malformed_frame_retry = writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames: vec![(left, FrameInput::Lpcm(stereo_pcm_frame()))],
+            parameter_blocks: Vec::new(),
+            trimming: None,
+        })
+        .expect_err("a poisoned writer reports its terminal state before frame preflight");
+    assert_eq!(
+        malformed_frame_retry.kind(),
+        &ErrorKind::SequenceWriterPoisoned
+    );
+
+    let mut foreign_builder = EncoderBuilder::new();
+    let foreign_parameter =
+        foreign_builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(0, 16_000));
+    let malformed_parameter_retry = writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames: vec![
+                (left, FrameInput::Lpcm(stereo_pcm_frame())),
+                (right, FrameInput::Lpcm(stereo_pcm_frame())),
+            ],
+            parameter_blocks: vec![SubmittedParameterBlock {
+                parameter: foreign_parameter,
+                block: ParameterBlock {
+                    parameter_id: 0,
+                    duration_fields: None,
+                    subblocks: Vec::new(),
+                },
+            }],
+            trimming: None,
+        })
+        .expect_err("a poisoned writer reports its terminal state before parameter preflight");
+    assert_eq!(
+        malformed_parameter_retry.kind(),
+        &ErrorKind::SequenceWriterPoisoned
+    );
 
     let finish = writer
         .finish()

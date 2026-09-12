@@ -755,6 +755,18 @@ impl<W: Write> SequenceWriter<W> {
         self.bytes_written
     }
 
+    /// Return the terminal poison error without inspecting a caller's input.
+    ///
+    /// This narrow crate-internal guard lets a higher-level adapter preserve
+    /// the same terminal-state precedence as this writer's public methods.
+    pub(crate) fn check_not_poisoned(&self) -> Result<()> {
+        if self.state == State::Poisoned {
+            Err(self.poisoned_error())
+        } else {
+            Ok(())
+        }
+    }
+
     /// Write the descriptor prologue: IA Sequence Header, Codec Configs
     /// ascending by id, Audio Elements ascending by id, Mix Presentations in
     /// list order.
