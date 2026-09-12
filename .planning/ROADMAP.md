@@ -135,7 +135,7 @@ Plans:
   6. `cargo build --no-default-features` retains the complete production bitstream/builder surface with no linked codec or integration dependency; the documented proc-macro-only `thiserror` graph remains the sole qualification to “dependency-free”. *(API-11)*
 
 **Research**: No — Phase 3 and the 2026-09-11 Parallax integration-contract audit settle the ownership, codec, timing and Presentation questions
-**Plans**: 4/4 implementation plans executed; release closure pending formatter remediation
+**Plans**: 4/4 plans executed
 
 Plans:
 
@@ -163,7 +163,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
 | 3. FLAC and Opus Framing | 8/8 | Complete | 2026-09-11 |
-| 4. Parallax-Facing API | 4/4 implemented | Closure pending `cargo fmt --check` | - |
+| 4. Parallax-Facing API | 4/4 | Complete | 2026-09-12 |
 
 ---
 *Roadmap created: 2026-09-08*
