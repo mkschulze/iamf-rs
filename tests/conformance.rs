@@ -83,13 +83,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::model::{DescriptorSet, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
+    AudioElement, ChannelAudioLayerConfig, CodecConfig, DecoderConfig, IaSequenceHeader, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
     RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
     Trimming,
 };
 
 use iamf::obu::{ObuType, find_obu_boundaries, plan_frames, read_obu_header};
+use iamf::sequence::{SequenceObu, parse_sequence, write_parsed_sequence};
 
 use fixture::{
     ElementSpec, EncodedTemporalUnit, Fixture, FixtureCodec, FrameSource,
@@ -109,6 +110,44 @@ fn reference_decoder() -> Option<PathBuf> {
     std::env::var_os("IAMF_REF_DECODER")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+/// Whether the reference build that supplied `IAMF_REF_DECODER` included
+/// libiamf's FDK-AAC decoder.  The binary exists on macOS and on ordinary
+/// Linux smoke runs without that optional codec, so its path alone is not an
+/// AAC capability claim.
+fn aac_reference_enabled_from_manifest(manifest: &str) -> bool {
+    manifest
+        .lines()
+        .any(|line| line.trim() == "\"aac_reference_enabled\": true,")
+}
+
+fn manifest_iamfdec_path(manifest: &str) -> Option<&str> {
+    manifest.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("\"iamfdec_path\": \"")
+            .and_then(|value| value.strip_suffix("\","))
+    })
+}
+
+fn manifest_has_aac_reference_for_decoder(manifest: &str, decoder: &Path) -> bool {
+    aac_reference_enabled_from_manifest(manifest)
+        && manifest_iamfdec_path(manifest).is_some_and(|path| Path::new(path) == decoder)
+}
+
+fn aac_reference_enabled(decoder: &Path) -> bool {
+    std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".reference-manifest.json"),
+    )
+    .is_ok_and(|manifest| manifest_has_aac_reference_for_decoder(&manifest, decoder))
+}
+
+fn skip_no_aac_reference(test: &str) {
+    println!(
+        "SKIP {test}: IAMF_REF_DECODER is present but its manifest does not declare \\
+         aac_reference_enabled. Re-run `IAMF_REFERENCE_ENABLE_AAC=1 bash \\
+         tools/build-reference.sh` on x86_64 Linux to enable this AAC-LC oracle clause."
+    );
 }
 
 /// The `iamf-tools` container image, pinned by digest in `REFERENCES.md`.
@@ -1681,6 +1720,142 @@ fn the_opus_fixture_is_conformant_to_the_pinned_libiamf_decode() {
         "Opus CONF-03 must report its explicit units/trims against the pinned libiamf decode, \
          never source PCM: {trim}"
     );
+}
+
+/// The pinned `libiamf@v1.1.0` AAC-LC vector is parsed and re-emitted by this
+/// crate before either external oracle sees it.  Keeping the source vector in
+/// the repository makes the parser/writer half an ordinary offline test; the
+/// decoder and strict-parser checks activate only where their pinned tools are
+/// available.
+#[test]
+fn the_pinned_aac_lc_vector_round_trips_through_both_reference_oracles() {
+    const AAC_LC_VECTOR: &[u8] = include_bytes!("fixtures/reference/test_000076_aac_lc.iamf");
+
+    let parsed = parse_sequence(AAC_LC_VECTOR).expect("the pinned AAC-LC vector parses");
+    let aac_configs = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::CodecConfig(obu) => Some(&obu.payload.decoder_config),
+            _ => None,
+        })
+        .filter(|config| matches!(config, DecoderConfig::AacLc(_)))
+        .count();
+    assert_eq!(
+        aac_configs, 1,
+        "the pinned vector must exercise typed AAC-LC parsing"
+    );
+
+    let mut reemitted = Vec::new();
+    write_parsed_sequence(&mut reemitted, &parsed).expect("the parsed AAC-LC vector re-emits");
+    assert_eq!(
+        reemitted, AAC_LC_VECTOR,
+        "the pinned v1.1.0 AAC-LC vector uses canonical framing; a parse/write pass must not alter it"
+    );
+
+    // A Temporal Delimiter is optional. This vector has one audio substream
+    // (`audio_substream_id == 0`) and no delimiters, so each Audio Frame is
+    // one complete Temporal Unit; a frame count is therefore the observable
+    // decoder_main reports.
+    let frame_substream_ids: Vec<u32> = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioFrame(obu) => Some(obu.payload.substream_id),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !frame_substream_ids.is_empty() && frame_substream_ids.iter().all(|&id| id == 0),
+        "the pinned AAC-LC vector must carry nonempty frames for exactly its one substream"
+    );
+    let units =
+        u64::try_from(frame_substream_ids.len()).expect("the AAC-LC temporal-unit count fits u64");
+
+    let Some(decoder) = reference_decoder() else {
+        skip_no_reference("the_pinned_aac_lc_vector_round_trips_through_both_reference_oracles");
+        return;
+    };
+    if !aac_reference_enabled(&decoder) {
+        skip_no_aac_reference(
+            "the_pinned_aac_lc_vector_round_trips_through_both_reference_oracles",
+        );
+        return;
+    }
+
+    let dir = scratch_dir("aac-lc-reference");
+    let input = dir.join("aac-lc-reemitted.iamf");
+    std::fs::write(&input, &reemitted).expect("the re-emitted AAC-LC vector is writable");
+    let output = dir.join("aac-lc-reemitted.wav");
+    let run = run_tool(
+        &decoder.display().to_string(),
+        &[
+            "-i0".to_owned(),
+            "-o3".to_owned(),
+            output.display().to_string(),
+            "-r".to_owned(),
+            "48000".to_owned(),
+            OutputLayout::SoundSystemA.flag().to_owned(),
+            "-d".to_owned(),
+            "16".to_owned(),
+            "-disable_limiter".to_owned(),
+            input.display().to_string(),
+        ],
+        &output,
+    );
+    let size = std::fs::metadata(&output)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    assert!(
+        size > BARE_WAV_HEADER_LEN,
+        "AAC-LC: libiamf wrote {size} bytes (a bare WAV header is {BARE_WAV_HEADER_LEN}); \\\n+         exit {:?} is recorded, not trusted. command: {}\\nstdout: {}\\nstderr: {}",
+        run.exit_code,
+        run.command,
+        run.stdout,
+        run.stderr
+    );
+    let wav = read_wav(&output).expect("libiamf's AAC-LC WAV parses");
+    assert_eq!(wav.channels, 2, "the pinned AAC-LC vector renders stereo");
+    assert_eq!(
+        wav.sample_rate, 48_000,
+        "the AAC-LC decoder must not resample"
+    );
+    assert!(
+        wav.frames > 0,
+        "libiamf must render AAC-LC samples, not only a WAV header"
+    );
+
+    if !iamf_tools_available() {
+        skip_no_container("the_pinned_aac_lc_vector_round_trips_through_both_reference_oracles");
+        return;
+    }
+    match run_decoder_main(&reemitted, &dir, units) {
+        Ok(observed) => println!(
+            "[aac-lc-reference] libiamf: {} frames; CONF-06: {observed}",
+            wav.frames
+        ),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+#[test]
+fn aac_reference_capability_requires_an_explicit_true_manifest_value() {
+    let enabled = "{\n  \"iamfdec_path\": \"/opt/iamfdec\",\n  \"aac_reference_enabled\": true,\n}";
+    assert!(aac_reference_enabled_from_manifest(enabled));
+    assert_eq!(manifest_iamfdec_path(enabled), Some("/opt/iamfdec"));
+    assert!(manifest_has_aac_reference_for_decoder(
+        enabled,
+        Path::new("/opt/iamfdec")
+    ));
+    assert!(!manifest_has_aac_reference_for_decoder(
+        enabled,
+        Path::new("/foreign/iamfdec")
+    ));
+    assert!(!aac_reference_enabled_from_manifest(
+        "{\n  \"aac_reference_enabled\": false,\n}"
+    ));
+    assert_eq!(manifest_iamfdec_path("{}"), None);
+    assert!(!aac_reference_enabled_from_manifest("{}"));
 }
 
 /// **CONF-04 on the structure-only fixture.**

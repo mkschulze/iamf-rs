@@ -182,7 +182,7 @@ fn canonical_aac_lc_config_is_the_v1_1_descriptor() -> iamf::Result<()> {
         ),
         hex!(
             "00 1c 02 6d 70 34 61 80 08 ff ff
-             04 0d 40 15 00 00 00 00 00 00 00 00 00 00
+             04 11 40 15 00 00 00 00 00 00 00 00 00 00
              00 05 02 11 90"
         ),
     );
@@ -349,7 +349,7 @@ fn parsed_reserved_aac_sampling_frequency_indices_are_diagnosed() -> iamf::Resul
 fn short_aac_decoder_config_stays_raw_and_byte_exact() {
     let bytes = hex!(
         "00 1b 02 6d 70 34 61 80 08 ff ff
-         04 0d 40 15 00 00 00 00 00 00 00 00 00 00
+         04 11 40 15 00 00 00 00 00 00 00 00 00 00
          00 05 02 11"
     );
     let mut reader = BitCursor::new(&bytes);

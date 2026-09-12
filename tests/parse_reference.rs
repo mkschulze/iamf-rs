@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::Location;
 use iamf::obu::{
-    AudioElementParam, DecoderConfig, DurationFields, FlacDecoderConfig, OpusDecoderConfig,
-    ParamDefinition, ParameterData, ReconGainElement, ReconGainInfoParameterData,
-    read_codec_config, read_obu_with, write_codec_config, write_obu_with,
+    AacLcDecoderConfig, AudioElementParam, DecoderConfig, DurationFields, FlacDecoderConfig,
+    OpusDecoderConfig, ParamDefinition, ParameterData, ReconGainElement,
+    ReconGainInfoParameterData, read_codec_config, read_obu_with, write_codec_config,
+    write_obu_with,
 };
 use iamf::sequence::{SequenceObu, parse_sequence, write_parsed_sequence};
 use reference_expectations::{
@@ -61,9 +62,9 @@ fn expectation_inventory_is_a_bijection() {
     expected.sort();
     expected.dedup();
 
-    assert_eq!(POSITIVE_EXPECTATIONS.len(), 37, "positive ledger count");
+    assert_eq!(POSITIVE_EXPECTATIONS.len(), 38, "positive ledger count");
     assert_eq!(NEGATIVE_EXPECTATIONS.len(), 2, "negative ledger count");
-    assert_eq!(original_len, 39, "37 positives plus two negatives");
+    assert_eq!(original_len, 40, "38 positives plus two negatives");
     assert_eq!(expected.len(), original_len, "duplicate expectation path");
     assert_eq!(actual, expected, "missing or unexpected reference fixture");
     assert!(
@@ -269,6 +270,44 @@ fn every_reference_opus_config_is_typed_and_a_ten_byte_prefix_stays_raw() {
         write_obu_with(&mut writer, &parsed, write_codec_config).expect("raw Opus rewrites");
         assert_eq!(writer.finish().expect("whole-byte OBU"), short_obu);
     }
+}
+
+#[test]
+fn the_pinned_aac_lc_reference_config_is_typed_with_its_exact_descriptor_fields() {
+    let sequence = parse_sequence(&fixture_bytes("test_000076_aac_lc.iamf"))
+        .expect("pinned AAC-LC vector parses");
+    let config = sequence
+        .obus
+        .iter()
+        .find_map(|obu| match obu {
+            SequenceObu::CodecConfig(obu) => Some(&obu.payload),
+            _ => None,
+        })
+        .expect("AAC-LC vector carries a Codec Config");
+
+    assert_eq!(config.codec_config_id, 200);
+    assert_eq!(config.codec_id, *b"mp4a");
+    assert_eq!(config.num_samples_per_frame, 1_024);
+    assert_eq!(config.audio_roll_distance, -1);
+    assert_eq!(
+        config.aac_lc_config(),
+        Some(&AacLcDecoderConfig {
+            object_type_indication: 0x40,
+            stream_type: 5,
+            upstream: false,
+            buffer_size_db: 0,
+            max_bitrate: 0,
+            avg_bitrate: 0,
+            audio_object_type: 2,
+            sampling_frequency_index: 3,
+            channel_configuration: 2,
+            frame_length_flag: false,
+            depends_on_core_coder: false,
+            extension_flag: false,
+        })
+    );
+    assert!(config.trailing.is_empty());
+    assert!(config.validate().is_empty());
 }
 
 #[test]

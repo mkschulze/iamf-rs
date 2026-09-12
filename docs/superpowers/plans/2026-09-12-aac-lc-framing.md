@@ -53,7 +53,7 @@
               write_codec_config,
           ),
           hex!("00 1c 02 6d 70 34 61 80 08 ff ff
-                04 0d 40 15 00 00 00 00 00 00 00 00 00 00
+                04 11 40 15 00 00 00 00 00 00 00 00 00 00
                 05 02 11 90"),
       );
       assert_eq!(config.aac_lc_config().expect("typed AAC-LC").sampling_frequency_index, 3);
@@ -68,7 +68,7 @@
   #[test]
   fn short_aac_decoder_config_stays_raw_and_byte_exact() {
       let bytes = hex!("00 1b 02 6d 70 34 61 80 08 ff ff
-                        04 0d 40 15 00 00 00 00 00 00 00 00 00 00
+                        04 11 40 15 00 00 00 00 00 00 00 00 00 00
                         05 02 11");
       let mut reader = BitCursor::new(&bytes);
       let parsed = read_obu_with(&mut reader, read_codec_config).expect("short AAC parses");
@@ -150,7 +150,7 @@
   }
   ```
 
-  Add the 13-entry rate/index conversion helper, a 19-byte fixed canonical descriptor reader/writer, and `CodecConfig::aac_lc`. The canonical descriptor must be `04 0d 40 15 00 00 00 00 00 00 00 00 00 00 05 02` followed by the two-byte AAC AudioSpecificConfig. Parse `mp4a` as typed only when its descriptor tags and lengths are `0x04/13` and `0x05/2`; otherwise drain it as the existing raw variant. Match `AacLc` in all accessor, write, roll-distance, validation, and exhaustive-match branches. `validate()` must report wrong fixed semantic values and wrong 1024-frame/negative-one-roll IAMF fields without changing parsed data.
+  Add the 13-entry rate/index conversion helper, a 19-byte fixed canonical descriptor reader/writer, and `CodecConfig::aac_lc`. The canonical descriptor must be `04 11 40 15 00 00 00 00 00 00 00 00 00 00 05 02` followed by the two-byte AAC AudioSpecificConfig. `0x11` is the DecoderConfigDescriptor payload length: 13 fixed bytes plus the four-byte `DecSpecificInfo` descriptor. Parse `mp4a` as typed only when its descriptor tags and lengths are `0x04/17` and `0x05/2`; otherwise drain it as the existing raw variant. Match `AacLc` in all accessor, write, roll-distance, validation, and exhaustive-match branches. `validate()` must report wrong fixed semantic values and wrong 1024-frame/negative-one-roll IAMF fields without changing parsed data.
 
   In `src/obu/mod.rs`, re-export `AacLcDecoderConfig`. In `src/dump.rs`, print every public AAC-LC descriptor field using the existing field helper.
 

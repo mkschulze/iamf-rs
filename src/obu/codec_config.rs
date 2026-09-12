@@ -52,7 +52,8 @@ const OPUS_DECODER_CONFIG_BYTES: usize = 11;
 const OPUS_SAMPLE_RATE: u32 = 48_000;
 
 /// The fixed MPEG-4 DecoderConfigDescriptor and AudioSpecificConfig size IAMF
-/// AAC-LC carries: `04 0d` + 13 bytes, then `05 02` + two bytes.
+/// AAC-LC carries: `04 11` + 17 bytes, including `05 02` and the two-byte
+/// AudioSpecificConfig.
 const AAC_LC_DECODER_CONFIG_BYTES: usize = 19;
 const AAC_LC_OBJECT_TYPE_INDICATION: u8 = 0x40;
 const AAC_LC_STREAM_TYPE: u8 = 0x05;
@@ -164,7 +165,7 @@ pub struct OpusDecoderConfig {
 /// The fixed fields of IAMF's AAC-LC MPEG-4 `DecoderConfigDescriptor`.
 ///
 /// The descriptor tags and lengths are deliberately not exposed: a typed
-/// value always writes the IAMF-required `04 0d ... 05 02` form. Parsed values
+/// value always writes the IAMF-required `04 11 ... 05 02` form. Parsed values
 /// retain the semantic fields even when they violate IAMF constraints so that
 /// `validate()` can diagnose them without changing their bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -923,7 +924,7 @@ fn aac_lc_sampling_frequency_index(sample_rate: u32) -> Option<u8> {
 fn is_aac_lc_descriptor(descriptor: &[u8]) -> bool {
     matches!(
         descriptor,
-        [0x04, 13, _, stream_and_flags, .., 0x05, 2, _, _]
+        [0x04, 17, _, stream_and_flags, .., 0x05, 2, _, _]
             if descriptor.len() == AAC_LC_DECODER_CONFIG_BYTES && stream_and_flags & 1 == 1
     )
 }
@@ -971,7 +972,11 @@ fn read_aac_lc_decoder_config(descriptor: &[u8]) -> Result<DecoderConfig> {
 /// two-byte `AudioSpecificConfig` faithfully from the typed semantic fields.
 fn write_aac_lc_decoder_config(w: &mut BitWriter, v: &AacLcDecoderConfig) -> Result<()> {
     w.write_unsigned(0x04, 8)?;
-    w.write_unsigned(13, 8)?;
+    // DecoderConfigDescriptor's length covers objectTypeIndication,
+    // streamType/upstream/reserved, bufferSizeDB, max/avg bitrate and the
+    // complete DecSpecificInfo descriptor (`05 02` plus its two-byte ASC):
+    // 1 + 1 + 3 + 4 + 4 + 4 = 17.
+    w.write_unsigned(17, 8)?;
     w.write_unsigned(u64::from(v.object_type_indication), 8)?;
     w.write_unsigned(u64::from(v.stream_type), 6)?;
     w.write_bool(v.upstream)?;

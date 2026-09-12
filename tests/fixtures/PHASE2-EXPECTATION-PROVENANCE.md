@@ -191,7 +191,7 @@ least 128; manual addition lands on every offset and final length above.
   the repeated id 101 is retained exactly rather than deduplicated.
 
 These hand-decodes are the sole independent source for the four unpaired Rust
-expectation rows.  The other 33 positive rows are grounded in their paired
+expectation rows.  The other 34 positive rows are grounded in their paired
 `libiamf@v1.1.0` textprotos. `test_000129` is excluded because its paired
 pinned textproto explicitly says `is_valid: false` and
 `invalidates_bitstream: true`; its injected Audio Element structurally
