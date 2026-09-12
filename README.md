@@ -40,9 +40,10 @@ handles to deterministic IAMF wire IDs, so host IDs do not cross this crate boun
 
 `Encoder::start(W: Write)` writes the frozen descriptor prologue to a caller-owned sink. Each
 `TemporalUnitInput` is fully checked before it is appended, then `finish(self)` consumes the writer
-and returns the sink. Frames are either LPCM bytes or already encoded FLAC/Opus access units. The
-caller also supplies loudness values and already-decimated IAMF parameter blocks; this crate carries
-and validates them but does not derive them.
+and returns the sink. Frames are either LPCM bytes or pre-encoded FLAC, Opus, or AAC-LC access units.
+For AAC-LC, each IAMF Audio Frame carries one pre-encoded `raw_data_block()`; this crate neither
+encodes nor decodes AAC. The caller also supplies loudness values and already-decimated IAMF
+parameter blocks; this crate carries and validates them but does not derive them.
 
 The production adapter belongs to the calling application, which filters its
 immutable delivery snapshot and owns delivery UI state, source identity,
