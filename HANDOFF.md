@@ -10,6 +10,85 @@ contract take precedence.
 
 ---
 
+## Current Phase 4 consumer contract
+
+The Phase 4 public surface is the only seam a production Parallax adapter needs. It accepts a
+filtered immutable delivery snapshot that the adapter has already translated into ordered IAMF
+declarations and caller-local opaque handles. No Parallax type, persistent ID, Preview/Export-Include
+state, source position, terminal, or lineage enters `iamf-rs`.
+
+| `iamf-rs` owns | The Parallax adapter owns |
+|---|---|
+| IAMF v1.1 wire model, parsing, deterministic wire-ID allocation, profile selection, and static descriptor validation | Filtering the delivery snapshot; persistent IDs; delivery UI/session state; and translation to caller-local handles |
+| `EncoderBuilder::build()` and the immutable `Encoder`/`IdManifest` handoff | Prepared bed/HOA PCM, panning, HOA encoding, source/terminal semantics, and timeline policy |
+| Framing and validation of LPCM bytes plus externally encoded FLAC/Opus access units | Codec encoding, resampling, loudness measurement, and supplying loudness values |
+| Pre-decimated IAMF parameter-block validation and append-only standalone IA Sequence writing | Parameter scheduling/decimation, preview rendering, and export/carrier orchestration |
+
+### Lifecycle and exact failure boundary
+
+1. Declare codec configurations, elements/substreams, mix-gain parameters, and ordered Mix
+   Presentations with `EncoderBuilder`. The builder supports single-layer channel elements and
+   Ambisonics-mono scene elements at the high-level convenience layer; elements and substreams may
+   be shared across Presentations.
+2. Call `build()`. It validates descriptor syntax and references, layouts and profile limits,
+   codec/frame-plan compatibility, parameter definitions, and ID capacity, then returns immutable
+   descriptors and the deterministic handle-to-wire-ID `IdManifest`. Each Presentation is assessed
+   separately and the sequence uses the highest required minimum profile rather than a union of
+   unrelated Presentations.
+3. Call `start` with a plain `W: Write` sink. The frozen descriptor prologue is written immediately.
+4. Submit one complete `TemporalUnitInput` at a time. Its frame order and coverage, codec kind,
+   LPCM byte/sample count, trimming, and parameter identity/duration are preflighted before the unit
+   is appended. A typed input failure writes none of that unit.
+5. Call `finish(self)` to flush and recover the sink. A partial sink failure is observable and
+   leaves the writer poisoned.
+
+All failures are `iamf::Error` with a `Location` and the non-exhaustive `ErrorKind`. The direct
+static-boundary cases are `UnknownCodecConfigHandle`, `UnknownAudioElementHandle`,
+`UnknownSubstreamHandle`, `UnknownParameterHandle`, `InvalidDescriptorReference`,
+`DuplicateDeclaration`, `WireIdAllocationExhausted`, and validation kinds such as
+`UnsupportedLayout` or `ProfileNotFound`. Temporal submission uses
+`UnknownTemporalSubstreamHandle`, `UnknownTemporalParameterHandle`, `MissingTemporalSubstream`,
+`DuplicateTemporalSubstream`, `TemporalSubstreamOrderMismatch`, `FrameCodecMismatch`,
+`LpcmFrameByteAlignment`, `LpcmFrameSampleCountMismatch`, `TemporalUnitTrimMismatch`,
+`ParameterIdMismatch`, and `SubblockDurationMismatch` (plus the underlying parameter writer's
+typed validation errors). Sink operations use `SinkWrite` and `SequenceWriterPoisoned`.
+
+### Codec, parameter, and dependency contract
+
+LPCM is supplied as IAMF-format sample bytes. FLAC and Opus are accepted only as pre-encoded access
+units matching the frozen codec configuration; this crate does not invoke a codec implementation.
+Loudness values and supported IAMF mix/demixing/recon-gain blocks are externally supplied. Parameter
+blocks are already decimated IAMF data, not source-position curves, so `iamf-rs` has no timeline or
+interpolation policy.
+
+The production API, including `encoder`, is available with `--no-default-features`. Its normal
+non-proc-macro graph is exactly `iamf` and `thiserror`:
+
+```text
+cargo build --locked --no-default-features
+cargo tree --locked -e normal,no-proc-macro --prefix none
+```
+
+The latter command must print only `iamf` and `thiserror`. Codec, DSP, renderer, decoder,
+integration, and Parallax dependencies are not part of that graph.
+
+### Deferred responsibilities
+
+This release does not add a Parallax adapter or dependency; Preview/Export-Include state; source
+positions; rendering; codec encoding; resampling; loudness measurement; timeline interpolation;
+native decoding; ISO-BMFF/carrier support; high-level scalable-channel, demixing/recon-gain, or
+Ambisonics-projection authoring. Existing low-level wire forms remain available for parsing and exact
+round trips where already modelled.
+
+### Public-example audit
+
+The public documentation contains one Rust snippet, in `README.md`, and it names only
+`iamf::encoder::EncoderBuilder`. It contains no Parallax import or name, source-position input,
+Preview/Export-Include field, codec-encoder dependency, or renderer dependency. The prose above
+names the production Parallax adapter and its ownership deliberately; it is not a Rust API example.
+
+---
+
 ## 1. What this is, and what it is not
 
 **A Rust implementation of IAMF — the Immersive Audio Model and Formats bitstream.** An OBU

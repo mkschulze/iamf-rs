@@ -14,6 +14,36 @@ Element reconstruction. No Parallax type, renderer or decoder implementation bel
 
 Targets **IAMF v1.1.0** (`iamf::SPEC_VERSION`).
 
+## Consumer boundary
+
+The public export seam is deliberately host-independent. A consumer first declares an ordered,
+static IAMF configuration with `EncoderBuilder`; `build()` validates that complete declaration set
+and returns an immutable `Encoder` plus an `IdManifest`. The manifest maps only caller-local opaque
+handles to deterministic IAMF wire IDs, so host IDs do not cross this crate boundary.
+
+`Encoder::start(W: Write)` writes the frozen descriptor prologue to a caller-owned sink. Each
+`TemporalUnitInput` is fully checked before it is appended, then `finish(self)` consumes the writer
+and returns the sink. Frames are either LPCM bytes or already encoded FLAC/Opus access units. The
+caller also supplies loudness values and already-decimated IAMF parameter blocks; this crate carries
+and validates them but does not derive them.
+
+The production adapter belongs to Parallax, which filters its immutable delivery snapshot and owns
+delivery UI state, source/terminal identity, panning/HOA preparation, codec encoding, resampling,
+loudness measurement, timeline interpolation, preview rendering, and carrier/container work. This
+crate has no Parallax dependency and performs none of those responsibilities.
+
+Public Rust snippets intentionally use only this crate's surface. In particular, they contain no
+Parallax import or name, source-position model, preview/include field, codec-encoder dependency, or
+renderer dependency:
+
+```rust
+let builder = iamf::encoder::EncoderBuilder::new();
+```
+
+The no-default-features contract keeps this builder and the complete production bitstream API
+available. `thiserror` is the only normal non-proc-macro dependency; see the reproducible command in
+[HANDOFF.md](HANDOFF.md).
+
 ## Reference implementations
 
 The correctness claim is not "our tests pass" — it is that a file this crate

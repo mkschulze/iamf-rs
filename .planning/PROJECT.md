@@ -32,16 +32,17 @@ but not sufficient for conformance.** The real exit criterion is a byte-diff aga
 - [x] Context-aware parser, exact known/unknown round trips and bounded fuzzing corpus
 - [x] Deterministic profile/layout/loudness primitives and four-target byte-identity gates
 - [x] LPCM plus dependency-free FLAC/Opus configuration and framing of externally generated packets
+- [x] Host-independent `EncoderBuilder` with immutable static configuration and deterministic caller-handle→wire-ID manifest (Phase 4)
+- [x] Presentation-local global minimum-profile selection including known expanded layouts (Phase 4)
+- [x] High-level multiple-Presentation/shared-element construction for single-layer channel and Ambisonics-mono scene elements (Phase 4)
+- [x] Typed LPCM/external-FLAC/external-Opus temporal input with transactional validation and append-only `W: Write` (Phase 4)
+- [x] Pre-decimated IAMF parameter blocks with no caller timeline or Source-position model (Phase 4)
+- [x] Parallax-shaped public-contract fixtures without a Parallax dependency (Phase 4)
+- [x] Minimal no-default-features production surface with no linked codec/integration dependency (Phase 4)
 
 ### Active
 
-- [ ] Host-independent `EncoderBuilder` with immutable static configuration and deterministic caller-handle→wire-ID manifest
-- [ ] Presentation-local global minimum-profile selection including known expanded layouts
-- [ ] High-level multiple-Presentation/shared-element construction for single-layer channel and Ambisonics-mono scene elements
-- [ ] Typed LPCM/external-FLAC/external-Opus temporal input with transactional validation and append-only `W: Write`
-- [ ] Pre-decimated IAMF parameter blocks with no caller timeline or Source-position model
-- [ ] Parallax-shaped public-contract fixtures without a Parallax dependency
-- [ ] Minimal no-default-features production surface with no linked codec/integration dependency
+- *(No active v1 implementation requirements; Phase 4 completed 2026-09-12.)*
 
 ### Out of Scope
 
@@ -284,4 +285,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-08 after settling spec version, licence and parameter tick rate*
+*Last updated: 2026-09-12 after Phase 4 consumer-boundary completion*

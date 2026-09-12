@@ -135,14 +135,14 @@ Plans:
   6. `cargo build --no-default-features` retains the complete production bitstream/builder surface with no linked codec or integration dependency; the documented proc-macro-only `thiserror` graph remains the sole qualification to “dependency-free”. *(API-11)*
 
 **Research**: No — Phase 3 and the 2026-09-11 Parallax integration-contract audit settle the ownership, codec, timing and Presentation questions
-**Plans**: 4 plans
+**Plans**: 4/4 plans executed
 
 Plans:
 
-- [ ] 04-01: Host-independent `EncoderBuilder`, immutable built configuration, deterministic handle→wire-ID manifest and per-Presentation global minimum-profile selection including known expanded layouts
-- [ ] 04-02: Typed LPCM/external-FLAC/external-Opus frame submission, pre-decimated parameter blocks, transactional temporal-unit validation and append-only `W: Write` lifecycle
-- [ ] 04-03: Multiple-Presentation/shared-element authoring surface plus Parallax-shaped public-contract fixtures for Stereo, mixed channel+HOA, gains, loudness and filtered export selection
-- [ ] 04-04: Minimal production feature/dependency surface, consumer handoff and synchronization of Project/README/API documentation without introducing a Parallax dependency
+- [x] 04-01: Host-independent `EncoderBuilder`, immutable built configuration, deterministic handle→wire-ID manifest and per-Presentation global minimum-profile selection including known expanded layouts
+- [x] 04-02: Typed LPCM/external-FLAC/external-Opus frame submission, pre-decimated parameter blocks, transactional temporal-unit validation and append-only `W: Write` lifecycle
+- [x] 04-03: Multiple-Presentation/shared-element authoring surface plus Parallax-shaped public-contract fixtures for Stereo, mixed channel+HOA, gains, loudness and filtered export selection
+- [x] 04-04: Minimal production feature/dependency surface, consumer handoff and synchronization of Project/README/API documentation without introducing a Parallax dependency
 
 ## Deferred Beyond v1
 
@@ -163,7 +163,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Conformant LPCM Bitstream | 10/10 | Complete | 2026-09-09 |
 | 2. Parser, Round-Trip and Fuzzing | 7/7 | Complete | 2026-09-09 |
 | 3. FLAC and Opus Framing | 8/8 | Complete | 2026-09-11 |
-| 4. Parallax-Facing API | 0/4 | Not started | - |
+| 4. Parallax-Facing API | 4/4 | Complete | 2026-09-12 |
 
 ---
 *Roadmap created: 2026-09-08*

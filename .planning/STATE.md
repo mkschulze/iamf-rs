@@ -3,37 +3,37 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 04
 current_phase_name: Parallax-Facing API
-status: ready_to_plan
-stopped_at: Phase 03 complete; ready to plan Phase 04
-last_updated: "2026-09-11T00:00:00Z"
-last_activity: 2026-09-11
-last_activity_desc: Phase 03 complete — four-target CI and both pinned external reference gates pass for FLAC and Opus framing
-state_head: 324b046
+status: complete
+stopped_at: Phase 04 complete; consumer handoff and status synchronization recorded
+last_updated: "2026-09-12T00:00:00Z"
+last_activity: 2026-09-12
+last_activity_desc: Phase 04 complete — host-independent encoder boundary, contract fixtures, minimal surface proof, and consumer handoff recorded
+state_head: 81dd9b6
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 29
-  completed_plans: 25
-  percent: 86
+  completed_plans: 29
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-08)
+See: .planning/PROJECT.md (updated 2026-09-12)
 
 **Core value:** A `.iamf` file this crate writes is read back by the reference decoder `libiamf` with the PCM sample-identical — and accepted by `iamf-tools`' stricter parser, because `libiamf` alone is a permissive oracle.
-**Current focus:** Phase 04 — Parallax-Facing API
+**Current focus:** v1 complete
 
 ## Current Position
 
-Phase: 04 (Parallax-Facing API) — READY TO PLAN
-Plan: 0 of 4
-Status: Phase 03 is complete; ready to plan 04-01
-Last activity: 2026-09-11 — four-target CI and both pinned external reference gates passed for FLAC and Opus framing
+Phase: 04 (Parallax-Facing API) — COMPLETE
+Plan: 4 of 4
+Status: v1 implementation complete; Phase 4 consumer handoff recorded
+Last activity: 2026-09-12 — Phase 4 adapter boundary and release handoff synchronized
 
-Progress: [░░░░░░░░░░] 0% of Phase 04 plans
+Progress: [██████████] 100% of Phase 04 plans
 
 ## Performance Metrics
 
@@ -132,10 +132,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Plan Phase 4 Plan 04-01: host-independent builder, immutable configuration, deterministic handle-to-wire-ID manifest and global profile selection.
-- Plan Phase 4 Plan 04-02: typed external frame submission, transactional temporal validation and append-only writer lifecycle.
-- Plan Phase 4 Plan 04-03: multiple-Presentation/shared-element surface and Parallax-shaped contract fixtures.
-- Plan Phase 4 Plan 04-04: minimal production dependency surface and consumer documentation/handoff.
+- *(No pending v1 implementation plans.)*
 
 ### Blockers/Concerns
 
@@ -163,6 +160,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-11T00:00:00Z
-Stopped at: Phase 03 complete; ready to plan Phase 04
+Last session: 2026-09-12T00:00:00Z
+Stopped at: Phase 04 complete; v1 implementation handoff recorded
 Resume file: .planning/ROADMAP.md
