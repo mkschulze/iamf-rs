@@ -7,9 +7,9 @@ use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
 use crate::model::{DescriptorSet, Profile, select_minimum_profile};
 use crate::obu::{
-    AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
-    CodecConfig, DecoderConfig, IaSequenceHeader, MixGainParamDefinition, MixPresentation, Obu,
-    ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
+    AudioElement, AudioElementType, AudioFrame, CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM,
+    CODEC_ID_OPUS, CodecConfig, DecoderConfig, IaSequenceHeader, MixGainParamDefinition,
+    MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::io::Write;
@@ -431,6 +431,7 @@ impl<W: Write> EncodingWriter<W> {
             | (DecoderConfig::Flac(_), FrameInput::Opus(_))
             | (DecoderConfig::Opus(_), FrameInput::Lpcm(_))
             | (DecoderConfig::Opus(_), FrameInput::Flac(_))
+            | (DecoderConfig::AacLc(_), _)
             | (DecoderConfig::Raw { .. }, _) => {
                 Err(temporal_input(ErrorKind::FrameCodecMismatch, "frame.codec"))
             }
@@ -819,6 +820,7 @@ impl EncoderBuilder {
                 DecoderConfig::Lpcm(_) => CODEC_ID_LPCM,
                 DecoderConfig::Flac(_) => CODEC_ID_FLAC,
                 DecoderConfig::Opus(_) => CODEC_ID_OPUS,
+                DecoderConfig::AacLc(_) => CODEC_ID_AAC,
                 DecoderConfig::Raw { .. } => return Err(invalid("decoder_config")),
             };
             if config.codec_id != expected {

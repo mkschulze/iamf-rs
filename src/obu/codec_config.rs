@@ -38,7 +38,7 @@ pub const CODEC_ID_LPCM: [u8; 4] = *b"ipcm";
 pub const CODEC_ID_OPUS: [u8; 4] = *b"Opus";
 /// `fLaC` — FLAC. Typed as [`FlacDecoderConfig`] when its prefix is complete.
 pub const CODEC_ID_FLAC: [u8; 4] = *b"fLaC";
-/// `mp4a` — AAC-LC. Modelled as an opaque decoder config.
+/// `mp4a` — AAC-LC.
 pub const CODEC_ID_AAC: [u8; 4] = *b"mp4a";
 
 /// `kMaxPracticalFrameSize` — `iamf-tools` rejects above this.
@@ -50,6 +50,23 @@ const VALID_SAMPLE_RATES: [u32; 5] = [16_000, 32_000, 44_100, 48_000, 96_000];
 
 const OPUS_DECODER_CONFIG_BYTES: usize = 11;
 const OPUS_SAMPLE_RATE: u32 = 48_000;
+
+/// The fixed MPEG-4 DecoderConfigDescriptor and AudioSpecificConfig size IAMF
+/// AAC-LC carries: `04 0d` + 13 bytes, then `05 02` + two bytes.
+const AAC_LC_DECODER_CONFIG_BYTES: usize = 19;
+const AAC_LC_OBJECT_TYPE_INDICATION: u8 = 0x40;
+const AAC_LC_STREAM_TYPE: u8 = 0x05;
+const AAC_LC_AUDIO_OBJECT_TYPE: u8 = 2;
+const AAC_LC_CHANNEL_CONFIGURATION: u8 = 2;
+const AAC_LC_NUM_SAMPLES_PER_FRAME: u32 = 1024;
+const AAC_LC_AUDIO_ROLL_DISTANCE: i16 = -1;
+
+/// MPEG-4 `samplingFrequencyIndex` values other than the three reserved
+/// values 13 through 15.
+const AAC_LC_SAMPLE_RATES: [u32; 13] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+    7_350,
+];
 
 /// A FLAC metadata header followed by its fixed-size STREAMINFO payload.
 const FLAC_DECODER_CONFIG_BYTES: usize = 38;
@@ -143,6 +160,28 @@ pub struct OpusDecoderConfig {
     pub mapping_family: u8,
 }
 
+/// The fixed fields of IAMF's AAC-LC MPEG-4 `DecoderConfigDescriptor`.
+///
+/// The descriptor tags and lengths are deliberately not exposed: a typed
+/// value always writes the IAMF-required `04 0d ... 05 02` form. Parsed values
+/// retain the semantic fields even when they violate IAMF constraints so that
+/// `validate()` can diagnose them without changing their bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AacLcDecoderConfig {
+    pub object_type_indication: u8,
+    pub stream_type: u8,
+    pub upstream: bool,
+    pub buffer_size_db: u32,
+    pub max_bitrate: u32,
+    pub avg_bitrate: u32,
+    pub audio_object_type: u8,
+    pub sampling_frequency_index: u8,
+    pub channel_configuration: u8,
+    pub frame_length_flag: bool,
+    pub depends_on_core_coder: bool,
+    pub extension_flag: bool,
+}
+
 /// The `decoder_config` blob, which is the whole remainder of the payload.
 ///
 /// `Raw` preserves unsupported codecs and structurally short known configs.
@@ -155,6 +194,8 @@ pub enum DecoderConfig {
     Flac(FlacDecoderConfig),
     /// `codec_id == "Opus"` with a complete 11-byte prefix.
     Opus(OpusDecoderConfig),
+    /// `codec_id == "mp4a"` with IAMF's complete 19-byte descriptor shape.
+    AacLc(AacLcDecoderConfig),
     /// Any other `codec_id`, preserved verbatim.
     Raw {
         /// The `codec_id` these bytes belong to.
@@ -211,7 +252,10 @@ impl CodecConfig {
     pub const fn lpcm_config(&self) -> Option<&LpcmDecoderConfig> {
         match &self.decoder_config {
             DecoderConfig::Lpcm(cfg) => Some(cfg),
-            DecoderConfig::Flac(_) | DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => None,
+            DecoderConfig::Flac(_)
+            | DecoderConfig::Opus(_)
+            | DecoderConfig::AacLc(_)
+            | DecoderConfig::Raw { .. } => None,
         }
     }
 
@@ -286,7 +330,10 @@ impl CodecConfig {
     pub const fn flac_config(&self) -> Option<&FlacDecoderConfig> {
         match &self.decoder_config {
             DecoderConfig::Flac(cfg) => Some(cfg),
-            DecoderConfig::Lpcm(_) | DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => None,
+            DecoderConfig::Lpcm(_)
+            | DecoderConfig::Opus(_)
+            | DecoderConfig::AacLc(_)
+            | DecoderConfig::Raw { .. } => None,
         }
     }
 
@@ -332,7 +379,61 @@ impl CodecConfig {
     pub const fn opus_config(&self) -> Option<&OpusDecoderConfig> {
         match &self.decoder_config {
             DecoderConfig::Opus(cfg) => Some(cfg),
-            DecoderConfig::Lpcm(_) | DecoderConfig::Flac(_) | DecoderConfig::Raw { .. } => None,
+            DecoderConfig::Lpcm(_)
+            | DecoderConfig::Flac(_)
+            | DecoderConfig::AacLc(_)
+            | DecoderConfig::Raw { .. } => None,
+        }
+    }
+
+    /// Construct IAMF's canonical AAC-LC descriptor for one of MPEG-4's
+    /// thirteen non-reserved sampling-frequency indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::SampleRateNotSupportedByCodec`] if `sample_rate`
+    /// has no non-reserved MPEG-4 sampling-frequency index.
+    pub fn aac_lc(codec_config_id: u32, sample_rate: u32) -> Result<Self> {
+        let sampling_frequency_index =
+            aac_lc_sampling_frequency_index(sample_rate).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::SampleRateNotSupportedByCodec,
+                    Location::Field("sample_rate"),
+                )
+            })?;
+        let decoder_config = DecoderConfig::AacLc(AacLcDecoderConfig {
+            object_type_indication: AAC_LC_OBJECT_TYPE_INDICATION,
+            stream_type: AAC_LC_STREAM_TYPE,
+            upstream: false,
+            buffer_size_db: 0,
+            max_bitrate: 0,
+            avg_bitrate: 0,
+            audio_object_type: AAC_LC_AUDIO_OBJECT_TYPE,
+            sampling_frequency_index,
+            channel_configuration: AAC_LC_CHANNEL_CONFIGURATION,
+            frame_length_flag: false,
+            depends_on_core_coder: false,
+            extension_flag: false,
+        });
+        Ok(Self {
+            codec_config_id,
+            codec_id: CODEC_ID_AAC,
+            num_samples_per_frame: AAC_LC_NUM_SAMPLES_PER_FRAME,
+            audio_roll_distance: AAC_LC_AUDIO_ROLL_DISTANCE,
+            decoder_config,
+            trailing: Vec::new(),
+        })
+    }
+
+    /// The `AacLcDecoderConfig`, when this is one.
+    #[must_use]
+    pub const fn aac_lc_config(&self) -> Option<&AacLcDecoderConfig> {
+        match &self.decoder_config {
+            DecoderConfig::AacLc(cfg) => Some(cfg),
+            DecoderConfig::Lpcm(_)
+            | DecoderConfig::Flac(_)
+            | DecoderConfig::Opus(_)
+            | DecoderConfig::Raw { .. } => None,
         }
     }
 
@@ -561,12 +662,94 @@ impl CodecConfig {
                 ));
             }
         }
+        if let Some(aac_lc) = self.aac_lc_config() {
+            if aac_lc.object_type_indication != AAC_LC_OBJECT_TYPE_INDICATION {
+                findings.push(field(
+                    "object_type_indication",
+                    format!(
+                        "object_type_indication is {:#04x}, expected {AAC_LC_OBJECT_TYPE_INDICATION:#04x}",
+                        aac_lc.object_type_indication
+                    ),
+                ));
+            }
+            if aac_lc.stream_type != AAC_LC_STREAM_TYPE {
+                findings.push(field(
+                    "stream_type",
+                    format!(
+                        "stream_type is {}, expected {AAC_LC_STREAM_TYPE}",
+                        aac_lc.stream_type
+                    ),
+                ));
+            }
+            if aac_lc.upstream {
+                findings.push(field(
+                    "upstream",
+                    "upstream is true, expected false".to_owned(),
+                ));
+            }
+            if aac_lc.audio_object_type != AAC_LC_AUDIO_OBJECT_TYPE {
+                findings.push(field(
+                    "audio_object_type",
+                    format!(
+                        "audio_object_type is {}, expected {AAC_LC_AUDIO_OBJECT_TYPE}",
+                        aac_lc.audio_object_type
+                    ),
+                ));
+            }
+            if aac_lc.sampling_frequency_index >= AAC_LC_SAMPLE_RATES.len() as u8 {
+                findings.push(field(
+                    "sampling_frequency_index",
+                    format!(
+                        "sampling_frequency_index is {}, outside 0..={}",
+                        aac_lc.sampling_frequency_index,
+                        AAC_LC_SAMPLE_RATES.len().saturating_sub(1)
+                    ),
+                ));
+            }
+            if aac_lc.channel_configuration != AAC_LC_CHANNEL_CONFIGURATION {
+                findings.push(field(
+                    "channel_configuration",
+                    format!(
+                        "channel_configuration is {}, expected {AAC_LC_CHANNEL_CONFIGURATION}",
+                        aac_lc.channel_configuration
+                    ),
+                ));
+            }
+            if aac_lc.frame_length_flag {
+                findings.push(field(
+                    "frame_length_flag",
+                    "frame_length_flag is true, expected false".to_owned(),
+                ));
+            }
+            if aac_lc.depends_on_core_coder {
+                findings.push(field(
+                    "depends_on_core_coder",
+                    "depends_on_core_coder is true, expected false".to_owned(),
+                ));
+            }
+            if aac_lc.extension_flag {
+                findings.push(field(
+                    "extension_flag",
+                    "extension_flag is true, expected false".to_owned(),
+                ));
+            }
+            if self.num_samples_per_frame != AAC_LC_NUM_SAMPLES_PER_FRAME {
+                findings.push(field(
+                    "num_samples_per_frame",
+                    format!(
+                        "num_samples_per_frame is {}, expected {AAC_LC_NUM_SAMPLES_PER_FRAME}",
+                        self.num_samples_per_frame
+                    ),
+                ));
+            }
+        }
         let required = match &self.decoder_config {
             // A zero frame size already has its own Finding above; no roll
             // can be derived for it, so do not invent an expected value.
             DecoderConfig::Opus(_) => {
                 required_opus_audio_roll_distance(self.num_samples_per_frame).ok()
             }
+            DecoderConfig::AacLc(_) => Some(AAC_LC_AUDIO_ROLL_DISTANCE),
             _ => Some(required_audio_roll_distance(&self.decoder_config)),
         };
         if let Some(required) = required {
@@ -595,7 +778,7 @@ impl CodecConfig {
 pub const fn required_audio_roll_distance(decoder_config: &DecoderConfig) -> i16 {
     match decoder_config {
         DecoderConfig::Lpcm(_) | DecoderConfig::Flac(_) => 0,
-        DecoderConfig::Opus(_) | DecoderConfig::Raw { .. } => 0,
+        DecoderConfig::Opus(_) | DecoderConfig::AacLc(_) | DecoderConfig::Raw { .. } => 0,
     }
 }
 
@@ -658,6 +841,16 @@ pub fn read_codec_config(r: &mut BitCursor<'_>) -> Result<CodecConfig> {
         DecoderConfig::Flac(read_flac_decoder_config(r)?)
     } else if codec_id == CODEC_ID_OPUS && r.bytes_remaining() >= OPUS_DECODER_CONFIG_BYTES {
         DecoderConfig::Opus(read_opus_decoder_config(r)?)
+    } else if codec_id == CODEC_ID_AAC && r.bytes_remaining() >= AAC_LC_DECODER_CONFIG_BYTES {
+        let descriptor = r.read_uint8_span(AAC_LC_DECODER_CONFIG_BYTES)?.to_vec();
+        if is_aac_lc_descriptor(&descriptor) {
+            read_aac_lc_decoder_config(&descriptor)?
+        } else {
+            let remaining = r.bytes_remaining();
+            let mut bytes = descriptor;
+            bytes.extend_from_slice(r.read_uint8_span(remaining)?);
+            DecoderConfig::Raw { codec_id, bytes }
+        }
     } else {
         // Everything left, for a codec this phase does not model — or for an
         // `ipcm` config too short to be one, which stays reproducible rather
@@ -699,9 +892,97 @@ pub fn write_codec_config(w: &mut BitWriter, v: &CodecConfig) -> Result<()> {
         DecoderConfig::Lpcm(cfg) => write_lpcm_decoder_config(w, cfg)?,
         DecoderConfig::Flac(cfg) => write_flac_decoder_config(w, cfg)?,
         DecoderConfig::Opus(cfg) => write_opus_decoder_config(w, cfg)?,
+        DecoderConfig::AacLc(cfg) => write_aac_lc_decoder_config(w, cfg)?,
         DecoderConfig::Raw { bytes, .. } => w.write_bytes(bytes)?,
     }
     w.write_bytes(&v.trailing)
+}
+
+/// Find the MPEG-4 sampling-frequency index for an AAC-LC encoder input.
+#[must_use]
+const fn aac_lc_sampling_frequency_index(sample_rate: u32) -> Option<u8> {
+    let mut index = 0;
+    while index < AAC_LC_SAMPLE_RATES.len() {
+        if AAC_LC_SAMPLE_RATES[index] == sample_rate {
+            // `AAC_LC_SAMPLE_RATES` has thirteen entries, so this conversion
+            // is bounded by 12.
+            return Some(index as u8);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The only descriptor envelope shape this model types. A malformed MPEG-4
+/// descriptor remains a raw blob so it can round-trip byte-for-byte.
+fn is_aac_lc_descriptor(descriptor: &[u8]) -> bool {
+    descriptor.len() == AAC_LC_DECODER_CONFIG_BYTES
+        && descriptor[0] == 0x04
+        && descriptor[1] == 13
+        && descriptor[3] & 1 == 1
+        && descriptor[15] == 0x05
+        && descriptor[16] == 2
+}
+
+// ref: IAMF v1.1.0 §3.11.2 AAC-LC Specific; ISO/IEC 14496-1 DecoderConfigDescriptor
+/// Read the fixed 19-byte MPEG-4 descriptor, preserving all semantic field
+/// values even when they contradict IAMF's AAC-LC restrictions.
+fn read_aac_lc_decoder_config(descriptor: &[u8]) -> Result<DecoderConfig> {
+    let mut r = BitCursor::new(descriptor);
+    let _tag = r.read_unsigned(8)?;
+    let _length = r.read_unsigned(8)?;
+    let object_type_indication = u8::try_from(r.read_unsigned(8)?).unwrap_or(0);
+    let stream_type = u8::try_from(r.read_unsigned(6)?).unwrap_or(0);
+    let upstream = r.read_bool()?;
+    let _reserved = r.read_bool()?;
+    let buffer_size_db = u32::try_from(r.read_unsigned(24)?).unwrap_or(0);
+    let max_bitrate = u32::try_from(r.read_unsigned(32)?).unwrap_or(0);
+    let avg_bitrate = u32::try_from(r.read_unsigned(32)?).unwrap_or(0);
+    let _specific_tag = r.read_unsigned(8)?;
+    let _specific_length = r.read_unsigned(8)?;
+    let audio_object_type = u8::try_from(r.read_unsigned(5)?).unwrap_or(0);
+    let sampling_frequency_index = u8::try_from(r.read_unsigned(4)?).unwrap_or(0);
+    let channel_configuration = u8::try_from(r.read_unsigned(4)?).unwrap_or(0);
+    let frame_length_flag = r.read_bool()?;
+    let depends_on_core_coder = r.read_bool()?;
+    let extension_flag = r.read_bool()?;
+    Ok(DecoderConfig::AacLc(AacLcDecoderConfig {
+        object_type_indication,
+        stream_type,
+        upstream,
+        buffer_size_db,
+        max_bitrate,
+        avg_bitrate,
+        audio_object_type,
+        sampling_frequency_index,
+        channel_configuration,
+        frame_length_flag,
+        depends_on_core_coder,
+        extension_flag,
+    }))
+}
+
+// ref: IAMF v1.1.0 §3.11.2 AAC-LC Specific; ISO/IEC 14496-1 DecoderConfigDescriptor
+/// Write the fixed IAMF MPEG-4 `DecoderConfigDescriptor` envelope and its
+/// two-byte `AudioSpecificConfig` faithfully from the typed semantic fields.
+fn write_aac_lc_decoder_config(w: &mut BitWriter, v: &AacLcDecoderConfig) -> Result<()> {
+    w.write_unsigned(0x04, 8)?;
+    w.write_unsigned(13, 8)?;
+    w.write_unsigned(u64::from(v.object_type_indication), 8)?;
+    w.write_unsigned(u64::from(v.stream_type), 6)?;
+    w.write_bool(v.upstream)?;
+    w.write_bool(true)?;
+    w.write_unsigned(u64::from(v.buffer_size_db), 24)?;
+    w.write_unsigned(u64::from(v.max_bitrate), 32)?;
+    w.write_unsigned(u64::from(v.avg_bitrate), 32)?;
+    w.write_unsigned(0x05, 8)?;
+    w.write_unsigned(2, 8)?;
+    w.write_unsigned(u64::from(v.audio_object_type), 5)?;
+    w.write_unsigned(u64::from(v.sampling_frequency_index), 4)?;
+    w.write_unsigned(u64::from(v.channel_configuration), 4)?;
+    w.write_bool(v.frame_length_flag)?;
+    w.write_bool(v.depends_on_core_coder)?;
+    w.write_bool(v.extension_flag)
 }
 
 // ref: libiamf@v1.1.0 code/src/iamf_dec/pcm/IAMF_pcm_decoder.c pcm_init

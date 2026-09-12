@@ -44,8 +44,8 @@ pub use audio_frame::{
 };
 pub use boundaries::find_obu_boundaries;
 pub use codec_config::{
-    CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig, DecoderConfig,
-    FlacDecoderConfig, LpcmDecoderConfig, MAX_SAMPLES_PER_FRAME, OpusDecoderConfig,
+    AacLcDecoderConfig, CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS, CodecConfig,
+    DecoderConfig, FlacDecoderConfig, LpcmDecoderConfig, MAX_SAMPLES_PER_FRAME, OpusDecoderConfig,
     SampleFormatFlags, read_codec_config, required_audio_roll_distance,
     required_opus_audio_roll_distance, write_codec_config,
 };

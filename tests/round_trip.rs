@@ -7,8 +7,9 @@ use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::obu::{
-    AudioElementParam, Obu, ObuHeader, ObuType, ParameterData, find_obu_boundaries,
-    read_codec_config, read_obu_with, write_codec_config, write_obu, write_obu_with,
+    AudioElementParam, CodecConfig, DecoderConfig, Obu, ObuHeader, ObuType, ParameterData,
+    find_obu_boundaries, read_codec_config, read_obu_with, write_codec_config, write_obu,
+    write_obu_with,
 };
 use iamf::sequence::{
     ParsedSequence, SequenceObu, UnknownObu, parse_sequence, write_parsed_sequence, write_sequence,
@@ -112,6 +113,27 @@ proptest! {
         write_obu_with(&mut rewritten, &parsed, write_codec_config).expect("parsed Opus writes");
         prop_assert_eq!(rewritten.finish().expect("rewritten OBU is aligned"), bytes);
     }
+}
+
+#[test]
+fn typed_aac_lc_codec_configs_round_trip() -> iamf::Result<()> {
+    let original = Obu::new(
+        ObuHeader::new(ObuType::CodecConfig),
+        CodecConfig::aac_lc(2, 48_000)?,
+    );
+    let mut writer = BitWriter::new();
+    write_obu_with(&mut writer, &original, write_codec_config)?;
+    let bytes = writer.finish()?;
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)?;
+    assert!(matches!(
+        parsed.payload.decoder_config,
+        DecoderConfig::AacLc(_)
+    ));
+    let mut rewritten = BitWriter::new();
+    write_obu_with(&mut rewritten, &parsed, write_codec_config)?;
+    assert_eq!(rewritten.finish()?, bytes);
+    Ok(())
 }
 
 #[test]
