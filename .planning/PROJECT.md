@@ -42,7 +42,10 @@ but not sufficient for conformance.** The real exit criterion is a byte-diff aga
 
 ### Active
 
-- *(No active v1 implementation requirements; Phase 4 completed 2026-09-12.)*
+- [ ] Phase 4 release closure — all four plans are implemented and their recorded verification state
+  is documented, but `cargo fmt --check` still fails under pinned Rustfmt 1.85.0 on pre-existing,
+  unowned Rust/source test formatting. Reformat and re-verify those files before declaring Phase 4
+  or v1 complete.
 
 ### Out of Scope
 
@@ -285,4 +288,5 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-12 after Phase 4 consumer-boundary completion*
+*Last updated: 2026-09-12 after recording Phase 4 implementation status and its formatter-closure
+blocker*

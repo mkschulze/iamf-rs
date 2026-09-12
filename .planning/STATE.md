@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 04
 current_phase_name: Parallax-Facing API
-status: complete
-stopped_at: Phase 04 complete; consumer handoff and status synchronization recorded
+status: pending_release_gate
+stopped_at: Phase 04 implementation recorded; closure pending pre-existing Rustfmt remediation
 last_updated: "2026-09-12T00:00:00Z"
 last_activity: 2026-09-12
-last_activity_desc: Phase 04 complete — host-independent encoder boundary, contract fixtures, minimal surface proof, and consumer handoff recorded
+last_activity_desc: Phase 04 implementation recorded; `cargo fmt --check` remains blocked by pre-existing unowned Rust/test formatting
 state_head: 81dd9b6
 progress:
   total_phases: 4
-  completed_phases: 4
+  completed_phases: 3
   total_plans: 29
-  completed_plans: 29
-  percent: 100
+  completed_plans: 25
+  percent: 86
 ---
 
 # Project State
@@ -24,16 +24,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-12)
 
 **Core value:** A `.iamf` file this crate writes is read back by the reference decoder `libiamf` with the PCM sample-identical — and accepted by `iamf-tools`' stricter parser, because `libiamf` alone is a permissive oracle.
-**Current focus:** v1 complete
+**Current focus:** Phase 04 release closure
 
 ## Current Position
 
-Phase: 04 (Parallax-Facing API) — COMPLETE
-Plan: 4 of 4
-Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-12 — Phase 4 adapter boundary and release handoff synchronized
+Phase: 04 (Parallax-Facing API) — IMPLEMENTED; CLOSURE PENDING
+Plan: 4 of 4 implemented; release closure pending
+Status: all Phase 4 implementation plans and their recorded verification state are documented; do not
+declare Phase 4 or v1 complete until `cargo fmt --check` is clean
+Last activity: 2026-09-12 — consumer handoff recorded; formatter remediation remains outstanding
 
-Progress: [██████████] 100% of Phase 04 plans
+Progress: [██████████] 4/4 Phase 04 plans implemented; release gate pending
 
 ## Performance Metrics
 
@@ -132,10 +133,16 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- *(No pending v1 implementation plans.)*
+- Reformat the pre-existing Rust/source test files reported by `cargo fmt --check` under pinned
+  Rustfmt 1.85.0, then rerun the release gates before closing Phase 4 or v1.
 
 ### Blockers/Concerns
 
+- **Phase 4 closure is pending formatter remediation.** `cargo fmt --check` fails under pinned
+  Rustfmt 1.85.0 on formatting that predates Task 2, including `src/encoder.rs`, `src/model/mod.rs`,
+  `src/obu/audio_element.rs`, `src/packing.rs`, and existing tests. The Phase 4 diff relative to
+  `0096729` contains only the six handoff/status documents plus `tests/public_api.rs`; this is not a
+  Task 2 regression. Reformatting is intentionally outside this documentation task.
 - **IAMF parameter scheduling sits in the caller.** DEC-03 chose pre-decimated blocks. In the current
   Parallax IAMF-v1.1 scope these blocks are mix/demixing/recon-gain data, not Source-position curves;
   Source motion is already baked into the upstream Bed/HOA PCM. There is therefore no shared IAMF/ADM
@@ -161,5 +168,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-12T00:00:00Z
-Stopped at: Phase 04 complete; v1 implementation handoff recorded
+Stopped at: Phase 04 implementation recorded; release closure awaits formatter remediation
 Resume file: .planning/ROADMAP.md
