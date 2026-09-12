@@ -101,10 +101,7 @@ fn reference_manifest_matches_pinned_shas() {
 
     // Two projects, two SHAs, asserted independently so the failure message
     // says which pin drifted.
-    for (project, manifest_key) in [
-        ("libiamf", "libiamf_sha"),
-        ("iamf-tools", "iamf_tools_sha"),
-    ] {
+    for (project, manifest_key) in [("libiamf", "libiamf_sha"), ("iamf-tools", "iamf_tools_sha")] {
         let pinned = sha_on_line_naming(&references, project).unwrap_or_else(|| {
             panic!("REFERENCES.md carries no 40-hex commit on a line naming `{project}`")
         });
@@ -176,8 +173,8 @@ fn line_scanner_attributes_each_sha_to_its_own_project() {
 /// rather than only when someone has a reference build.
 #[test]
 fn references_md_carries_both_pins() {
-    let references =
-        read(&repo_root().join("REFERENCES.md")).expect("REFERENCES.md must exist at the repo root");
+    let references = read(&repo_root().join("REFERENCES.md"))
+        .expect("REFERENCES.md must exist at the repo root");
     assert!(
         sha_on_line_naming(&references, "libiamf").is_some(),
         "REFERENCES.md carries no 40-hex commit on a line naming `libiamf`"

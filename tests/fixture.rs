@@ -13,17 +13,17 @@
 mod fixture;
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{select_minimum_profile, Profile};
+use iamf::model::{Profile, select_minimum_profile};
 use iamf::obu::{
-    find_obu_boundaries, plan_frames, read_obu_header, Layout, ObuType, Trimming, TypeSpecific,
+    Layout, ObuType, Trimming, TypeSpecific, find_obu_boundaries, plan_frames, read_obu_header,
 };
 use iamf::packing::SubstreamPlan;
-use iamf::sequence::{parse_sequence, SequenceObu};
+use iamf::sequence::{SequenceObu, parse_sequence};
 
 use fixture::{
-    describe_channel_mismatch, peak_for, ramp_pcm, ramp_sample, store_sample, EncodedTemporalUnit,
-    Fixture, FixtureCodec, FrameSource, CHANNELS_5_1, EXPECTED_TRIM_AT_END, FRAME_SIZE,
-    SAMPLE_FRAMES, SAMPLE_RATE,
+    CHANNELS_5_1, EXPECTED_TRIM_AT_END, EncodedTemporalUnit, FRAME_SIZE, Fixture, FixtureCodec,
+    FrameSource, SAMPLE_FRAMES, SAMPLE_RATE, describe_channel_mismatch, peak_for, ramp_pcm,
+    ramp_sample, store_sample,
 };
 
 /// The `ObuType` of every OBU in a byte slice, in order.

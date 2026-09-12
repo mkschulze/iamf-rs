@@ -20,7 +20,9 @@
 use iamf::bits::BitCursor;
 use iamf::error::ErrorKind;
 use iamf::model::layout::LoudspeakerLayout;
-use iamf::obu::{AudioElementType, ObuType, find_obu_boundaries, read_audio_element, read_obu_with};
+use iamf::obu::{
+    AudioElementType, ObuType, find_obu_boundaries, read_audio_element, read_obu_with,
+};
 use iamf::packing::{SubstreamChannels, SubstreamPlan, pack_channels_to_substreams};
 
 /// A shipped 5.1 LPCM file from the pinned reference tree.

@@ -33,14 +33,14 @@
 #![allow(dead_code)]
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{select_minimum_profile, DescriptorSet};
+use iamf::model::{DescriptorSet, select_minimum_profile};
 use iamf::obu::{
-    plan_frames, AudioElement, AudioElementType, AudioFrame, ChannelAudioLayerConfig, CodecConfig,
-    IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
+    AudioElement, AudioElementType, AudioFrame, CODEC_ID_OPUS, ChannelAudioLayerConfig,
+    CodecConfig, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
     MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
-    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming, CODEC_ID_OPUS,
+    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming, plan_frames,
 };
-use iamf::packing::{pack_channels_to_substreams, SubstreamPlan};
+use iamf::packing::{SubstreamPlan, pack_channels_to_substreams};
 use iamf::sequence::{SequenceWriter, TemporalUnit};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -558,10 +558,7 @@ pub fn load_opus_corpus() -> OpusCorpus {
     assert_eq!(expected.len(), expected_samples, "expected stereo frames");
     let libiamf_expected_bytes = opus_artifact("libiamf-expected.s16le");
     let digest = format!("{:x}", Sha256::digest(&libiamf_expected_bytes));
-    assert_eq!(
-        fields.get("sha256.libiamf-expected.s16le"),
-        Some(&digest)
-    );
+    assert_eq!(fields.get("sha256.libiamf-expected.s16le"), Some(&digest));
     let libiamf_expected = libiamf_expected_bytes
         .chunks_exact(2)
         .map(|pair| i32::from(i16::from_le_bytes(pair.try_into().expect("two PCM bytes"))))
@@ -1008,8 +1005,10 @@ pub fn flac() -> Fixture {
                 at_end: 84,
                 at_start: 0,
             }),
-            substream_payloads: vec![std::fs::read(dir.join(format!("packet-{index:03}.bin")))
-                .expect("committed opaque FLAC frame")],
+            substream_payloads: vec![
+                std::fs::read(dir.join(format!("packet-{index:03}.bin")))
+                    .expect("committed opaque FLAC frame"),
+            ],
         })
         .collect();
     let config = CodecConfig::flac(200, 128, 48_000, 16).expect("valid FLAC configuration");

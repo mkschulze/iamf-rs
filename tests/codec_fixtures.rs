@@ -211,11 +211,13 @@ fn flac_three_headers_and_samples_prove_384_frames_then_trim_84_to_exact_300() {
         ));
     }
     assert_eq!(decoded.len(), 768, "384 stereo frames before trimming");
-    assert!(decoded
-        .get(600..)
-        .expect("84 padded stereo frames")
-        .iter()
-        .all(|sample| *sample == 0));
+    assert!(
+        decoded
+            .get(600..)
+            .expect("84 padded stereo frames")
+            .iter()
+            .all(|sample| *sample == 0)
+    );
     let fields = manifest();
     let end: usize = fields
         .get("E")
@@ -234,16 +236,18 @@ fn flac_three_headers_and_samples_prove_384_frames_then_trim_84_to_exact_300() {
     assert_eq!(expected.len(), 600);
     assert_eq!(decoded, expected);
     assert_eq!(artifact("source.s16le"), artifact("expected.s16le"));
-    assert!(expected
-        .chunks_exact(2)
-        .all(|pair| pair.first() != pair.last()));
+    assert!(
+        expected
+            .chunks_exact(2)
+            .all(|pair| pair.first() != pair.last())
+    );
     assert!(expected.iter().all(|sample| sample.unsigned_abs() <= 16384));
 }
 
 #[test]
 fn flac_adapter_writes_exact_packets_and_only_final_end_trim() {
     use iamf::obu::{Trimming, TypeSpecific};
-    use iamf::sequence::{parse_sequence, SequenceObu};
+    use iamf::sequence::{SequenceObu, parse_sequence};
     let fixture = fixture::flac();
     assert_eq!(
         fixture.spec().expect("FLAC spec").codec,
@@ -381,20 +385,24 @@ fn opus_manifest_contract_rejects_missing_source_provenance_and_bad_metadata() {
     fields.insert("sha256.packet-001.bin".to_owned(), "digest".to_owned());
     fields.insert("sha256../escape".to_owned(), "digest".to_owned());
     assert!(validate_opus_digest_keys(&fields, &packets).is_err());
-    assert!(validate_opus_inventory(
-        &["packet-000.bin".to_owned()],
-        &["packet-000.bin".to_owned(), "packet-001.bin".to_owned()]
-    )
-    .is_err());
-    assert!(validate_opus_inventory(
-        &[
-            "packet-000.bin".to_owned(),
-            "packet-001.bin".to_owned(),
-            "unexpected.bin".to_owned()
-        ],
-        &packets
-    )
-    .is_err());
+    assert!(
+        validate_opus_inventory(
+            &["packet-000.bin".to_owned()],
+            &["packet-000.bin".to_owned(), "packet-001.bin".to_owned()]
+        )
+        .is_err()
+    );
+    assert!(
+        validate_opus_inventory(
+            &[
+                "packet-000.bin".to_owned(),
+                "packet-001.bin".to_owned(),
+                "unexpected.bin".to_owned()
+            ],
+            &packets
+        )
+        .is_err()
+    );
     assert!(validate_opus_packet(&[], 0).is_err());
     assert!(validate_opus_packet(b"OpusHead", 8).is_err());
     assert!(validate_opus_packet(b"OggS", 4).is_err());

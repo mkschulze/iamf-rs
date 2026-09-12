@@ -1,8 +1,8 @@
 //! Public-boundary tests for the immutable high-level encoder configuration.
 
 use iamf::encoder::EncoderBuilder;
-use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::model::Profile;
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
     AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,

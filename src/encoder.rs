@@ -5,11 +5,11 @@
 
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
-use crate::model::{select_minimum_profile, DescriptorSet, Profile};
+use crate::model::{DescriptorSet, Profile, select_minimum_profile};
 use crate::obu::{
-    AudioElement, AudioElementType, AudioFrame, CodecConfig, DecoderConfig, IaSequenceHeader,
-    MixGainParamDefinition, MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry,
-    ParameterBlock, Trimming, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
+    AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
+    CodecConfig, DecoderConfig, IaSequenceHeader, MixGainParamDefinition, MixPresentation, Obu,
+    ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::io::Write;

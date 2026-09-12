@@ -131,8 +131,14 @@ impl DescriptorSet {
             findings.extend(presentation.validate());
         }
 
-        findings.extend(duplicate_id_findings(&self.codec_configs, "codec_config_id"));
-        findings.extend(duplicate_id_findings(&self.audio_elements, "audio_element_id"));
+        findings.extend(duplicate_id_findings(
+            &self.codec_configs,
+            "codec_config_id",
+        ));
+        findings.extend(duplicate_id_findings(
+            &self.audio_elements,
+            "audio_element_id",
+        ));
         findings.extend(duplicate_id_findings(
             &self.mix_presentations,
             "mix_presentation_id",

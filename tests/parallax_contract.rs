@@ -10,7 +10,7 @@ use iamf::obu::{
     LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
     ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
-use iamf::sequence::{parse_sequence, SequenceObu};
+use iamf::sequence::{SequenceObu, parse_sequence};
 
 #[test]
 fn one_shared_element_is_referenced_by_two_presentations_but_emitted_once() {

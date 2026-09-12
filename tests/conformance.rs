@@ -81,7 +81,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{select_minimum_profile, DescriptorSet};
+use iamf::model::{DescriptorSet, select_minimum_profile};
 use iamf::obu::{
     AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
@@ -89,11 +89,11 @@ use iamf::obu::{
     Trimming,
 };
 
-use iamf::obu::{find_obu_boundaries, plan_frames, read_obu_header, ObuType};
+use iamf::obu::{ObuType, find_obu_boundaries, plan_frames, read_obu_header};
 
 use fixture::{
-    describe_channel_mismatch, peak_for, ramp_pcm, store_interleaved, store_sample, ElementSpec,
-    EncodedTemporalUnit, Fixture, FixtureCodec, FrameSource,
+    ElementSpec, EncodedTemporalUnit, Fixture, FixtureCodec, FrameSource,
+    describe_channel_mismatch, peak_for, ramp_pcm, store_interleaved, store_sample,
 };
 
 // ---------------------------------------------------------------------------

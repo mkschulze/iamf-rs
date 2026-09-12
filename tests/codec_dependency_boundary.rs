@@ -607,10 +607,12 @@ impl Drop for TemporaryCanary {
             "refusing unsafe canary cleanup"
         );
         assert!(valid_name, "refusing unsafe canary cleanup");
-        assert!(!fs::symlink_metadata(&self.path)
-            .expect("inspect canary")
-            .file_type()
-            .is_symlink());
+        assert!(
+            !fs::symlink_metadata(&self.path)
+                .expect("inspect canary")
+                .file_type()
+                .is_symlink()
+        );
         fs::remove_dir_all(&self.path).expect("remove isolated canary directory");
     }
 }

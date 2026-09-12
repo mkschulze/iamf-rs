@@ -22,7 +22,7 @@ use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
 };
-use iamf::model::{lufs_to_q7_8, select_minimum_profile, Profile, Q7_8};
+use iamf::model::{Profile, Q7_8, lufs_to_q7_8, select_minimum_profile};
 use iamf::obu::{
     AudioElement, ChannelAudioLayerConfig, IaSequenceHeader, Loudness, ScalableChannelLayoutConfig,
 };
@@ -375,7 +375,7 @@ fn a_layout_with_no_fixed_channel_count_is_a_typed_error_not_a_guess() {
               escape, as src/ does."
 )]
 mod quantisation {
-    use super::{lufs_to_q7_8, ErrorKind, Loudness, Q7_8};
+    use super::{ErrorKind, Loudness, Q7_8, lufs_to_q7_8};
 
     /// `lufs_to_q7_8`, or the raw `i16` a failure should not have produced.
     fn q7_8(lufs: f64) -> Result<i16, ErrorKind> {

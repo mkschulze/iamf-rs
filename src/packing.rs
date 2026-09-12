@@ -227,11 +227,9 @@ impl SubstreamPlan {
     /// The number of source channels this plan consumes, derived.
     #[must_use]
     pub fn channel_count(&self) -> usize {
-        self.substreams
-            .iter()
-            .fold(0_usize, |total, spec| {
-                total.saturating_add(spec.channels.channel_count())
-            })
+        self.substreams.iter().fold(0_usize, |total, spec| {
+            total.saturating_add(spec.channels.channel_count())
+        })
     }
 }
 

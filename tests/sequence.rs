@@ -249,7 +249,9 @@ fn an_invalid_temporal_unit_is_fully_preflighted_before_its_delimiter_is_flushed
         .expect_err("raw data does not match the published Mix Gain definition");
     assert_eq!(err.kind(), &ErrorKind::UnsupportedParameterData);
 
-    let sink = writer.finish().expect("a preflight error does not poison the sink");
+    let sink = writer
+        .finish()
+        .expect("a preflight error does not poison the sink");
     assert_eq!(sink.len(), PROLOGUE_LEN, "the delimiter was never flushed");
 }
 

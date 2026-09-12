@@ -97,7 +97,9 @@ fn describe_first_difference(produced: &[u8], expected: &[u8]) -> Option<String>
         .position(|(a, b)| a != b)
         .unwrap_or_else(|| produced.len().min(expected.len()));
     let start = first.saturating_sub(16);
-    let end = first.saturating_add(16).min(produced.len().max(expected.len()));
+    let end = first
+        .saturating_add(16)
+        .min(produced.len().max(expected.len()));
     let window = |bytes: &[u8]| -> String {
         let end = end.min(bytes.len());
         let start = start.min(end);
@@ -140,10 +142,7 @@ fn dump_window(dump: &str, offset: usize) -> String {
         .unwrap_or(0);
     let start = anchor.saturating_sub(6);
     let end = anchor.saturating_add(10).min(lines.len());
-    lines
-        .get(start..end)
-        .unwrap_or_default()
-        .join("\n")
+    lines.get(start..end).unwrap_or_default().join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -177,8 +176,8 @@ fn the_golden_iamf_reproduces_byte_for_byte() {
 #[test]
 fn the_golden_hash_matches_the_golden_bytes() {
     let bytes = read_golden("phase1_sample_identity.iamf");
-    let committed = String::from_utf8(read_golden("phase1_sample_identity.iamf.sha256"))
-        .unwrap_or_default();
+    let committed =
+        String::from_utf8(read_golden("phase1_sample_identity.iamf.sha256")).unwrap_or_default();
     let committed = committed.split_whitespace().next().unwrap_or("").to_owned();
     assert_eq!(
         sha256_hex(&bytes),
@@ -193,8 +192,8 @@ fn the_regenerated_hash_matches_the_committed_hash() {
     let produced = fixture::sample_identity()
         .encode()
         .expect("the sample-identity fixture encodes");
-    let committed = String::from_utf8(read_golden("phase1_sample_identity.iamf.sha256"))
-        .unwrap_or_default();
+    let committed =
+        String::from_utf8(read_golden("phase1_sample_identity.iamf.sha256")).unwrap_or_default();
     let committed = committed.split_whitespace().next().unwrap_or("").to_owned();
     assert_eq!(
         sha256_hex(&produced),
