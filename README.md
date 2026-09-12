@@ -1,5 +1,13 @@
 # iamf-rs
 
+![Abstract spatial-audio wavefront and IAMF packet structure](docs/assets/iamf-header.png)
+
+[![Beta release](https://img.shields.io/github/v/release/mkschulze/iamf-rs?include_prereleases&display_name=tag&color=0ea5e9)](https://github.com/mkschulze/iamf-rs/releases/tag/v0.1.0-beta.1)
+[![CI](https://github.com/mkschulze/iamf-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mkschulze/iamf-rs/actions/workflows/ci.yml)
+[![Rust 1.85](https://img.shields.io/badge/Rust-1.85.0-dea584?logo=rust)](rust-toolchain.toml)
+[![IAMF 1.1.0](https://img.shields.io/badge/IAMF-1.1.0-06b6d4)](https://aomediacodec.github.io/iamf/)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-22c55e)](LICENSE-APACHE)
+
 A Rust implementation of the IAMF (Immersive Audio Model and Formats) bitstream — OBU serialiser and
 parser, descriptor model, and an encoder producing conformant `.iamf` files.
 
