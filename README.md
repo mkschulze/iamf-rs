@@ -14,6 +14,15 @@ Element reconstruction. No Parallax type, renderer or decoder implementation bel
 
 Targets **IAMF v1.1.0** (`iamf::SPEC_VERSION`).
 
+## Release status
+
+**v0.1.0-beta.1** is the first beta release. The v1 encoder API, parser and
+standalone IA Sequence writer are complete and covered by the repository's
+deterministic, parser and reference-conformance gates. The crate remains
+`publish = false`: this beta is a Git release for integration testing, not a
+crates.io publication. Downstream users should validate their own delivery
+adapter and target playback stack before treating it as a production release.
+
 ## Consumer boundary
 
 The public export seam is deliberately host-independent. A consumer first declares an ordered,
