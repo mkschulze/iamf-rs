@@ -25,7 +25,7 @@ use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::layout::SoundSystem;
 use crate::model::loudness::Q7_8;
 use crate::obu::param_definition::{
-    read_param_definition, write_param_definition, ParamDefinition,
+    ParamDefinition, read_param_definition, write_param_definition,
 };
 
 /// `headphones_rendering_mode` — a 2-bit field in the rendering config.

@@ -499,7 +499,7 @@ mod tests {
     //! through the public path — every after-size field is a whole number of
     //! bytes — and this is the only place it can be exercised at all.
 
-    use super::{obu_size_for, ObuType, ENTIRE_OBU_SIZE_MAX};
+    use super::{ENTIRE_OBU_SIZE_MAX, ObuType, obu_size_for};
     use crate::bits::BitWriter;
     use crate::error::ErrorKind;
 

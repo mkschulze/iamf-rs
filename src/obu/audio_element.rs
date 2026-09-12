@@ -8,7 +8,7 @@ use crate::model::layout::{
     LoudspeakerLayout,
 };
 use crate::obu::param_definition::{
-    read_param_definition, write_param_definition, ParamDefinition,
+    ParamDefinition, read_param_definition, write_param_definition,
 };
 
 /// `param_definition_type` for a demixing parameter.
