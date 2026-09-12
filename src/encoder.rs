@@ -5,11 +5,11 @@
 
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
-use crate::model::{DescriptorSet, Profile, select_minimum_profile};
+use crate::model::{select_minimum_profile, DescriptorSet, Profile};
 use crate::obu::{
-    AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
-    CodecConfig, DecoderConfig, IaSequenceHeader, MixGainParamDefinition, MixPresentation, Obu,
-    ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
+    AudioElement, AudioElementType, AudioFrame, CodecConfig, DecoderConfig, IaSequenceHeader,
+    MixGainParamDefinition, MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry,
+    ParameterBlock, Trimming, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::io::Write;
@@ -1233,4 +1233,52 @@ fn validate_parameter_definition(definition: &crate::obu::ParamDefinition) -> Re
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::layout::AmbisonicsProjectionConfig;
+    use crate::obu::{LpcmDecoderConfig, SampleFormatFlags};
+
+    #[test]
+    fn build_rejects_crate_internal_projection_declarations() {
+        let mut builder = EncoderBuilder::new();
+        let codec = builder.add_codec_config(CodecConfig::lpcm(
+            0,
+            1,
+            LpcmDecoderConfig {
+                sample_format_flags: SampleFormatFlags::LittleEndian,
+                sample_size: 16,
+                sample_rate: 16_000,
+            },
+        ));
+        builder.add_audio_element(
+            codec,
+            AudioElement {
+                audio_element_id: 0,
+                reserved: 0,
+                audio_element_type: AudioElementType::scene_based(AmbisonicsConfig::Projection(
+                    AmbisonicsProjectionConfig {
+                        output_channel_count: 1,
+                        substream_count: 1,
+                        coupled_substream_count: 0,
+                        demixing_matrix: vec![1],
+                    },
+                )),
+                codec_config_id: 0,
+                audio_substream_ids: vec![0],
+                params: Vec::new(),
+                trailing: Vec::new(),
+            },
+        );
+
+        assert_eq!(
+            builder
+                .build()
+                .expect_err("projection authoring is deferred")
+                .kind(),
+            &ErrorKind::InvalidDescriptorReference
+        );
+    }
 }

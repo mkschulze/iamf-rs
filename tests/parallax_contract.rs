@@ -3,9 +3,9 @@
 use iamf::encoder::{EncoderBuilder, FrameInput, TemporalUnitInput};
 use iamf::model::layout::{AmbisonicsMonoConfig, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, AudioElementType, ChannelAudioLayerConfig, CodecConfig, Layout,
-    LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    AudioElement, ChannelAudioLayerConfig, CodecConfig, Layout, LayoutWithLoudness, Loudness,
+    LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
+    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
 use iamf::sequence::{parse_sequence, SequenceObu};
 
@@ -125,8 +125,8 @@ fn mono_ambisonics_is_constructible_only_through_the_high_level_builder() {
         .collect::<Vec<_>>();
     assert_eq!(scenes.len(), 1);
     assert!(scenes.first().is_some_and(|scene| matches!(
-        *scene,
-        AudioElementType::SceneBased(iamf::model::layout::AmbisonicsConfig::Mono(_))
+        scene.scene_based_config(),
+        Some(iamf::model::layout::AmbisonicsConfig::Mono(_))
     )));
 }
 

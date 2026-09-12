@@ -8,7 +8,7 @@ use crate::model::layout::{
     LoudspeakerLayout,
 };
 use crate::obu::param_definition::{
-    ParamDefinition, read_param_definition, write_param_definition,
+    read_param_definition, write_param_definition, ParamDefinition,
 };
 
 /// `param_definition_type` for a demixing parameter.
@@ -149,9 +149,36 @@ pub struct ChannelBasedConfig {
 /// # Constructibility
 ///
 /// Only [`Self::ChannelBased`] is constructible through the **public encoder
-/// path**. [`Self::SceneBased`] has a `pub(crate)` constructor and a
-/// `#[doc(hidden)]` test-only one, because Phase 2's PARSE-07 must build
-/// scene-based fixtures and "asserted understood" is unmeetable otherwise.
+/// path**. [`Self::SceneBased`] has a crate-private constructor because
+/// Phase 2's PARSE-07 must build scene-based fixtures and "asserted
+/// understood" is unmeetable otherwise. External authors use
+/// [`crate::encoder::EncoderBuilder::add_ambisonics_mono`] instead.
+///
+/// ```compile_fail
+/// use iamf::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
+/// use iamf::obu::AudioElementType;
+///
+/// let _ = AudioElementType::scene_based_for_test(AmbisonicsConfig::Mono(
+///     AmbisonicsMonoConfig {
+///         output_channel_count: 1,
+///         substream_count: 1,
+///         channel_mapping: vec![0],
+///     },
+/// ));
+/// ```
+///
+/// ```compile_fail
+/// use iamf::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
+/// use iamf::obu::AudioElementType;
+///
+/// let _ = AudioElementType::SceneBased(AmbisonicsConfig::Mono(
+///     AmbisonicsMonoConfig {
+///         output_channel_count: 1,
+///         substream_count: 1,
+///         channel_mapping: vec![0],
+///     },
+/// ));
+/// ```
 ///
 /// **Reversibility: one-way.** Parallax's import adapter matches on this enum.
 /// Adding a variant is additive under `#[non_exhaustive]`; changing `Reserved`'s
@@ -164,6 +191,7 @@ pub enum AudioElementType {
     /// `AUDIO_ELEMENT_CHANNEL_BASED = 0`.
     ChannelBased(ChannelBasedConfig),
     /// `AUDIO_ELEMENT_SCENE_BASED = 1`. Not publicly constructible.
+    #[non_exhaustive]
     SceneBased(AmbisonicsConfig),
     /// `2..=7` — a type this spec version does not define.
     Reserved {
@@ -189,14 +217,17 @@ impl AudioElementType {
         Self::SceneBased(config)
     }
 
-    /// A scene-based element, for tests and fixtures only.
+    /// The parsed Ambisonics configuration, when this is a scene-based element.
     ///
-    /// Phase 2's PARSE-07 asserts that scene-based elements are *understood*,
-    /// which is unmeetable without a way to build one.
-    #[doc(hidden)]
+    /// This exposes parsed descriptor data without providing a scene-based
+    /// authoring constructor; authors use
+    /// [`crate::encoder::EncoderBuilder::add_ambisonics_mono`] instead.
     #[must_use]
-    pub fn scene_based_for_test(config: AmbisonicsConfig) -> Self {
-        Self::scene_based(config)
+    pub const fn scene_based_config(&self) -> Option<&AmbisonicsConfig> {
+        match self {
+            Self::SceneBased(config) => Some(config),
+            Self::ChannelBased(_) | Self::Reserved { .. } => None,
+        }
     }
 
     /// The 3-bit `audio_element_type` value.

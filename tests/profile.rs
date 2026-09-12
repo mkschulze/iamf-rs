@@ -17,17 +17,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use iamf::error::ErrorKind;
-use iamf::model::layout::{
-    AmbisonicsConfig, AmbisonicsMonoConfig, ExpandedLoudspeakerLayout, LoudspeakerLayout,
-};
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout};
 use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
 };
 use iamf::model::{lufs_to_q7_8, select_minimum_profile, Profile, Q7_8};
 use iamf::obu::{
-    AudioElement, AudioElementType, ChannelAudioLayerConfig, IaSequenceHeader, Loudness,
-    ScalableChannelLayoutConfig,
+    AudioElement, ChannelAudioLayerConfig, IaSequenceHeader, Loudness, ScalableChannelLayoutConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,34 +156,32 @@ fn twenty_nine_audio_elements_are_a_typed_error() {
 // PROF-02 — the channel-count limits, each with one step either side
 // ---------------------------------------------------------------------------
 
-/// **One** Audio Element carrying exactly `channels` channels.
+/// Channel-based elements totalling `channels`, using supported layouts.
 ///
-/// Built scene-based, because `output_channel_count` is a plain `u8` and can
-/// therefore hit any count — the modelled loudspeaker layouts top out at 12
-/// (7.1.4), so 17 channels is not expressible as one channel-based element at
-/// all. Using one element isolates the **channel** limit from the **element**
-/// limit; the element axis is varied separately by `stereo_elements`.
-fn scene_element(id: u32, channels: u8) -> AudioElement {
-    AudioElement {
-        audio_element_id: id,
-        reserved: 0,
-        audio_element_type: AudioElementType::scene_based_for_test(AmbisonicsConfig::Mono(
-            AmbisonicsMonoConfig {
-                output_channel_count: channels,
-                substream_count: channels,
-                channel_mapping: (0..channels).collect(),
-            },
-        )),
-        codec_config_id: 200,
-        audio_substream_ids: (0..u32::from(channels)).collect(),
-        params: Vec::new(),
-        trailing: Vec::new(),
-    }
-}
-
-/// One element totalling `channels` channels.
+/// The profile limits are per Presentation, so these combinations preserve
+/// the exact total without giving external callers a scene-based constructor.
 fn elements_totalling(channels: u8) -> Vec<AudioElement> {
-    vec![scene_element(0, channels)]
+    let layouts = [
+        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+        LoudspeakerLayout::Ch7_1_4,
+        LoudspeakerLayout::Ch5_1,
+        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch3_0),
+        LoudspeakerLayout::Stereo,
+        LoudspeakerLayout::Mono,
+    ];
+    let mut remaining = u32::from(channels);
+    let mut elements = Vec::new();
+    for layout in layouts {
+        let width = layout.channel_count().unwrap_or(0);
+        while width > 0 && remaining >= width {
+            elements.push(element(
+                u32::try_from(elements.len()).unwrap_or_default(),
+                layout,
+            ));
+            remaining = remaining.saturating_sub(width);
+        }
+    }
+    elements
 }
 
 #[test]
@@ -335,12 +330,20 @@ fn a_manually_inverted_profile_pair_is_a_finding_and_a_write_rejection() {
 
 #[test]
 fn channel_counts_are_summed_across_elements_with_checked_addition() {
-    // T-01-38. Two elements of 255 channels is 510 — far over every ceiling.
+    // T-01-38. Twenty-eight 16-channel elements total 448 — far over every
+    // ceiling while remaining within the Audio Element count ceiling.
     // A wrapping `u8` or `u16` sum could land back inside a lower profile,
     // which is the failure mode where the header is accepted and the content
     // is then mis-handled. `checked_add` on a `u32` cannot.
-    let elements = vec![scene_element(0, 255), scene_element(1, 255)];
-    let err = select(&elements).expect_err("510 channels exceed every profile");
+    let elements: Vec<AudioElement> = (0..28)
+        .map(|id| {
+            element(
+                id,
+                LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+            )
+        })
+        .collect();
+    let err = select(&elements).expect_err("448 channels exceed every profile");
     assert_eq!(err.kind(), &ErrorKind::ChannelCountExceedsProfile);
 }
 

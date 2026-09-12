@@ -1,8 +1,8 @@
 //! Public-boundary tests for the immutable high-level encoder configuration.
 
 use iamf::encoder::EncoderBuilder;
-use iamf::model::Profile;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
+use iamf::model::Profile;
 use iamf::obu::{
     AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
@@ -324,22 +324,6 @@ fn build_rejects_incoherent_channel_topology() {
 }
 
 #[test]
-fn build_rejects_projection_even_when_unreferenced() {
-    let mut element = stereo_element();
-    element.audio_element_type = iamf::obu::AudioElementType::scene_based_for_test(
-        iamf::model::layout::AmbisonicsConfig::Projection(
-            iamf::model::layout::AmbisonicsProjectionConfig {
-                output_channel_count: 1,
-                substream_count: 1,
-                coupled_substream_count: 0,
-                demixing_matrix: vec![1],
-            },
-        ),
-    );
-    assert!(build_element(element).is_err());
-}
-
-#[test]
 fn build_rejects_reserved_layout_even_when_unreferenced() {
     for layout in [
         LoudspeakerLayout::Reserved(10),
@@ -361,15 +345,19 @@ fn build_rejects_reserved_layout_even_when_unreferenced() {
 
 #[test]
 fn build_rejects_invalid_ambisonics_mono_mapping() {
-    let mut element = stereo_element();
-    element.audio_element_type = iamf::obu::AudioElementType::scene_based_for_test(
-        iamf::model::layout::AmbisonicsConfig::Mono(iamf::model::layout::AmbisonicsMonoConfig {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let stream = builder.add_substream();
+    builder.add_ambisonics_mono(
+        codec,
+        vec![stream],
+        iamf::model::layout::AmbisonicsMonoConfig {
             output_channel_count: 4,
             substream_count: 1,
             channel_mapping: vec![0, 1, 255, 255],
-        }),
+        },
     );
-    assert!(build_element(element).is_err());
+    assert!(builder.build().is_err());
 }
 
 fn stereo_presentation() -> MixPresentation {
