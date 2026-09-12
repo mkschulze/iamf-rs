@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Conformant LPCM Bitstream** - A standalone `.iamf` the reference decodes sample-identically, with every guardrail and every byte-level fact pinned
 - [x] **Phase 2: Parser, Round-Trip and Fuzzing** - Read the bitstream back into the model, prove both round-trip directions, and ship a fuzzer with a committed corpus (completed 2026-09-09)
 - [x] **Phase 3: FLAC and Opus Framing** - Two more codecs through the unchanged conformance harness, with zero codec crates in the shipping graph (completed 2026-09-11)
-- [ ] **Phase 4: Parallax-Facing API** - A validated host-independent builder, deterministic ID/profile mapping, transactional streaming and Parallax-shaped contract fixtures
+- [x] **Phase 4: Parallax-Facing API** - A validated host-independent builder, deterministic ID/profile mapping, transactional streaming and Parallax-shaped contract fixtures
 
 ## Phase Details
 
