@@ -169,8 +169,8 @@ impl Encoder {
 /// One caller-owned, pre-encoded Audio Frame payload.
 ///
 /// This type deliberately has no encoder, decoder, resampler, or PCM
-/// conversion operation. FLAC and Opus access units are handed through
-/// verbatim; LPCM bytes are only checked against the frozen frame plan.
+/// conversion operation. FLAC, Opus, and AAC-LC access units are handed
+/// through verbatim; LPCM bytes are only checked against the frozen frame plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameInput {
     /// IAMF-LPCM sample bytes in the codec configuration's declared format.
@@ -179,6 +179,8 @@ pub enum FrameInput {
     Flac(Vec<u8>),
     /// One already encoded Opus access unit.
     Opus(Vec<u8>),
+    /// One externally encoded AAC-LC raw_data_block access unit.
+    AacLc(Vec<u8>),
 }
 
 /// A Parameter Block submitted against its frozen caller-local definition.
@@ -424,14 +426,20 @@ impl<W: Write> EncodingWriter<W> {
                 Ok(())
             }
             (DecoderConfig::Flac(_), FrameInput::Flac(_))
-            | (DecoderConfig::Opus(_), FrameInput::Opus(_)) => Ok(()),
+            | (DecoderConfig::Opus(_), FrameInput::Opus(_))
+            | (DecoderConfig::AacLc(_), FrameInput::AacLc(_)) => Ok(()),
             (DecoderConfig::Lpcm(_), FrameInput::Flac(_))
             | (DecoderConfig::Lpcm(_), FrameInput::Opus(_))
+            | (DecoderConfig::Lpcm(_), FrameInput::AacLc(_))
             | (DecoderConfig::Flac(_), FrameInput::Lpcm(_))
             | (DecoderConfig::Flac(_), FrameInput::Opus(_))
+            | (DecoderConfig::Flac(_), FrameInput::AacLc(_))
             | (DecoderConfig::Opus(_), FrameInput::Lpcm(_))
             | (DecoderConfig::Opus(_), FrameInput::Flac(_))
-            | (DecoderConfig::AacLc(_), _)
+            | (DecoderConfig::Opus(_), FrameInput::AacLc(_))
+            | (DecoderConfig::AacLc(_), FrameInput::Lpcm(_))
+            | (DecoderConfig::AacLc(_), FrameInput::Flac(_))
+            | (DecoderConfig::AacLc(_), FrameInput::Opus(_))
             | (DecoderConfig::Raw { .. }, _) => {
                 Err(temporal_input(ErrorKind::FrameCodecMismatch, "frame.codec"))
             }
@@ -441,9 +449,10 @@ impl<W: Write> EncodingWriter<W> {
 
 fn frame_payload(frame: FrameInput) -> Vec<u8> {
     match frame {
-        FrameInput::Lpcm(payload) | FrameInput::Flac(payload) | FrameInput::Opus(payload) => {
-            payload
-        }
+        FrameInput::Lpcm(payload)
+        | FrameInput::Flac(payload)
+        | FrameInput::Opus(payload)
+        | FrameInput::AacLc(payload) => payload,
     }
 }
 
