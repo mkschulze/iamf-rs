@@ -1,5 +1,8 @@
 //! Public encoder contracts shaped like a filtered Parallax delivery.
 
+#[path = "support/parallax_contract.rs"]
+mod contract;
+
 use iamf::encoder::{EncoderBuilder, FrameInput, TemporalUnitInput};
 use iamf::model::layout::{AmbisonicsMonoConfig, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
@@ -128,6 +131,107 @@ fn mono_ambisonics_is_constructible_only_through_the_high_level_builder() {
         scene.scene_based_config(),
         Some(iamf::model::layout::AmbisonicsConfig::Mono(_))
     )));
+}
+
+#[test]
+#[allow(clippy::indexing_slicing)]
+fn filtered_delivery_is_deterministic_and_retains_only_public_contract_data() {
+    let first = contract::build_delivery().expect("filtered public delivery builds");
+    let second = contract::build_delivery().expect("equivalent filtered delivery builds");
+    assert_eq!(
+        first.bytes, second.bytes,
+        "equivalent declarations are deterministic"
+    );
+    assert_eq!(
+        first.retained_names,
+        vec![
+            b"program stereo".to_vec(),
+            b"flac archive".to_vec(),
+            b"opus stream".to_vec(),
+            b"ambisonics bed".to_vec(),
+        ]
+    );
+
+    for excluded in &first.excluded_names {
+        assert!(
+            !first
+                .bytes
+                .windows(excluded.len())
+                .any(|window| window == excluded),
+            "filtered candidate {:?} must never reach encoder input or bytes",
+            String::from_utf8_lossy(excluded)
+        );
+    }
+
+    let parsed = parse_sequence(&first.bytes).expect("delivery bytes parse");
+    let codec_ids = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::CodecConfig(config) => Some(config.payload.codec_config_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let element_ids = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioElement(element) => Some(element.payload.audio_element_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let presentation_ids = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::MixPresentation(presentation) => {
+                Some(presentation.payload.mix_presentation_id)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        codec_ids,
+        vec![0, 1, 2],
+        "LPCM, FLAC, Opus declaration order"
+    );
+    assert_eq!(
+        element_ids,
+        vec![0, 1, 2, 3],
+        "channel then scene descriptor order"
+    );
+    assert_eq!(
+        presentation_ids,
+        vec![0, 1],
+        "ordered primary and alternate presentations"
+    );
+
+    let presentations = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::MixPresentation(presentation) => Some(presentation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        presentations[0].payload.sub_mixes[0].elements[0].audio_element_id,
+        0
+    );
+    assert_eq!(
+        presentations[1].payload.sub_mixes[0].elements[0].audio_element_id,
+        0
+    );
+
+    let parameter_blocks = parsed
+        .obus
+        .iter()
+        .filter(|obu| matches!(obu, SequenceObu::ParameterBlock(_)))
+        .count();
+    assert_eq!(
+        parameter_blocks, 1,
+        "pre-decimated supplied parameter block persists"
+    );
 }
 
 fn lpcm_config() -> CodecConfig {

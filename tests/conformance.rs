@@ -73,13 +73,15 @@
 
 #[path = "support/fixture.rs"]
 mod fixture;
+#[path = "support/parallax_contract.rs"]
+mod parallax_contract;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{DescriptorSet, select_minimum_profile};
+use iamf::model::{select_minimum_profile, DescriptorSet};
 use iamf::obu::{
     AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
@@ -87,11 +89,11 @@ use iamf::obu::{
     Trimming,
 };
 
-use iamf::obu::{ObuType, find_obu_boundaries, plan_frames, read_obu_header};
+use iamf::obu::{find_obu_boundaries, plan_frames, read_obu_header, ObuType};
 
 use fixture::{
-    ElementSpec, EncodedTemporalUnit, Fixture, FixtureCodec, FrameSource,
-    describe_channel_mismatch, peak_for, ramp_pcm, store_interleaved, store_sample,
+    describe_channel_mismatch, peak_for, ramp_pcm, store_interleaved, store_sample, ElementSpec,
+    EncodedTemporalUnit, Fixture, FixtureCodec, FrameSource,
 };
 
 // ---------------------------------------------------------------------------
@@ -1716,6 +1718,28 @@ fn the_structure_only_fixture_passes_the_strict_parser() {
     let dir = scratch_dir("structure-conf06");
     match run_decoder_main(&bytes, &dir, units) {
         Ok(observed) => println!("[{}] CONF-06: {observed}", fixture.name),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+/// The public Parallax-shaped delivery remains attached to the existing
+/// structure gate and, when already available locally, the strict reference
+/// parser.  Neither branch obtains or builds a reference tool.
+#[test]
+fn parallax_delivery_fixture_uses_the_offline_safe_reference_gates() {
+    let delivery =
+        parallax_contract::build_delivery().expect("the filtered public delivery fixture builds");
+    let structure = assert_structure_is_observable(&delivery.bytes)
+        .expect("the public delivery satisfies CONF-04 structure");
+    assert!(structure.contains("4 Audio Element(s)"), "{structure}");
+
+    if !iamf_tools_available() {
+        skip_no_container("parallax_delivery_fixture_uses_the_offline_safe_reference_gates");
+        return;
+    }
+    let dir = scratch_dir("parallax-contract-conf06");
+    match run_decoder_main(&delivery.bytes, &dir, 1) {
+        Ok(observed) => println!("[parallax delivery] CONF-06: {observed}"),
         Err(message) => panic!("{message}"),
     }
 }
