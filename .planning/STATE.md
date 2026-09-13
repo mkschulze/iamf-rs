@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-13 - Completed quick task 260913-p28: assign Base-Enhanced profile to expanded loudspeaker layouts as iamf-tools requires
+Last activity: 2026-09-13 - Completed quick task 260913-qk3: enforce IAMF v1.1.0 profile restrictions in build and parse-side validation
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -154,6 +154,7 @@ Recent decisions affecting current work:
 | 260913-n56 | enforce parameter block duration and uniform trimming spec rules in the encoder | 2026-09-13 | cc7f15b | [260913-n56-enforce-parameter-block-duration-and-uni](./quick/260913-n56-enforce-parameter-block-duration-and-uni/) |
 | 260913-o3k | reject channel-based audio elements whose substream / coupled-substream counts the reference rejects | 2026-09-13 | bc1fd29 | [260913-o3k-reject-stereo-audio-elements-whose-subst](./quick/260913-o3k-reject-stereo-audio-elements-whose-subst/) |
 | 260913-p28 | assign Base-Enhanced profile to expanded loudspeaker layouts as iamf-tools requires | 2026-09-13 | 246560e | [260913-p28-assign-base-enhanced-profile-to-expanded](./quick/260913-p28-assign-base-enhanced-profile-to-expanded/) |
+| 260913-qk3 | enforce IAMF v1.1.0 profile restrictions in build and parse-side validation | 2026-09-13 | dfe50b3 | [260913-qk3-enforce-iamf-v1-1-0-profile-restrictions](./quick/260913-qk3-enforce-iamf-v1-1-0-profile-restrictions/) |
 
 ### Resolved
 
