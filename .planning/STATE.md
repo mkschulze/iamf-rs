@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-14 - Completed quick task 260914-0sp: bound OBU header after-size fields (trim, extension) by obu_size
+Last activity: 2026-09-14 - Completed quick task 260914-1mq: require exactly one Demixing / Recon Gain Parameter Block subblock
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -160,6 +160,7 @@ Recent decisions affecting current work:
 | 260913-vvx | require total Opus start trim to equal pre_skip in the encoder | 2026-09-13 | 9a1c25b | [260913-vvx-require-total-opus-start-trim-to-equal-p](./quick/260913-vvx-require-total-opus-start-trim-to-equal-p/) |
 | 260913-wlv | enforce unique annotations languages, scalable layout counts and unique loudness anchor elements in mix presentations | 2026-09-14 | b03597b | [260913-wlv-enforce-unique-annotations-languages-sca](./quick/260913-wlv-enforce-unique-annotations-languages-sca/) |
 | 260914-0sp | bound OBU header after-size fields (trim, extension) by obu_size | 2026-09-14 | 1b76415 | [260914-0sp-bound-obu-header-after-size-fields-by-ob](./quick/260914-0sp-bound-obu-header-after-size-fields-by-ob/) |
+| 260914-1mq | require exactly one Demixing / Recon Gain Parameter Block subblock (closes zero-byte subblock memory amplification) | 2026-09-14 | 16eca4a | [260914-1mq-bound-parameter-block-subblock-memory-am](./quick/260914-1mq-bound-parameter-block-subblock-memory-am/) |
 
 ### Resolved
 
@@ -177,5 +178,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-14
-Stopped at: Completed quick task 260914-0sp (reference run 34785920730 on a6eb1e7 green, FLAC/Opus CONF-05 0 differing samples); next recommended: zero-byte Parameter Block subblock memory
+Stopped at: Completed quick tasks 260914-0sp and 260914-1mq (unpushed); open decision: per-parse memory budget (260914-1mq deferred item 1)
 Resume file: .planning/.continue-here.md
