@@ -819,6 +819,218 @@ fn a_subblock_count_larger_than_the_bytes_remaining_is_refused_before_reserving(
     );
 }
 
+// ---------------------------------------------------------------------------
+// Demixing / Recon Gain carry exactly one subblock (review [MEDIUM],
+// 2026-09-13; quick 260914-1mq).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_recon_gain_count_implied_by_a_hostile_duration_is_refused_before_the_byte_rule() {
+    // id 1, duration FF FF FF 7F = 0x0FFFFFFF, constant_subblock_duration 1
+    // => 0x0FFFFFFF implied zero-byte subblocks (both layers absent).
+    let bytes = hex!("01 ff ff ff 7f 01");
+    let registry = registry_with(
+        ParamDefinition::mode_1(1, 48_000),
+        ParameterDataContext::ReconGain {
+            recon_gain_is_present: vec![false; 2],
+        },
+    );
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &registry)
+            .err()
+            .map(|e| (e.kind().clone(), e.at())),
+        Some((ErrorKind::SubblockCountNotOne, Location::InputOffset(0))),
+        "the single-subblock rule wins over the bytes_remaining() rule"
+    );
+}
+
+#[test]
+fn an_explicit_recon_gain_subblock_count_of_two_is_refused() {
+    // id 1, duration 2, constant_subblock_duration 0, num_subblocks 2,
+    // subblock_duration 1, subblock_duration 1 (layer absent => no data).
+    let bytes = hex!("01 02 00 02 01 01");
+    let registry = registry_with(
+        ParamDefinition::mode_1(1, 48_000),
+        ParameterDataContext::ReconGain {
+            recon_gain_is_present: vec![false],
+        },
+    );
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &registry)
+            .err()
+            .map(|e| (e.kind().clone(), e.at())),
+        Some((ErrorKind::SubblockCountNotOne, Location::InputOffset(0)))
+    );
+}
+
+#[test]
+fn a_mode_0_recon_gain_definition_implying_two_subblocks_is_refused() {
+    // Mode 0: the definition carries duration 2, constant_subblock_duration 1
+    // => 2 subblocks. Block: id 1, then two zero-byte subblocks; `00 00` is
+    // unread padding so the byte rule alone would not refuse it.
+    let definition = ParamDefinition {
+        parameter_id: 1,
+        parameter_rate: 48_000,
+        reserved: 0,
+        duration_fields: Some(DurationFields {
+            duration: 2,
+            constant_subblock_duration: 1,
+            subblock_durations: Vec::new(),
+        }),
+    };
+    let bytes = hex!("01 00 00");
+    let registry = registry_with(
+        definition,
+        ParameterDataContext::ReconGain {
+            recon_gain_is_present: vec![false; 2],
+        },
+    );
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &registry)
+            .err()
+            .map(|e| (e.kind().clone(), e.at())),
+        Some((ErrorKind::SubblockCountNotOne, Location::InputOffset(0)))
+    );
+}
+
+#[test]
+fn two_demixing_subblocks_are_refused_at_the_block_start() {
+    // id 5, duration 2, constant_subblock_duration 1 => 2 subblocks, then two
+    // demixing bytes 0xbb.
+    let bytes = hex!("05 02 01 bb bb");
+    let registry = registry_with(
+        ParamDefinition::mode_1(5, 48_000),
+        ParameterDataContext::Demixing,
+    );
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &registry)
+            .err()
+            .map(|e| (e.kind().clone(), e.at())),
+        Some((ErrorKind::SubblockCountNotOne, Location::InputOffset(0)))
+    );
+}
+
+#[test]
+fn a_demixing_block_with_zero_subblocks_is_refused() {
+    // id 5, duration 0, constant_subblock_duration 0, num_subblocks 0.
+    // The rule is "exactly one", not "at most one".
+    let bytes = hex!("05 00 00 00");
+    let registry = registry_with(
+        ParamDefinition::mode_1(5, 48_000),
+        ParameterDataContext::Demixing,
+    );
+    let mut r = BitCursor::new(&bytes);
+
+    assert_eq!(
+        read_parameter_block(&mut r, &registry)
+            .err()
+            .map(|e| (e.kind().clone(), e.at())),
+        Some((ErrorKind::SubblockCountNotOne, Location::InputOffset(0)))
+    );
+}
+
+#[test]
+fn a_single_recon_gain_subblock_with_every_layer_absent_reads_and_round_trips() {
+    // id 1, duration C0 07 = 960, constant_subblock_duration C0 07 = 960
+    // => 1 subblock; both layers absent => zero data bytes. This legal block
+    // failed before with UnexpectedEndOfInput@0: the byte rule saw 1 subblock
+    // and 0 bytes left.
+    let bytes = hex!("01 c0 07 c0 07");
+    let definition = ParamDefinition::mode_1(1, 48_000);
+    let context = ParameterDataContext::ReconGain {
+        recon_gain_is_present: vec![false; 2],
+    };
+    let registry = registry_with(definition.clone(), context.clone());
+    let mut r = BitCursor::new(&bytes);
+
+    let block = read_parameter_block(&mut r, &registry).expect("single all-absent block parses");
+    assert_eq!(block.subblocks.len(), 1);
+    assert_eq!(
+        block.subblocks.first().map(|subblock| &subblock.data),
+        Some(&ParameterData::ReconGain(ReconGainInfoParameterData {
+            layers: vec![None, None],
+        }))
+    );
+    assert_eq!(r.byte_position(), 5);
+
+    let mut writer = BitWriter::new();
+    write_parameter_block(&mut writer, &definition, &context, &block)
+        .expect("single all-absent block writes");
+    assert_eq!(writer.finish().unwrap_or_default(), bytes);
+}
+
+#[test]
+fn a_multi_subblock_mix_gain_block_is_still_accepted_and_round_trips() {
+    // id 1, duration 2, constant_subblock_duration 1 => 2 subblocks;
+    // each is animation_type 0 (Step) + start_point_value (i16): 0x0000, 0xffff.
+    let bytes = hex!("01 02 01 00 00 01 00 ff ff");
+    let definition = ParamDefinition::mode_1(1, 48_000);
+    let registry = registry_with(definition.clone(), ParameterDataContext::MixGain);
+    let mut r = BitCursor::new(&bytes);
+
+    let block = read_parameter_block(&mut r, &registry).expect("multi-subblock mix gain parses");
+    assert_eq!(block.subblocks.len(), 2);
+    assert_eq!(
+        block.subblocks.get(1).map(|subblock| &subblock.data),
+        Some(&ParameterData::MixGain(MixGainParameterData::Step {
+            start_point_value: -1,
+        }))
+    );
+
+    let mut writer = BitWriter::new();
+    write_parameter_block(
+        &mut writer,
+        &definition,
+        &ParameterDataContext::MixGain,
+        &block,
+    )
+    .expect("multi-subblock mix gain writes");
+    assert_eq!(writer.finish().unwrap_or_default(), bytes);
+}
+
+#[test]
+fn the_writer_refuses_two_demixing_subblocks() {
+    // Model: id 5, duration 2, constant_subblock_duration 1, two Demixing
+    // subblocks (would serialise as `05 02 01 00 00`).
+    let definition = ParamDefinition::mode_1(5, 48_000);
+    let subblock = ParameterSubblock {
+        subblock_duration: None,
+        data: ParameterData::Demixing(DemixingInfoParameterData {
+            dmixp_mode: 0,
+            reserved: 0,
+        }),
+    };
+    let block = ParameterBlock {
+        parameter_id: 5,
+        duration_fields: Some(BlockDurationFields {
+            duration: 2,
+            constant_subblock_duration: 1,
+        }),
+        subblocks: vec![subblock.clone(), subblock],
+    };
+    let mut writer = BitWriter::new();
+
+    assert_eq!(
+        write_parameter_block(
+            &mut writer,
+            &definition,
+            &ParameterDataContext::Demixing,
+            &block,
+        )
+        .err()
+        .map(|e| (e.kind().clone(), e.at())),
+        Some((ErrorKind::SubblockCountNotOne, Location::Field("subblocks")))
+    );
+}
+
 fn registry_with(
     definition: ParamDefinition,
     context: ParameterDataContext,

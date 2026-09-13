@@ -362,6 +362,10 @@ impl ParameterBlock {
 /// decides the shape of each subblock's parameter data. Both are explicit
 /// arguments — see the module comment for why that is the requirement rather
 /// than a convenience.
+///
+/// A Demixing or Recon Gain block whose subblock count, explicit or derived,
+/// is not exactly 1 is [`ErrorKind::SubblockCountNotOne`] at the payload
+/// start, before any subblock is reserved.
 pub fn read_parameter_block(
     r: &mut BitCursor<'_>,
     registry: &ParamDefinitionRegistry,
@@ -436,13 +440,23 @@ pub fn read_parameter_block(
     let include_subblock_duration =
         duration_fields.is_some_and(|fields| fields.constant_subblock_duration == 0);
 
+    // Demixing and Recon Gain carry exactly one subblock. This runs before the
+    // `usize` conversion and the byte rule below: a Recon Gain subblock can be
+    // zero wire bytes, so its derived count is not bounded by bytes, and after
+    // the byte rule a small hostile Recon Gain vector would report
+    // UnexpectedEndOfInput instead of the rule it actually breaks.
+    check_single_subblock(context, num_subblocks, Location::InputOffset(start))?;
+
     // T-01-32: `num_subblocks` is attacker-controlled and drives an allocation.
-    // The smallest possible subblock is one byte, so more subblocks than bytes
-    // left is unreadable by construction — checked before a single element is
-    // reserved (the one rule every count in this format obeys).
+    // Every subblock except a Recon Gain one is at least one byte, so more
+    // subblocks than bytes left is unreadable by construction — checked before
+    // a single element is reserved. A Recon Gain subblock with every layer
+    // absent is zero bytes, so the byte rule would falsely refuse a legal
+    // block; its count is already exactly one, which is the bound.
     let num_subblocks = usize::try_from(num_subblocks)
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(start)))?;
-    if num_subblocks > r.bytes_remaining() {
+    let zero_byte_subblock_possible = matches!(context, ParameterDataContext::ReconGain { .. });
+    if !zero_byte_subblock_possible && num_subblocks > r.bytes_remaining() {
         return Err(Error::new(
             ErrorKind::UnexpectedEndOfInput,
             Location::InputOffset(start),
@@ -584,6 +598,7 @@ pub(crate) fn validate_parameter_block(
 
     let actual_count = u32::try_from(block.subblocks.len())
         .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::Field("subblocks")))?;
+    check_single_subblock(context, actual_count, Location::Field("subblocks"))?;
     if actual_count != expected_count {
         return Err(Error::new(
             ErrorKind::SubblockDurationMismatch,
@@ -653,6 +668,31 @@ fn validate_parameter_data_kind(
                 Location::Field("parameter_data")
             },
         ))
+    }
+}
+
+/// Demixing and Recon Gain Parameter Blocks carry exactly one subblock.
+///
+/// Checked before the count reaches an allocation: a Recon Gain subblock with
+/// every layer absent is zero wire bytes, so no byte rule bounds its count, and
+/// a derived count of millions would otherwise build millions of subblocks.
+// ref: IAMF v1.1.0 index.bs:776-782 DemixingParamDefinition (num_subblocks SHALL be set to 1)
+// ref: IAMF v1.1.0 index.bs:786-792 ReconGainParamDefinition (num_subblocks SHALL be set to 1)
+// ref: iamf-tools@v2.1.0 iamf/obu/param_definitions.cc ValidateSpecificParamDefinition
+// NOTE: the reference is stricter: it requires param_definition_mode 0 and
+// constant_subblock_duration == duration != 0, checked on every Parameter Block
+// read and write. Only the count consequence is enforced here; the mode/csd
+// rule is deferred (quick 260914-1mq deferred item 2).
+// DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c iamf_parameter_new allocates nb_segments without checking; spec and iamf-tools are stricter and win.
+fn check_single_subblock(context: &ParameterDataContext, count: u32, at: Location) -> Result<()> {
+    let single_subblock_kind = matches!(
+        context,
+        ParameterDataContext::Demixing | ParameterDataContext::ReconGain { .. }
+    );
+    if single_subblock_kind && count != 1 {
+        Err(Error::new(ErrorKind::SubblockCountNotOne, at))
+    } else {
+        Ok(())
     }
 }
 

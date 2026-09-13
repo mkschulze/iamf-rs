@@ -14,6 +14,9 @@
 //! - A hostile count equal to the bytes remaining, in both a small buffer and a
 //!   full 2 MiB buffer, still yields the exact typed error (kind and offset) it
 //!   did before the fix — the early `bytes_remaining()` checks are unchanged.
+//! - A Demixing or Recon Gain subblock count other than 1, which can be derived
+//!   rather than paid for in wire bytes, is refused before any subblock is
+//!   reserved (quick 260914-1mq).
 //! - Structurally, no module under `src/` other than the two that reserve from
 //!   caller-owned in-memory collections contains a capacity reservation outside
 //!   the one inside `bounded_vec` (the source-scan gate below).
@@ -34,7 +37,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use iamf::bits::BitCursor;
-use iamf::obu::{read_audio_element, read_mix_presentation};
+use iamf::obu::{
+    ParamDefinition, ParamDefinitionRegistry, ParameterDataContext, read_audio_element,
+    read_mix_presentation, read_parameter_block,
+};
 use iamf::{ErrorKind, Location};
 
 /// The reference's whole-OBU ceiling, `kEntireObuSizeMaxTwoMegabytes`.
@@ -113,6 +119,32 @@ fn hostile_parameter_count_in_two_mebibyte_audio_element_errors_at_offset_12() {
     let error = read_audio_element(&mut r).expect_err("hostile count must not parse");
     assert_eq!(error.kind(), &ErrorKind::UnexpectedEndOfInput);
     assert_eq!(error.at(), Location::InputOffset(12));
+}
+
+#[test]
+fn hostile_recon_gain_subblock_count_in_two_mebibyte_parameter_block_errors_at_offset_0() {
+    // offset 0: parameter_id = 1 (mode 1 definition, Recon Gain, 7 absent layers)
+    // offset 1..4: duration = FB FF 7F
+    //              = 123 + 127*128 + 127*16384 = 2_097_147
+    //              = 2_097_152 - 5, the bytes left after the csd byte
+    // offset 4: constant_subblock_duration = 1
+    //           => implied num_subblocks = 2_097_147, each a zero-byte Recon Gain
+    //              subblock with ReconGain [false; 7], so it equals the bytes left
+    //              and passed the bytes_remaining() rule; before the fix this parsed
+    //              Ok and built 2_097_147 subblocks
+    // -> SubblockCountNotOne at the payload start, 0, before any reservation
+    let bytes = two_mebibyte_buffer(&[0x01, 0xFB, 0xFF, 0x7F, 0x01]);
+    let mut registry = ParamDefinitionRegistry::new();
+    registry.register(
+        ParamDefinition::mode_1(1, 48_000),
+        ParameterDataContext::ReconGain {
+            recon_gain_is_present: vec![false; 7],
+        },
+    );
+    let mut r = BitCursor::new(&bytes);
+    let error = read_parameter_block(&mut r, &registry).expect_err("hostile count must not parse");
+    assert_eq!(error.kind(), &ErrorKind::SubblockCountNotOne);
+    assert_eq!(error.at(), Location::InputOffset(0));
 }
 
 /// Files under `src/` the scan skips, each because its reservations are sized

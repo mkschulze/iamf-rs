@@ -216,6 +216,12 @@ pub enum ErrorKind {
     OpusStartTrimExceedsPreSkip,
     #[error("the start trim ended before reaching the Opus pre_skip")]
     OpusStartTrimShortOfPreSkip,
+    /// A Demixing or Recon Gain Parameter Block does not carry exactly one subblock.
+    // ref: IAMF v1.1.0 index.bs:776-782 and :786-792 (Demixing / Recon Gain: num_subblocks SHALL be set to 1)
+    // ref: iamf-tools@v2.1.0 iamf/obu/param_definitions.cc:37-60 ValidateSpecificParamDefinition (via parameter_block.cc:350 write, :376 read)
+    // DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:1103-1129 iamf_parameter_new allocates nb_segments unchecked
+    #[error("a Demixing or Recon Gain Parameter Block does not have exactly one subblock")]
+    SubblockCountNotOne,
 }
 
 /// An error, with the position it happened at attached exactly once.
