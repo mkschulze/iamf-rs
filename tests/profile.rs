@@ -10,21 +10,29 @@
 //! | Base          | 2                  | 18           |
 //! | Base-Enhanced | 28                 | 28           |
 //!
+//! A Mix Presentation with an element whose first layer is an expanded
+//! loudspeaker layout needs Base-Enhanced regardless of the counts.
+//!
 //! **Both counts are per Mix Presentation**, not per sequence. Every test below
 //! passes the Audio Elements of one Mix Presentation.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use iamf::encoder::EncoderBuilder;
 use iamf::error::ErrorKind;
-use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout};
+use iamf::model::layout::{
+    AmbisonicsMonoConfig, ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem,
+};
 use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
 };
 use iamf::model::{Profile, Q7_8, lufs_to_q7_8, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, ChannelAudioLayerConfig, IaSequenceHeader, Loudness, ScalableChannelLayoutConfig,
+    AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
+    LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
+    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +58,70 @@ fn stereo_elements(n: u32) -> Vec<AudioElement> {
     (0..n)
         .map(|i| element(i, LoudspeakerLayout::Stereo))
         .collect()
+}
+
+/// A scene-based Ambisonics mono element carrying `order_channels` channels.
+///
+/// The scene-based constructor is `pub(crate)`, so the public builder is the
+/// only route to one from outside the crate: build a one-element sequence and
+/// take its Audio Element back out. Valid sizes are 4 (FOA), 9 (SOA) and 16
+/// (TOA).
+fn ambisonics_element(order_channels: u8) -> iamf::Result<AudioElement> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(CodecConfig::lpcm(
+        42,
+        128,
+        LpcmDecoderConfig {
+            sample_format_flags: SampleFormatFlags::LittleEndian,
+            sample_size: 16,
+            sample_rate: 16_000,
+        },
+    ));
+    let streams = (0..order_channels)
+        .map(|_| builder.add_substream())
+        .collect();
+    let scene = builder.add_ambisonics_mono(
+        codec,
+        streams,
+        AmbisonicsMonoConfig {
+            output_channel_count: order_channels,
+            substream_count: order_channels,
+            channel_mapping: (0..order_channels).collect(),
+        },
+    );
+    let _presentation = builder.add_mix_presentation(
+        vec![scene],
+        MixPresentation {
+            mix_presentation_id: 7,
+            annotations_language: vec![b"en".to_vec()],
+            localized_presentation_annotations: vec![b"scene".to_vec()],
+            sub_mixes: vec![SubMix {
+                elements: vec![SubMixAudioElement {
+                    audio_element_id: 0,
+                    localized_element_annotations: vec![b"scene".to_vec()],
+                    rendering_config: RenderingConfig::stereo(),
+                    element_mix_gain: MixGainParamDefinition::mode_1(100, 16_000),
+                }],
+                output_mix_gain: MixGainParamDefinition::mode_1(101, 16_000),
+                layouts: vec![LayoutWithLoudness {
+                    layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                    reserved: 0,
+                    loudness: Loudness::new(0, 0),
+                }],
+            }],
+            trailing: Vec::new(),
+        },
+    );
+    let (encoder, _manifest) = builder.build()?;
+    encoder
+        .descriptors()
+        .audio_elements
+        .first()
+        .cloned()
+        .ok_or(iamf::Error::new(
+            ErrorKind::InvalidDescriptorReference,
+            iamf::Location::Unlocated,
+        ))
 }
 
 /// Select the minimum profile for these elements, as one Mix Presentation.
@@ -156,34 +228,6 @@ fn twenty_nine_audio_elements_are_a_typed_error() {
 // PROF-02 — the channel-count limits, each with one step either side
 // ---------------------------------------------------------------------------
 
-/// Channel-based elements totalling `channels`, using supported layouts.
-///
-/// The profile limits are per Presentation, so these combinations preserve
-/// the exact total without giving external callers a scene-based constructor.
-fn elements_totalling(channels: u8) -> Vec<AudioElement> {
-    let layouts = [
-        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
-        LoudspeakerLayout::Ch7_1_4,
-        LoudspeakerLayout::Ch5_1,
-        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch3_0),
-        LoudspeakerLayout::Stereo,
-        LoudspeakerLayout::Mono,
-    ];
-    let mut remaining = u32::from(channels);
-    let mut elements = Vec::new();
-    for layout in layouts {
-        let width = layout.channel_count().unwrap_or(0);
-        while width > 0 && remaining >= width {
-            elements.push(element(
-                u32::try_from(elements.len()).unwrap_or_default(),
-                layout,
-            ));
-            remaining = remaining.saturating_sub(width);
-        }
-    }
-    elements
-}
-
 #[test]
 fn a_single_five_one_six_channel_element_selects_simple() {
     // Exactly the Phase 1 fixture, and plan 01-08 depends on this answer.
@@ -199,10 +243,12 @@ fn a_single_five_one_six_channel_element_selects_simple() {
 }
 
 #[test]
-fn expanded_9_1_6_has_sixteen_channels_and_selects_simple_when_alone() {
-    // A wrong expanded-layout count, or failing to delegate from the enclosing
-    // layout, would either reject this supported layout or choose the wrong
-    // profile for a one-element Presentation.
+fn expanded_9_1_6_has_sixteen_channels_and_selects_base_enhanced_when_alone() {
+    // 16 channels in one element would fit Simple by count, but an expanded
+    // loudspeaker layout needs Base-Enhanced even then: iamf-tools
+    // profile_filter.cc:165-171 erases Simple and Base for kLayoutExpanded. The
+    // channel count is still checked, because a wrong one would reject this
+    // supported layout or mis-size the ceilings.
     assert_eq!(ExpandedLoudspeakerLayout::Ch9_1_6.channel_count(), Some(16));
     let elements = vec![element(
         0,
@@ -210,7 +256,7 @@ fn expanded_9_1_6_has_sixteen_channels_and_selects_simple_when_alone() {
     )];
     assert_eq!(
         select(&elements).map(|(profile, _)| profile),
-        Ok(Profile::Simple)
+        Ok(Profile::BaseEnhanced)
     );
 }
 
@@ -243,7 +289,10 @@ fn every_named_expanded_layout_has_its_normative_channel_count() {
 #[test]
 fn sixteen_channels_in_one_element_select_simple() {
     assert_eq!(SIMPLE_MAX_CHANNELS, 16);
-    let elements = elements_totalling(16);
+    // TOA alone: one element, 16 channels. No channel-based layout without an
+    // expanded layout reaches 16, and an expanded one would trip the
+    // Base-Enhanced floor instead of the channel limit this test is about.
+    let elements = vec![ambisonics_element(16).expect("a TOA element builds")];
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::Simple));
 }
 
@@ -257,33 +306,61 @@ fn twelve_channels_in_one_channel_based_element_select_simple() {
 
 #[test]
 fn seventeen_channels_select_base() {
-    let elements = elements_totalling(17);
+    // TOA + mono: 17 channels in two elements. At most two elements and no
+    // expanded layout, so the channel limit, not the element limit or the
+    // expanded floor, decides.
+    let elements = vec![
+        ambisonics_element(16).expect("a TOA element builds"),
+        element(1, LoudspeakerLayout::Mono),
+    ];
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::Base));
 }
 
 #[test]
 fn eighteen_channels_select_base() {
     assert_eq!(BASE_MAX_CHANNELS, 18);
-    let elements = elements_totalling(18);
+    // 7.1.4 + 5.1: 18 channels in two elements, no expanded layout, so the
+    // channel limit decides.
+    let elements = vec![
+        element(0, LoudspeakerLayout::Ch7_1_4),
+        element(1, LoudspeakerLayout::Ch5_1),
+    ];
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::Base));
 }
 
 #[test]
 fn nineteen_channels_select_base_enhanced() {
-    let elements = elements_totalling(19);
+    // SOA + 5.1.4: 19 channels in two elements, no expanded layout, so the
+    // channel limit decides.
+    let elements = vec![
+        ambisonics_element(9).expect("an SOA element builds"),
+        element(1, LoudspeakerLayout::Ch5_1_4),
+    ];
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::BaseEnhanced));
 }
 
 #[test]
 fn twenty_eight_channels_select_base_enhanced() {
     assert_eq!(BASE_ENHANCED_MAX_CHANNELS, 28);
-    let elements = elements_totalling(28);
+    // TOA + 7.1.4: 28 channels in two elements, no expanded layout, so the
+    // channel limit decides.
+    let elements = vec![
+        ambisonics_element(16).expect("a TOA element builds"),
+        element(1, LoudspeakerLayout::Ch7_1_4),
+    ];
     assert_eq!(select(&elements).map(|(p, _)| p), Ok(Profile::BaseEnhanced));
 }
 
 #[test]
 fn twenty_nine_channels_are_a_typed_error() {
-    let elements = elements_totalling(29);
+    // TOA + 7.1.4 + mono: 29 channels in three elements, no expanded layout.
+    // Three elements are within the Base-Enhanced element ceiling, so the
+    // channel ceiling is the deciding rule.
+    let elements = vec![
+        ambisonics_element(16).expect("a TOA element builds"),
+        element(1, LoudspeakerLayout::Ch7_1_4),
+        element(2, LoudspeakerLayout::Mono),
+    ];
     let err = select(&elements).expect_err("29 channels exceed every profile");
     assert_eq!(err.kind(), &ErrorKind::ChannelCountExceedsProfile);
 }

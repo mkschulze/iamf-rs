@@ -18,8 +18,19 @@
 //! the stricter of the two references, and `libiamf`'s acceptance is this
 //! project's Core Value. Emitting both profiles equal is always safe, and
 //! [`select_minimum_profile`] never returns a pair that could trip the rule.
+//!
+//! # Expanded loudspeaker layouts need Base-Enhanced
+//!
+//! `loudspeaker_layout = 15` (expanded) is reserved in IAMF v1.0.0-errata, the
+//! version Simple and Base comply with, so a channel-based element whose first
+//! layer uses an expanded layout needs Base-Enhanced however few elements and
+//! channels it has. The failure is silent: pinned `libiamf` given a Simple
+//! header over a lone expanded LFE element exits 0, decodes 0 frames and writes
+//! a bare 44-byte WAV. Patching only the two profile bytes to `02 02` makes the
+//! same file decode 1 frame.
 
 use crate::error::{Error, ErrorKind, Location, Result};
+use crate::model::layout::LoudspeakerLayout;
 use crate::obu::{AudioElement, AudioElementType};
 
 /// A profile byte, as `primary_profile` or `additional_profile` carries it.
@@ -126,6 +137,13 @@ pub const BASE_ENHANCED_MAX_CHANNELS: u32 = 28;
 /// `libiamf` enforces `primary <= additional`, it rejects the entire sequence
 /// when the rule is broken, and equal profiles can never break it.
 ///
+/// An element whose **first** layer is an expanded loudspeaker layout needs
+/// Base-Enhanced whatever the counts: `loudspeaker_layout = 15` is reserved in
+/// IAMF v1.0.0-errata, which Simple and Base comply with, and pinned `libiamf`
+/// silently decodes 0 frames from a Simple or Base header carrying one. The
+/// Base-Enhanced ceilings are still checked first, so an over-ceiling
+/// configuration stays an error rather than becoming Base-Enhanced.
+///
 /// # Errors
 ///
 /// [`ErrorKind::ElementCountExceedsProfile`] above 28 Audio Elements and
@@ -150,20 +168,47 @@ pub fn select_minimum_profile(elements: &[&AudioElement]) -> Result<(Profile, Pr
         ));
     }
 
-    // The tiers, in ascending order. A configuration takes the first one that
+    // The expanded-layout floor. It reads the FIRST layer, as the reference
+    // does (`channel_audio_layer_configs[0]`, libiamf `layer[0]`), while channel
+    // counting above keeps the last. It runs after both ceilings so that an
+    // over-ceiling configuration stays a typed error rather than becoming
+    // Base-Enhanced.
+    // ref: iamf-tools@v2.1.0 iamf/cli/profile_filter.cc:165-171 FilterChannelBasedConfig (kLayoutExpanded erases Simple and Base)
+    // ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc:306-313 (the sequencer refuses a header whose profiles the Mix Presentation does not support)
+    // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:643-648 iamf_element_is_valid (layout 15 under Simple or Base drops the element)
+    // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1402-1410 (effective profile is min(additional_profile, Base-Enhanced))
+    // ref: eclipsa-audio-plugin@c964609 common/data_structures/src/FileExport.h:91-106 minimumProfile
+    let has_expanded_first_layer = elements.iter().any(|element| {
+        matches!(
+            &element.audio_element_type,
+            AudioElementType::ChannelBased(config)
+                if config
+                    .scalable_channel_layout
+                    .layers
+                    .first()
+                    .is_some_and(|layer| matches!(
+                        layer.loudspeaker_layout,
+                        LoudspeakerLayout::Expanded(_)
+                    ))
+        )
+    });
+
+    // The floor first, then the tiers in ascending order. Without an expanded
+    // first layer, a configuration takes the first tier that
     // permits BOTH its element count and its channel count — which is what
     // makes two stereo elements Base even though four channels would fit
     // Simple twice over.
-    let profile =
-        if element_count <= SIMPLE_MAX_AUDIO_ELEMENTS && channel_count <= SIMPLE_MAX_CHANNELS {
-            Profile::Simple
-        } else if element_count <= BASE_MAX_AUDIO_ELEMENTS && channel_count <= BASE_MAX_CHANNELS {
-            Profile::Base
-        } else {
-            // Both Base-Enhanced ceilings were checked above, so this arm is
-            // reached only when the configuration fits them.
-            Profile::BaseEnhanced
-        };
+    let profile = if has_expanded_first_layer {
+        Profile::BaseEnhanced
+    } else if element_count <= SIMPLE_MAX_AUDIO_ELEMENTS && channel_count <= SIMPLE_MAX_CHANNELS {
+        Profile::Simple
+    } else if element_count <= BASE_MAX_AUDIO_ELEMENTS && channel_count <= BASE_MAX_CHANNELS {
+        Profile::Base
+    } else {
+        // Both Base-Enhanced ceilings were checked above, so this arm is
+        // reached only when the configuration fits them.
+        Profile::BaseEnhanced
+    };
 
     // Equal, always. The ordering rule can then never be tripped.
     Ok((profile, profile))

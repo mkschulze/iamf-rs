@@ -183,9 +183,13 @@ fn build_rejects_duplicate_authored_parameter_definition_ids() {
 
 #[test]
 fn unrelated_presentations_do_not_sum_their_element_or_channel_limits() {
-    // Two independent 16-channel Presentations would exceed the sequence-wide
-    // 28-channel cap if their elements were incorrectly unioned. Each
-    // Presentation itself needs only Simple.
+    // Two independent 16-channel TOA Presentations would total 32 channels,
+    // above the 28-channel ceiling, if their elements were unioned. Each one
+    // alone needs only Simple.
+    //
+    // Per-presentation scope follows both references. IAMF v1.0.0-errata words
+    // the Simple and Base element limits sequence-wide; the references win
+    // (260913-p28 research A, Disagreement 1).
     let (_, manifest) = two_presentation_builder().build().unwrap();
     assert_eq!(manifest.sequence_profile(), Profile::Simple);
 }
@@ -228,6 +232,23 @@ fn largest_presentation_sets_the_sequence_profile() {
         builder.add_mix_presentation(vec![small], presentation_for_elements(&[102], 200, 210));
 
     let (encoder, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+    assert_eq!(encoder.descriptors().sequence_header.primary_profile, 2);
+    assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
+}
+
+#[test]
+fn a_lone_expanded_lfe_element_writes_base_enhanced_profile_bytes() {
+    // One element, one channel: the counts alone would say Simple. But
+    // loudspeaker_layout = 15 is reserved to Simple and Base parsers, and pinned
+    // libiamf drops such an element under a Simple header and decodes 0 frames
+    // (iamf-tools profile_filter.cc:165-171, libiamf IAMF_decoder.c:643-648).
+    let (encoder, manifest) = build_counts(
+        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe),
+        1,
+        0,
+    )
+    .expect("a lone expanded LFE element with its reference counts builds");
     assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
     assert_eq!(encoder.descriptors().sequence_header.primary_profile, 2);
     assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
@@ -1016,25 +1037,30 @@ fn builder_authors_ambisonics_mono_through_opaque_substreams() {
 fn two_presentation_builder() -> EncoderBuilder {
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
-    let first = add_fresh_element(
-        &mut builder,
-        codec,
-        element_with_layout(LoudspeakerLayout::Expanded(
-            ExpandedLoudspeakerLayout::Ch9_1_6,
-        )),
-    );
-    let second = add_fresh_element(
-        &mut builder,
-        codec,
-        element_with_layout(LoudspeakerLayout::Expanded(
-            ExpandedLoudspeakerLayout::Ch9_1_6,
-        )),
-    );
+    let first = add_toa_element(&mut builder, codec);
+    let second = add_toa_element(&mut builder, codec);
     let _first_presentation =
         builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));
     let _second_presentation =
         builder.add_mix_presentation(vec![second], presentation_for_elements(&[100], 200, 210));
     builder
+}
+
+/// A 16-channel third-order Ambisonics mono element on fresh substreams.
+fn add_toa_element(
+    builder: &mut EncoderBuilder,
+    codec: iamf::encoder::CodecConfigHandle,
+) -> iamf::encoder::AudioElementHandle {
+    let streams = (0..16).map(|_| builder.add_substream()).collect();
+    builder.add_ambisonics_mono(
+        codec,
+        streams,
+        iamf::model::layout::AmbisonicsMonoConfig {
+            output_channel_count: 16,
+            substream_count: 16,
+            channel_mapping: (0..16).collect(),
+        },
+    )
 }
 
 fn add_fresh_element(
