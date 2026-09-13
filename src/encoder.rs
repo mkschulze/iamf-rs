@@ -274,7 +274,28 @@ impl<W: Write> EncodingWriter<W> {
     ///
     /// This consumes the writer, preserving the underlying writer's poisoned
     /// state and its compile-time prohibition on submissions after finishing.
+    ///
+    /// For an Opus Codec Config, finishing while the start-trim run is still
+    /// open and short of `pre_skip` (including a stream with no temporal units)
+    /// fails with [`ErrorKind::OpusStartTrimShortOfPreSkip`].
     pub fn finish(self) -> Result<W> {
+        // A poisoned writer keeps reporting its poisoned error first.
+        self.sequence.check_not_poisoned()?;
+        // ref: IAMF v1.1.0 index.bs:1819 "Pre-skip SHALL be the same as the number of audio
+        //      samples to be trimmed at the start of coded Audio Substreams"
+        // A closed run was already judged at push time, so only an open run is checked
+        // here. The sink is dropped on this error, as it already is for sink and
+        // poisoned errors.
+        if let Some(pre_skip) = self.opus_pre_skip() {
+            if self.progress.start_trim_open
+                && self.progress.start_trim_total != u32::from(pre_skip)
+            {
+                return Err(temporal_input(
+                    ErrorKind::OpusStartTrimShortOfPreSkip,
+                    "trimming",
+                ));
+            }
+        }
         self.sequence.finish()
     }
 

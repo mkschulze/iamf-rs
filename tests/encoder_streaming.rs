@@ -756,6 +756,124 @@ fn opus_start_trim_equal_to_pre_skip_round_trips() -> iamf::Result<()> {
     Ok(())
 }
 
+#[test]
+fn opus_start_trim_exceeding_pre_skip_across_units_is_rejected() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(120, 312)?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(opus_unit(handle, Some(start_trim(120))))
+        .expect_err("a third full frame trims past pre_skip");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimExceedsPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(72))))?;
+    writer.push_temporal_unit(opus_unit(handle, None))?;
+    writer.finish()?;
+    Ok(())
+}
+
+#[test]
+fn opus_start_trim_run_closing_short_of_pre_skip_is_rejected() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(120, 312)?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(opus_unit(handle, Some(start_trim(71))))
+        .expect_err("a remainder frame one sample short closes the run short");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimShortOfPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(72))))?;
+    Ok(())
+}
+
+#[test]
+fn opus_start_trim_spanning_units_round_trips() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(120, 312)?;
+    for trimming in [
+        Some(start_trim(120)),
+        Some(start_trim(120)),
+        Some(start_trim(72)),
+        None,
+    ] {
+        writer.push_temporal_unit(opus_unit(handle, trimming))?;
+    }
+    let bytes = writer.finish()?;
+
+    assert_eq!(
+        audio_frame_trims(&bytes)?,
+        vec![
+            TypeSpecific::Trimming(Some(start_trim(120))),
+            TypeSpecific::Trimming(Some(start_trim(120))),
+            TypeSpecific::Trimming(Some(start_trim(72))),
+            TypeSpecific::Trimming(None),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn opus_pre_skip_equal_to_the_frame_size_is_accepted() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(120, 120)?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    writer.push_temporal_unit(opus_unit(handle, None))?;
+    writer.finish()?;
+
+    let (mut writer, handle) = opus_writer(120, 120)?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    writer.finish()?;
+    Ok(())
+}
+
+#[test]
+fn finish_rejects_an_empty_opus_stream() -> iamf::Result<()> {
+    let (writer, _handle) = opus_writer(960, 312)?;
+    let error = writer
+        .finish()
+        .expect_err("an Opus stream without temporal units trims nothing");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimShortOfPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    Ok(())
+}
+
+#[test]
+fn finish_rejects_an_open_opus_start_trim_run_short_of_pre_skip() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(120, 312)?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(120))))?;
+    let error = writer
+        .finish()
+        .expect_err("a fully trimmed stream short of pre_skip cannot finish");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimShortOfPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    Ok(())
+}
+
+#[test]
+fn lpcm_and_flac_streams_need_no_start_trim() -> iamf::Result<()> {
+    for config in [lpcm_config(), CodecConfig::flac(0, 128, 16_000, 16)?] {
+        let (encoder, _) = mono_builder(config.clone())?;
+        encoder.start(Vec::new())?.finish()?;
+
+        let (encoder, (handle, frame)) = mono_builder(config)?;
+        let mut writer = encoder.start(Vec::new())?;
+        writer.push_temporal_unit(TemporalUnitInput {
+            frames: vec![(handle, frame)],
+            parameter_blocks: Vec::new(),
+            trimming: None,
+        })?;
+        writer.finish()?;
+    }
+    Ok(())
+}
+
 fn opus_writer(
     num_samples_per_frame: u32,
     pre_skip: u16,
