@@ -359,6 +359,39 @@ impl ParsedSequence {
             }
         }
 
+        // Pass three: profile compliance against the first IA Sequence Header
+        // in wire order (quick 260913-qk3). Nothing is appended without one.
+        // Unique Audio Elements are counted inside `sequence_floor` by distinct
+        // `audio_element_id`, first binding, which filters `obu_redundant_copy`
+        // duplicates (IAMF v1.1.0 index.bs:1906); a redundant Mix Presentation
+        // copy is harmless to the "any presentation complies" test.
+        // ref: IAMF v1.1.0 index.bs:1929, :596, :1953
+        let header = self.obus.iter().find_map(|obu| match obu {
+            SequenceObu::IaSequenceHeader(obu) => Some(&obu.payload),
+            _ => None,
+        });
+        if let Some(header) = header {
+            let presentations: Vec<&MixPresentation> = self
+                .obus
+                .iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::MixPresentation(obu) => Some(&obu.payload),
+                    _ => None,
+                })
+                .collect();
+            findings.extend(crate::model::profile::compliance_findings(
+                header.primary_profile,
+                header.additional_profile,
+                &audio_elements,
+                &presentations,
+            ));
+            // qk3 Q1 = A: the sequence-wide limit finding is reported here too.
+            findings.extend(crate::model::profile::sequence_limit_findings(
+                header.primary_profile,
+                &audio_elements,
+            ));
+        }
+
         findings
     }
 

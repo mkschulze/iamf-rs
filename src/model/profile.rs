@@ -55,7 +55,7 @@
 //! both, so the spec's scopes are applied. The profile is raised to satisfy
 //! them; a configuration is rejected only above the Base-Enhanced ceilings.
 
-use crate::error::{Error, ErrorKind, Location, Result};
+use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::layout::LoudspeakerLayout;
 use crate::obu::{AudioElement, AudioElementType, HeadphonesRenderingMode, MixPresentation};
 
@@ -429,6 +429,114 @@ fn sequence_floor(elements: &[&AudioElement]) -> Result<Profile> {
         ));
     }
     Ok(sequence_count_floor(&unique))
+}
+
+/// Findings for an IA Sequence Header whose profiles no Mix Presentation
+/// complies with (item 5, quick 260913-qk3).
+///
+/// A presentation complies with a profile when
+/// [`presentation_minimum_profile`] returns a profile at or below it; any
+/// error means it does not comply. Zero presentations never comply. A
+/// reserved `primary_profile` adds nothing: the header's own finding covers
+/// it. The `additional_profile` finding is emitted only when it differs from
+/// `primary_profile` and is not reserved, since the profiles nest.
+///
+/// Never panics, indexes or does bare arithmetic: foreign input reaches it.
+// ref: IAMF v1.1.0 index.bs:1929 (at least one Mix Presentation SHALL comply with primary_profile)
+// ref: IAMF v1.1.0 index.bs:596 (additional_profile)
+pub(crate) fn compliance_findings(
+    primary_profile: u8,
+    additional_profile: u8,
+    elements: &[&AudioElement],
+    presentations: &[&MixPresentation],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let primary = Profile::from_wire(primary_profile);
+    if matches!(primary, Profile::Reserved(_)) {
+        return findings;
+    }
+    let complies_with = |profile: Profile| {
+        presentations.iter().any(|presentation| {
+            presentation_minimum_profile(presentation, elements)
+                .is_ok_and(|needed| needed <= profile)
+        })
+    };
+    if !complies_with(primary) {
+        findings.push(Finding {
+            at: Location::Field("primary_profile"),
+            message: format!(
+                "no Mix Presentation complies with primary_profile {primary_profile} \
+                 (IAMF v1.1.0 index.bs:1929)"
+            ),
+        });
+    }
+    let additional = Profile::from_wire(additional_profile);
+    if additional_profile != primary_profile
+        && !matches!(additional, Profile::Reserved(_))
+        && !complies_with(additional)
+    {
+        findings.push(Finding {
+            at: Location::Field("additional_profile"),
+            message: format!(
+                "no Mix Presentation complies with additional_profile {additional_profile} \
+                 (IAMF v1.1.0 index.bs:596)"
+            ),
+        });
+    }
+    findings
+}
+
+/// Findings for an IA Sequence whose unique Audio Elements need a higher
+/// profile than `primary_profile`, or exceed every profile's sequence-wide
+/// limit.
+///
+/// Unique elements are distinct `audio_element_id`s, first binding, so an
+/// `obu_redundant_copy` duplicate is never counted twice. When a channel count
+/// is not fixed by this spec version, the unique-element rules still apply
+/// without it. A reserved `primary_profile` adds nothing.
+// ref: IAMF v1.1.0 index.bs:1906 (unique OBUs ignore obu_redundant_copy), :1953 (Base-Enhanced 28-channel sequence total)
+// ref: IAMF v1.0.0-errata index.bs:1852-1873 (adopted by v1.1.0 index.bs:1936, :1943)
+pub(crate) fn sequence_limit_findings(
+    primary_profile: u8,
+    elements: &[&AudioElement],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let primary = Profile::from_wire(primary_profile);
+    if matches!(primary, Profile::Reserved(_)) {
+        return findings;
+    }
+    let unique = unique_by_id(elements);
+    let needed = match sequence_floor(elements) {
+        Ok(needed) => needed,
+        Err(error) => match error.kind() {
+            ErrorKind::UnsupportedLayout => sequence_count_floor(&unique),
+            ErrorKind::ElementCountExceedsProfile | ErrorKind::ChannelCountExceedsProfile => {
+                findings.push(Finding {
+                    at: Location::Field("primary_profile"),
+                    message: format!(
+                        "the IA Sequence's {} unique Audio Elements exceed every profile's \
+                         sequence-wide limit (IAMF v1.1.0 index.bs:1953)",
+                        unique.len()
+                    ),
+                });
+                return findings;
+            }
+            _ => return findings,
+        },
+    };
+    if needed > primary {
+        findings.push(Finding {
+            at: Location::Field("primary_profile"),
+            message: format!(
+                "the IA Sequence's {} unique Audio Elements need profile {} or higher, above \
+                 primary_profile {primary_profile} (IAMF v1.0.0-errata index.bs:1852-1873, \
+                 adopted by v1.1.0 index.bs:1936, :1943)",
+                unique.len(),
+                needed.to_wire()
+            ),
+        });
+    }
+    findings
 }
 
 /// The channels the Audio Elements of one Mix Presentation carry, summed with

@@ -154,11 +154,11 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "test_000119.iamf",
-        "13f77189d815adc5e0ce8327e171831702baf3cbb98be0ac9203e69419dcb355"
+        "1b21439e7ad58b67d7499af6265a1f8f172f9355b5caba7856bff94323c2f32a"
     ),
     positive!(
         "test_000120.iamf",
-        "1928ee543bbf14d8b8ed5c276a058c5679b2b82b6a82b476a35ec2e1edbf53a4"
+        "8602eda33e6259b59d6893e60ef04450c0938b957f084bd8c7fbe46621fd3659"
     ),
     positive!(
         "test_000121.iamf",
@@ -166,15 +166,15 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "test_000122.iamf",
-        "b324def10ef2e4ea0f6c68f3dd3b293d141aaed4c2305dbf7e76340ffa69353a"
+        "9afccf111c59f50ca9e76a789ba7e4a82637487ba12fcdc989268b66cca4c696"
     ),
     positive!(
         "test_000124.iamf",
-        "153257eae43ba539d41c095cc684facb0edba6a70edb9e27c33836be118baedc"
+        "893a6103219259eb5863c01d649f97a8af298f0dcbda3e0514c5236264016ad6"
     ),
     positive!(
         "test_000130.iamf",
-        "219e6285ff7a47445f0007b01b2105dfba359eebcdc7dd054d1a58b2ab099d12"
+        "247bedac5d10092cb6d8881a2920973bc9f3bc7f779fa538f6bff5c4a39ec208"
     ),
     positive!(
         "test_000501.iamf",

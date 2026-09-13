@@ -5,14 +5,15 @@ mod support;
 
 use hex_literal::hex;
 use iamf::bits::BitWriter;
-use iamf::error::{ErrorKind, Location};
+use iamf::error::{ErrorKind, Finding, Location};
 use iamf::model::DescriptorSet;
-use iamf::model::layout::LoudspeakerLayout;
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout};
 use iamf::obu::{
-    AudioElementParam, AudioElementType, AudioFrame, BlockDurationFields, ChannelAudioLayerConfig,
-    MixGainParameterData, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
-    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock, TemporalDelimiter,
-    write_obu,
+    AudioElement, AudioElementParam, AudioElementType, AudioFrame, BlockDurationFields,
+    ChannelAudioLayerConfig, HeadphonesRenderingMode, IaSequenceHeader, MixGainParameterData,
+    MixPresentation, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
+    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock, SubMixAudioElement,
+    TemporalDelimiter, write_obu,
 };
 use iamf::sequence::{
     ParsedSequence, SequenceObu, UngovernedParameterBlock, UnknownObu, parse_sequence,
@@ -438,7 +439,8 @@ fn a_valid_prefix_plus_truncated_suffix_returns_no_partial_model_and_absolute_of
 }
 
 #[test]
-fn flat_validation_reports_local_then_duplicate_then_reference_findings_in_wire_order() {
+fn flat_validation_reports_local_then_duplicate_then_reference_then_profile_findings_in_wire_order()
+{
     let mut invalid_header = support::published_sequence_header();
     invalid_header.payload.ia_code = 0;
     let mut first_config = support::published_codec_config();
@@ -463,7 +465,7 @@ fn flat_validation_reports_local_then_duplicate_then_reference_findings_in_wire_
         .map(|finding| finding.message)
         .collect();
 
-    assert_eq!(messages.len(), 4, "{messages:?}");
+    assert_eq!(messages.len(), 5, "{messages:?}");
     assert!(
         messages.first().is_some_and(|m| m.contains("ia_code")),
         "{messages:?}"
@@ -484,6 +486,13 @@ fn flat_validation_reports_local_then_duplicate_then_reference_findings_in_wire_
         messages
             .get(3)
             .is_some_and(|m| m.contains("audio_substream_id 77")),
+        "{messages:?}"
+    );
+    // The sequence has no Mix Presentation, so none complies with its
+    // primary_profile 0 (IAMF v1.1.0 index.bs:1929).
+    assert_eq!(
+        messages.get(4).map(String::as_str),
+        Some("no Mix Presentation complies with primary_profile 0 (IAMF v1.1.0 index.bs:1929)"),
         "{messages:?}"
     );
 }
@@ -552,4 +561,240 @@ fn raw_unknown_payload_is_indivisible_and_preserves_header_flags() {
     assert_eq!(unknown.header, header);
     assert_eq!(unknown.payload, vec![0xaa, 0xbb, 0xcc]);
     assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+}
+
+// ---------------------------------------------------------------------------
+// Profile compliance findings (quick 260913-qk3, item 5)
+// ---------------------------------------------------------------------------
+
+fn f1(primary: u8) -> Finding {
+    Finding {
+        at: Location::Field("primary_profile"),
+        message: format!(
+            "no Mix Presentation complies with primary_profile {primary} (IAMF v1.1.0 index.bs:1929)"
+        ),
+    }
+}
+
+fn f2(additional: u8) -> Finding {
+    Finding {
+        at: Location::Field("additional_profile"),
+        message: format!(
+            "no Mix Presentation complies with additional_profile {additional} (IAMF v1.1.0 index.bs:596)"
+        ),
+    }
+}
+
+fn f3(unique: usize, needed: u8, primary: u8) -> Finding {
+    Finding {
+        at: Location::Field("primary_profile"),
+        message: format!(
+            "the IA Sequence's {unique} unique Audio Elements need profile {needed} or higher, \
+             above primary_profile {primary} (IAMF v1.0.0-errata index.bs:1852-1873, adopted by \
+             v1.1.0 index.bs:1936, :1943)"
+        ),
+    }
+}
+
+/// Only the profile findings F1-F4, in their returned order.
+fn profile_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .filter(|finding| {
+            finding.message.contains("complies with")
+                || finding.message.contains("unique Audio Elements")
+        })
+        .collect()
+}
+
+/// A sub-mix element reference to `audio_element_id`, cloned from MP 42's.
+fn reference_to(audio_element_id: u32) -> Option<SubMixAudioElement> {
+    let mut reference = support::published_mix_presentation()
+        .payload
+        .sub_mixes
+        .first()?
+        .elements
+        .first()?
+        .clone();
+    reference.audio_element_id = audio_element_id;
+    Some(reference)
+}
+
+/// Element 300's clone, with id 301.
+fn element_301() -> AudioElement {
+    let mut element = support::published_audio_element().payload;
+    element.audio_element_id = 301;
+    element
+}
+
+/// MP 42 retargeted as `mix_presentation_id` referencing only `audio_element_id`.
+fn presentation_for(mix_presentation_id: u32, audio_element_id: u32) -> MixPresentation {
+    let mut presentation = support::published_mix_presentation().payload;
+    presentation.mix_presentation_id = mix_presentation_id;
+    for sub_mix in &mut presentation.sub_mixes {
+        for element in &mut sub_mix.elements {
+            element.audio_element_id = audio_element_id;
+        }
+    }
+    presentation
+}
+
+#[test]
+fn descriptor_set_profile_findings_follow_the_header_profile() {
+    let set = published_descriptor_set();
+    assert_eq!(profile_findings(set.validate()), vec![]);
+
+    // Two elements in MP 42 under a Simple header: MP 42 needs Base, and the
+    // sequence carries two unique Audio Elements.
+    let mut two = published_descriptor_set();
+    two.audio_elements.push(element_301());
+    two.mix_presentations
+        .first_mut()
+        .and_then(|presentation| presentation.sub_mixes.first_mut())
+        .unwrap()
+        .elements
+        .push(reference_to(301).unwrap());
+    assert_eq!(profile_findings(two.validate()), vec![f1(0), f3(2, 1, 0)]);
+    two.sequence_header = IaSequenceHeader::new(1, 1);
+    assert_eq!(profile_findings(two.validate()), vec![]);
+
+    // Zero Mix Presentations never comply.
+    let mut none = published_descriptor_set();
+    none.mix_presentations.clear();
+    assert_eq!(profile_findings(none.validate()), vec![f1(0)]);
+}
+
+#[test]
+fn descriptor_set_reports_sub_mix_and_headphones_non_compliance() {
+    let mut two_sub_mixes = published_descriptor_set();
+    let presentation = two_sub_mixes.mix_presentations.first_mut().unwrap();
+    let extra = presentation.sub_mixes.first().unwrap().clone();
+    presentation.sub_mixes.push(extra);
+    assert_eq!(profile_findings(two_sub_mixes.validate()), vec![f1(0)]);
+
+    // One complying presentation alongside is enough.
+    two_sub_mixes
+        .mix_presentations
+        .push(presentation_for(43, 300));
+    assert_eq!(profile_findings(two_sub_mixes.validate()), vec![]);
+
+    let mut reserved = published_descriptor_set();
+    reserved
+        .mix_presentations
+        .first_mut()
+        .and_then(|presentation| presentation.sub_mixes.first_mut())
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .unwrap()
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(2);
+    assert_eq!(profile_findings(reserved.validate()), vec![f1(0)]);
+}
+
+#[test]
+fn descriptor_set_counts_unique_elements_across_presentations() {
+    let mut set = published_descriptor_set();
+    set.audio_elements.push(element_301());
+    set.mix_presentations.push(presentation_for(43, 301));
+    assert_eq!(profile_findings(set.validate()), vec![f3(2, 1, 0)]);
+}
+
+#[test]
+fn descriptor_set_reports_an_expanded_element_under_simple_and_base() {
+    let mut set = published_descriptor_set();
+    let element = set.audio_elements.first_mut().unwrap();
+    let AudioElementType::ChannelBased(config) = &mut element.audio_element_type else {
+        panic!("the published element is channel-based");
+    };
+    config
+        .scalable_channel_layout
+        .layers
+        .first_mut()
+        .unwrap()
+        .loudspeaker_layout = LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe);
+    assert_eq!(profile_findings(set.validate()), vec![f1(0), f3(1, 2, 0)]);
+
+    set.sequence_header = IaSequenceHeader::new(2, 1);
+    assert_eq!(profile_findings(set.validate()), vec![f2(1)]);
+}
+
+#[test]
+fn a_reserved_primary_profile_adds_no_profile_finding() {
+    let mut set = published_descriptor_set();
+    set.audio_elements.push(element_301());
+    set.mix_presentations.clear();
+    set.sequence_header = IaSequenceHeader::new(3, 3);
+    assert_eq!(profile_findings(set.validate()), vec![]);
+}
+
+fn published_parsed_sequence() -> Vec<SequenceObu> {
+    vec![
+        SequenceObu::IaSequenceHeader(support::published_sequence_header()),
+        SequenceObu::CodecConfig(support::published_codec_config()),
+        SequenceObu::AudioElement(support::published_audio_element()),
+        SequenceObu::MixPresentation(support::published_mix_presentation()),
+    ]
+}
+
+#[test]
+fn parsed_sequence_profile_findings_skip_redundant_copies() {
+    let sequence = ParsedSequence {
+        obus: published_parsed_sequence(),
+    };
+    assert_eq!(profile_findings(sequence.validate()), vec![]);
+
+    let mut element_copy = support::published_audio_element();
+    element_copy.header = element_copy.header.with_redundant_copy(true);
+    let mut presentation_copy = support::published_mix_presentation();
+    presentation_copy.header = presentation_copy.header.with_redundant_copy(true);
+    let mut obus = published_parsed_sequence();
+    obus.push(SequenceObu::AudioElement(element_copy));
+    obus.push(SequenceObu::MixPresentation(presentation_copy));
+    let sequence = ParsedSequence { obus };
+    assert_eq!(profile_findings(sequence.validate()), vec![]);
+}
+
+#[test]
+fn parsed_sequence_reports_two_sub_mixes_under_a_base_header() {
+    // The test_000124 shape: one Mix Presentation with two sub-mixes.
+    let mut header = support::published_sequence_header();
+    header.payload = IaSequenceHeader::new(1, 1);
+    let mut presentation = support::published_mix_presentation();
+    let extra = presentation.payload.sub_mixes.first().unwrap().clone();
+    presentation.payload.sub_mixes.push(extra);
+    let sequence = ParsedSequence {
+        obus: vec![
+            SequenceObu::IaSequenceHeader(header),
+            SequenceObu::CodecConfig(support::published_codec_config()),
+            SequenceObu::AudioElement(support::published_audio_element()),
+            SequenceObu::MixPresentation(presentation),
+        ],
+    };
+    assert_eq!(profile_findings(sequence.validate()), vec![f1(1)]);
+}
+
+#[test]
+fn parsed_sequence_reports_the_sequence_wide_unique_element_limit() {
+    // qk3 Q1 = A: the parse-side validator reports the sequence-limit finding.
+    let mut obus = published_parsed_sequence();
+    obus.push(SequenceObu::AudioElement(Obu::new(
+        ObuHeader::new(ObuType::AudioElement),
+        element_301(),
+    )));
+    obus.push(SequenceObu::MixPresentation(Obu::new(
+        ObuHeader::new(ObuType::MixPresentation),
+        presentation_for(43, 301),
+    )));
+    let sequence = ParsedSequence { obus };
+    assert_eq!(profile_findings(sequence.validate()), vec![f3(2, 1, 0)]);
+}
+
+#[test]
+fn parsed_sequence_without_a_header_gains_no_profile_finding() {
+    let sequence = ParsedSequence {
+        obus: vec![
+            SequenceObu::CodecConfig(support::published_codec_config()),
+            SequenceObu::AudioElement(support::published_audio_element()),
+        ],
+    };
+    assert_eq!(profile_findings(sequence.validate()), vec![]);
 }

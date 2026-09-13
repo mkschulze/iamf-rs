@@ -195,6 +195,21 @@ impl DescriptorSet {
                 }
             }
         }
+
+        // Profile compliance, after every other finding (quick 260913-qk3).
+        // ref: IAMF v1.1.0 index.bs:1929, :596, :1953
+        let elements: Vec<&AudioElement> = self.audio_elements.iter().collect();
+        let presentations: Vec<&MixPresentation> = self.mix_presentations.iter().collect();
+        findings.extend(profile::compliance_findings(
+            self.sequence_header.primary_profile,
+            self.sequence_header.additional_profile,
+            &elements,
+            &presentations,
+        ));
+        findings.extend(profile::sequence_limit_findings(
+            self.sequence_header.primary_profile,
+            &elements,
+        ));
         findings
     }
 }
