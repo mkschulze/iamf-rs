@@ -374,6 +374,10 @@ impl MixPresentation {
     }
 
     /// Findings for this Mix Presentation and every sub-mix it holds.
+    ///
+    /// `EncoderBuilder::build()` checks `SubMixCountNotOne`,
+    /// `ReservedHeadphonesRenderingMode` and duplicate handles before calling
+    /// this, so these findings never pre-empt those dedicated kinds.
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
@@ -386,6 +390,24 @@ impl MixPresentation {
                     self.count_label()
                 ),
             });
+        }
+        // ref: IAMF v1.1.0 index.bs:1278 (SHALL NOT be 0), :1920 (SHOULD be 1; > 1 SHOULD be ignored)
+        // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:195-199 ValidateNumSubMixes
+        // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:760-782 (num_sub_mixes != 1 fails the parse)
+        match self.sub_mixes.len() {
+            1 => {}
+            0 => findings.push(Finding {
+                at: Location::Field("num_sub_mixes"),
+                message: "num_sub_mixes is 0; it SHALL NOT be 0 (IAMF v1.1.0 index.bs:1278)"
+                    .to_owned(),
+            }),
+            count => findings.push(Finding {
+                at: Location::Field("num_sub_mixes"),
+                message: format!(
+                    "num_sub_mixes is {count}; it SHOULD be 1 and parsers SHOULD ignore a Mix \
+                     Presentation with more (IAMF v1.1.0 index.bs:1920); libiamf fails its parse"
+                ),
+            }),
         }
         // ref: IAMF v1.1.0 index.bs:1280
         // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:41-54 ValidateUniqueAudioElementIds (read :550, write :496)
@@ -422,6 +444,22 @@ impl MixPresentation {
                     "rendering_config.reserved",
                     6,
                 );
+                // ref: IAMF v1.1.0 index.bs:1337-1341 (parsers SHALL ignore the Mix Presentation)
+                // ref: iamf-tools@v2.1.0 iamf/cli/profile_filter.cc:240-271
+                // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1309-1315
+                if let HeadphonesRenderingMode::Reserved(raw) =
+                    element.rendering_config.headphones_rendering_mode
+                {
+                    findings.push(Finding {
+                        at: Location::Field("headphones_rendering_mode"),
+                        message: format!(
+                            "audio element {} carries reserved headphones_rendering_mode {raw}; \
+                             parsers SHALL ignore this Mix Presentation (IAMF v1.1.0 \
+                             index.bs:1341)",
+                            element.audio_element_id
+                        ),
+                    });
+                }
                 findings.extend(element.element_mix_gain.definition.validate());
                 if element.localized_element_annotations.len() != self.count_label() {
                     findings.push(Finding {

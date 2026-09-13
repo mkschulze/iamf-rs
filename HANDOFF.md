@@ -36,8 +36,10 @@ state, source position, terminal, or lineage enters `iamf-rs`.
    and the Base-Enhanced element limit are assessed per Presentation; the unique-element limits,
    Base's scene-based and multi-layer limits and the 28-channel Base-Enhanced total span the whole
    sequence (IAMF v1.0.0-errata as adopted by v1.1.0), and the header carries the highest
-   requirement. `build()` rejects a Presentation whose `num_sub_mixes != 1` or whose rendering
-   config carries a reserved headphones mode.
+   requirement. `build()` rejects a sequence with no Mix Presentation (`NoMixPresentation`), and a
+   Presentation whose `num_sub_mixes != 1`, whose rendering config carries a reserved headphones
+   mode, or that lists the same Audio Element handle more than once
+   (`DuplicateMixPresentationAudioElement`).
 3. Call `start` with a plain `W: Write` sink. The frozen descriptor prologue is written immediately.
 4. Submit one complete `TemporalUnitInput` at a time. Its frame order and coverage, codec kind,
    LPCM byte/sample count, trimming, and parameter identity/duration are preflighted before the unit

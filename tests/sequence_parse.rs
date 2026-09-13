@@ -753,6 +753,133 @@ fn dup(mix_presentation_id: u32, audio_element_id: u32) -> Finding {
     }
 }
 
+/// The zero `num_sub_mixes` finding.
+fn sub0() -> Finding {
+    Finding {
+        at: Location::Field("num_sub_mixes"),
+        message: "num_sub_mixes is 0; it SHALL NOT be 0 (IAMF v1.1.0 index.bs:1278)".to_owned(),
+    }
+}
+
+/// The `num_sub_mixes` > 1 finding.
+fn subn(count: usize) -> Finding {
+    Finding {
+        at: Location::Field("num_sub_mixes"),
+        message: format!(
+            "num_sub_mixes is {count}; it SHOULD be 1 and parsers SHOULD ignore a Mix \
+             Presentation with more (IAMF v1.1.0 index.bs:1920); libiamf fails its parse"
+        ),
+    }
+}
+
+/// The reserved `headphones_rendering_mode` finding.
+fn hp(audio_element_id: u32, raw: u8) -> Finding {
+    Finding {
+        at: Location::Field("headphones_rendering_mode"),
+        message: format!(
+            "audio element {audio_element_id} carries reserved headphones_rendering_mode {raw}; \
+             parsers SHALL ignore this Mix Presentation (IAMF v1.1.0 index.bs:1341)"
+        ),
+    }
+}
+
+/// MP 42 with its sub-mix cloned once (the test_000124 shape).
+fn presentation_with_two_sub_mixes() -> Option<MixPresentation> {
+    let mut presentation = support::published_mix_presentation().payload;
+    let extra = presentation.sub_mixes.first()?.clone();
+    presentation.sub_mixes.push(extra);
+    Some(presentation)
+}
+
+#[test]
+fn published_mix_presentation_has_no_findings() {
+    assert_eq!(
+        support::published_mix_presentation().payload.validate(),
+        vec![]
+    );
+}
+
+#[test]
+fn mix_presentation_validate_reports_zero_sub_mixes() {
+    let mut presentation = support::published_mix_presentation().payload;
+    presentation.sub_mixes.clear();
+    assert_eq!(th8_findings(presentation.validate()), vec![sub0()]);
+}
+
+#[test]
+fn mix_presentation_validate_reports_sub_mix_count_before_duplicates() {
+    let presentation = presentation_with_two_sub_mixes().unwrap();
+    assert_eq!(
+        th8_findings(presentation.validate()),
+        vec![subn(2), dup(42, 300)]
+    );
+}
+
+#[test]
+fn mix_presentation_validate_reports_reserved_headphones_modes() {
+    for raw in [2, 3] {
+        let mut presentation = support::published_mix_presentation().payload;
+        presentation
+            .sub_mixes
+            .first_mut()
+            .and_then(|sub_mix| sub_mix.elements.first_mut())
+            .unwrap()
+            .rendering_config
+            .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(raw);
+        assert_eq!(th8_findings(presentation.validate()), vec![hp(300, raw)]);
+    }
+
+    let mut binaural = support::published_mix_presentation().payload;
+    binaural
+        .sub_mixes
+        .first_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .unwrap()
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Binaural;
+    assert_eq!(th8_findings(binaural.validate()), vec![]);
+}
+
+#[test]
+fn mix_presentation_findings_follow_the_research_order() {
+    let mut presentation = presentation_with_two_sub_mixes().unwrap();
+    presentation
+        .sub_mixes
+        .last_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .unwrap()
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(3);
+    assert_eq!(
+        th8_findings(presentation.validate()),
+        vec![subn(2), dup(42, 300), hp(300, 3)]
+    );
+}
+
+#[test]
+fn both_validators_carry_the_sub_mix_and_headphones_findings() {
+    let mut set = published_descriptor_set();
+    set.mix_presentations = vec![presentation_with_two_sub_mixes().unwrap()];
+    assert_eq!(th8_findings(set.validate()), vec![subn(2), dup(42, 300)]);
+
+    let mut header = support::published_sequence_header();
+    header.payload = IaSequenceHeader::new(1, 1);
+    let mut presentation = support::published_mix_presentation();
+    presentation.payload = presentation_with_two_sub_mixes().unwrap();
+    let sequence = ParsedSequence {
+        obus: vec![
+            SequenceObu::IaSequenceHeader(header),
+            SequenceObu::CodecConfig(support::published_codec_config()),
+            SequenceObu::AudioElement(support::published_audio_element()),
+            SequenceObu::MixPresentation(presentation),
+        ],
+    };
+    assert_eq!(
+        th8_findings(sequence.validate()),
+        vec![subn(2), dup(42, 300)]
+    );
+}
+
 /// MP 42 whose first sub-mix references `ids`, in order.
 fn presentation_referencing(ids: &[u32]) -> Option<MixPresentation> {
     let mut presentation = support::published_mix_presentation().payload;
