@@ -72,6 +72,21 @@ jobs:
       - name: Show the reference manifest (D-13)
         run: cat .reference-manifest.json
 
+      # tests/conformance.rs skips CONF-05 for the FLAC and Opus fixtures when
+      # the manifest says dep_codecs_disabled is true, which is what a
+      # non-x86_64-Linux dev-host build produces. This job is the one place that
+      # clause must execute, so a true (or absent) value here is a failure, not
+      # a skip.
+      - name: Assert the reference decoder has FLAC and Opus (CONF-05 may not skip here)
+        run: |
+          python3 -c "
+          import json, sys
+          value = json.load(open('.reference-manifest.json')).get('dep_codecs_disabled')
+          if value is not False:
+              sys.exit('dep_codecs_disabled=%r: the reference decoder must ship FLAC and Opus here, or CONF-05 for FLAC/Opus would skip; fix tools/build-reference.sh' % (value,))
+          print('dep_codecs_disabled=false: FLAC and Opus CONF-05 will execute')
+          "
+
       # The manifest assertion runs BEFORE any conformance clause. With
       # IAMF_REF_DECODER set it is a hard check that the binary in this
       # environment is the pinned one; drift is a named error, not a green gate
