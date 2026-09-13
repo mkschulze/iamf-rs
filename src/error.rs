@@ -145,6 +145,8 @@ pub enum ErrorKind {
     WireIdAllocationExhausted,
     #[error("an IA sequence permits only one Codec Config")]
     MultipleCodecConfigs,
+    #[error("a mix-gain parameter_rate differs from the Codec Config output sample rate")]
+    ParameterRateMismatch,
     #[error("a temporal unit references an unknown substream handle")]
     UnknownTemporalSubstreamHandle,
     #[error("a temporal unit references an unknown parameter handle")]

@@ -822,6 +822,11 @@ impl EncoderBuilder {
     ///
     /// Validation includes the single-Codec-Config rule: more than one declared Codec Config
     /// fails with [`ErrorKind::MultipleCodecConfigs`].
+    ///
+    /// It also requires every mix-gain `parameter_rate` to equal the Codec Config output
+    /// sample rate ([`ErrorKind::ParameterRateMismatch`]), and every mode-0 definition
+    /// `duration` to equal `num_samples_per_frame`
+    /// ([`ErrorKind::ParameterBlockDurationMismatch`]).
     pub fn build(mut self) -> Result<(Encoder, IdManifest)> {
         self.resolve_parameter_references()?;
         self.validate_declarations()?;
@@ -978,6 +983,43 @@ impl EncoderBuilder {
                 ErrorKind::MultipleCodecConfigs,
                 Location::Field("codec_configs"),
             ));
+        }
+        // P1/P2: mix-gain timing must agree with the single Codec Config.
+        // ref: iamf-tools@v2.1.0 iamf/cli/rendering_mix_presentation_finalizer.cc GetParameterBlockLinearMixGainsPerTick
+        //      ("Parameter blocks that require resampling are not supported yet.", raised even
+        //      when the file carries zero Parameter Blocks)
+        // ref: iamf-tools@v2.1.0 iamf/cli/global_timing_module.cc GetNextParameterBlockTimestamps
+        //      (compares parameter ticks with audio samples unscaled; TODO b/283281856)
+        // ref: IAMF v1.1.0 index.bs:1915
+        // ref: IAMF v1.1.0 index.bs:863-865
+        // DISAGREEMENT: the spec permits any parameter_rate that yields a non-zero integer tick
+        // count per frame (index.bs:863-865; its own example is 480 ticks at 24 kHz, :1916).
+        // Pinned iamf-tools rejects every rate that differs from the output sample rate. Per the
+        // standing tie-break rule, iamf-tools@v2.1.0 together with pinned libiamf decides, so
+        // ticks equal samples and the duration must equal num_samples_per_frame. See
+        // .planning/quick/260913-n56-enforce-parameter-block-duration-and-uni/260913-n56-deferred-items.md
+        if let Some(config) = self.codec_configs.first() {
+            let rate = output_sample_rate(config).ok_or_else(|| invalid("decoder_config"))?;
+            for parameter in &self.parameters {
+                if parameter.gain.definition.parameter_rate != rate {
+                    return Err(Error::new(
+                        ErrorKind::ParameterRateMismatch,
+                        Location::Field("parameter_rate"),
+                    ));
+                }
+                if parameter
+                    .gain
+                    .definition
+                    .duration_fields
+                    .as_ref()
+                    .is_some_and(|fields| fields.duration != config.num_samples_per_frame)
+                {
+                    return Err(Error::new(
+                        ErrorKind::ParameterBlockDurationMismatch,
+                        Location::Field("duration_fields"),
+                    ));
+                }
+            }
         }
         for declaration in &self.audio_elements {
             self.codec_config(declaration.codec_config)?;
@@ -1254,6 +1296,24 @@ fn allocate_ids<H>(length: usize, make_handle: impl Fn(usize) -> H) -> Result<Ve
 
 fn allocation_error(_: core::num::TryFromIntError) -> Error {
     Error::new(ErrorKind::WireIdAllocationExhausted, Location::Unlocated)
+}
+
+/// The IAMF Opus output sample rate. Mirrors the module-private `OPUS_SAMPLE_RATE` in
+/// `src/obu/codec_config.rs`.
+// ref: iamf-tools@v2.1.0 iamf/obu/decoder_config/opus_decoder_config.h GetOutputSampleRate
+//      (always 48000; IAMF v1.1.0 §3.11.1)
+const OPUS_OUTPUT_SAMPLE_RATE: u32 = 48_000;
+
+/// The rate audio samples are produced at after decoding this Codec Config.
+///
+/// Opus always decodes at 48 kHz, so its `input_sample_rate` is deliberately not used.
+const fn output_sample_rate(config: &CodecConfig) -> Option<u32> {
+    match &config.decoder_config {
+        DecoderConfig::Lpcm(lpcm) => Some(lpcm.sample_rate),
+        DecoderConfig::Flac(flac) => Some(flac.sample_rate),
+        DecoderConfig::Opus(_) => Some(OPUS_OUTPUT_SAMPLE_RATE),
+        DecoderConfig::Raw { .. } => None,
+    }
 }
 
 fn invalid(field: &'static str) -> Error {

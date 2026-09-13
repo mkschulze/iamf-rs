@@ -567,6 +567,88 @@ fn build_rejects_invalid_static_parameter_durations() {
 }
 
 #[test]
+fn build_rejects_mix_gain_rate_differing_from_the_output_sample_rate() {
+    let mut presentation = presentation_for_elements(&[99], 100, 110);
+    presentation
+        .sub_mixes
+        .first_mut()
+        .unwrap()
+        .output_mix_gain
+        .definition
+        .parameter_rate = 48_000;
+
+    let error = build_presentation(presentation).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ParameterRateMismatch);
+    assert_eq!(error.at(), Location::Field("parameter_rate"));
+}
+
+#[test]
+fn opus_mix_gains_must_use_the_48k_output_rate() -> iamf::Result<()> {
+    let build_opus = |rate: u32| -> iamf::Result<()> {
+        let mut builder = EncoderBuilder::new();
+        let opus = builder.add_codec_config(CodecConfig::opus(90, 960, 48_000, 312)?);
+        let element = add_fresh_element(&mut builder, opus, stereo_element());
+        let mut presentation = presentation_for_elements(&[99], 100, 110);
+        let sub_mix = presentation.sub_mixes.first_mut().unwrap();
+        sub_mix.output_mix_gain.definition.parameter_rate = rate;
+        sub_mix
+            .elements
+            .first_mut()
+            .unwrap()
+            .element_mix_gain
+            .definition
+            .parameter_rate = rate;
+        builder.add_mix_presentation(vec![element], presentation);
+        builder.build().map(|_| ())
+    };
+
+    build_opus(48_000)?;
+    let error = build_opus(16_000).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ParameterRateMismatch);
+    assert_eq!(error.at(), Location::Field("parameter_rate"));
+    Ok(())
+}
+
+#[test]
+fn build_rejects_mode_0_duration_differing_from_the_frame_size() {
+    let mut presentation = presentation_for_elements(&[99], 100, 110);
+    presentation
+        .sub_mixes
+        .first_mut()
+        .unwrap()
+        .output_mix_gain
+        .definition
+        .duration_fields = Some(iamf::obu::DurationFields {
+        duration: 64,
+        constant_subblock_duration: 64,
+        subblock_durations: vec![],
+    });
+
+    let error = build_presentation(presentation).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ParameterBlockDurationMismatch);
+    assert_eq!(error.at(), Location::Field("duration_fields"));
+}
+
+#[test]
+fn mode_0_duration_matching_the_frame_size_builds() -> iamf::Result<()> {
+    let mut presentation = presentation_for_elements(&[99], 100, 110);
+    presentation
+        .sub_mixes
+        .first_mut()
+        .unwrap()
+        .output_mix_gain
+        .definition
+        .duration_fields = Some(iamf::obu::DurationFields {
+        duration: 128,
+        constant_subblock_duration: 128,
+        subblock_durations: vec![],
+    });
+
+    build_presentation(presentation)?;
+    Ok(())
+}
+
+#[test]
 fn build_rejects_accidental_substream_collisions() {
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
