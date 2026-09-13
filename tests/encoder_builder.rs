@@ -4,10 +4,10 @@ use iamf::encoder::EncoderBuilder;
 use iamf::model::Profile;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, HeadphonesRenderingMode,
-    Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition,
-    MixPresentation, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix,
-    SubMixAudioElement,
+    AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, ChannelAudioLayerConfig,
+    CodecConfig, HeadphonesRenderingMode, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
+    MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
+    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
 use iamf::{ErrorKind, Location};
 
@@ -389,6 +389,156 @@ fn a_duplicate_handle_wins_over_a_presentation_finding() {
     builder.add_mix_presentation(vec![first, second], without_layouts());
     let error = builder
         .build()
+        .expect_err("a sub-mix without a stereo layout is a presentation finding");
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), Location::Field("descriptors"));
+}
+
+fn presentation_with_languages(languages: &[&[u8]]) -> MixPresentation {
+    let mut presentation = presentation_for_elements(&[0], 100, 110);
+    presentation.annotations_language =
+        languages.iter().map(|language| language.to_vec()).collect();
+    presentation.localized_presentation_annotations = vec![b"stereo".to_vec(); languages.len()];
+    for sub_mix in &mut presentation.sub_mixes {
+        for element in &mut sub_mix.elements {
+            element.localized_element_annotations = vec![b"bed".to_vec(); languages.len()];
+        }
+    }
+    presentation
+}
+
+fn set_anchors(presentation: &mut MixPresentation, anchors: &[u8]) {
+    for sub_mix in &mut presentation.sub_mixes {
+        for layout in &mut sub_mix.layouts {
+            layout.loudness.anchored = Some(AnchoredLoudness {
+                anchor_elements: anchors
+                    .iter()
+                    .map(|&anchor_element| AnchorElement {
+                        anchor_element,
+                        anchored_loudness: 0,
+                    })
+                    .collect(),
+            });
+        }
+    }
+}
+
+fn build_single(
+    presentation: MixPresentation,
+) -> iamf::Result<(iamf::encoder::Encoder, iamf::encoder::IdManifest)> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    builder.add_mix_presentation(vec![element], presentation);
+    builder.build()
+}
+
+#[test]
+fn build_rejects_duplicate_annotations_languages() {
+    let error = build_single(presentation_with_languages(&[b"en", b"en"]))
+        .expect_err("a repeated annotations_language is rejected");
+    assert_eq!(error.kind(), &ErrorKind::DuplicateAnnotationsLanguage);
+    assert_eq!(error.at(), Location::Field("annotations_language"));
+}
+
+#[test]
+fn build_rejects_annotations_languages_differing_only_in_ascii_case() {
+    let error = build_single(presentation_with_languages(&[b"en-US", b"en-us"]))
+        .expect_err("BCP-47 tags are case-insensitive");
+    assert_eq!(error.kind(), &ErrorKind::DuplicateAnnotationsLanguage);
+    assert_eq!(error.at(), Location::Field("annotations_language"));
+}
+
+#[test]
+fn distinct_annotations_languages_build() {
+    assert!(build_single(presentation_with_languages(&[b"en", b"es"])).is_ok());
+}
+
+#[test]
+fn build_rejects_duplicate_anchor_elements() {
+    for anchors in [[1, 1], [0, 0]] {
+        let mut presentation = presentation_for_elements(&[0], 100, 110);
+        set_anchors(&mut presentation, &anchors);
+        let error = build_single(presentation)
+            .expect_err("a repeated anchor_element, Unknown included, is rejected");
+        assert_eq!(error.kind(), &ErrorKind::DuplicateAnchorElement);
+        assert_eq!(
+            error.at(),
+            Location::Field("anchored_loudness.anchor_element")
+        );
+    }
+}
+
+#[test]
+fn distinct_anchor_elements_build() {
+    let mut presentation = presentation_for_elements(&[0], 100, 110);
+    set_anchors(&mut presentation, &[1, 2]);
+    assert!(build_single(presentation).is_ok());
+}
+
+#[test]
+fn a_duplicate_handle_wins_over_a_duplicate_annotations_language() {
+    let mut presentation = presentation_for_elements(&[0, 0], 100, 110);
+    presentation.annotations_language = vec![b"en".to_vec(); 2];
+    presentation.localized_presentation_annotations = vec![b"stereo".to_vec(); 2];
+    for sub_mix in &mut presentation.sub_mixes {
+        for element in &mut sub_mix.elements {
+            element.localized_element_annotations = vec![b"bed".to_vec(); 2];
+        }
+    }
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    builder.add_mix_presentation(vec![element, element], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("a duplicate handle is reported before a duplicate language");
+    assert_eq!(
+        error.kind(),
+        &ErrorKind::DuplicateMixPresentationAudioElement
+    );
+    assert_eq!(
+        error.at(),
+        Location::Field("mix_presentation.audio_elements")
+    );
+}
+
+#[test]
+fn a_duplicate_annotations_language_wins_over_a_duplicate_anchor_and_a_presentation_finding() {
+    let mut presentation = presentation_with_languages(&[b"en", b"en"]);
+    set_anchors(&mut presentation, &[1, 1]);
+    presentation.localized_presentation_annotations.pop();
+
+    let error = build_single(presentation)
+        .expect_err("a duplicate language is reported before anchors and findings");
+    assert_eq!(error.kind(), &ErrorKind::DuplicateAnnotationsLanguage);
+    assert_eq!(error.at(), Location::Field("annotations_language"));
+}
+
+#[test]
+fn a_duplicate_anchor_element_wins_over_a_presentation_finding() {
+    let without_stereo = |anchors: &[u8]| {
+        let mut presentation = presentation_for_elements(&[0], 100, 110);
+        for sub_mix in &mut presentation.sub_mixes {
+            for layout in &mut sub_mix.layouts {
+                layout.layout = Layout::SoundSystem(SoundSystem::B0_5_0);
+            }
+        }
+        set_anchors(&mut presentation, anchors);
+        presentation
+    };
+
+    let error = build_single(without_stereo(&[2, 2]))
+        .expect_err("a duplicate anchor is reported before the missing stereo layout");
+    assert_eq!(error.kind(), &ErrorKind::DuplicateAnchorElement);
+    assert_eq!(
+        error.at(),
+        Location::Field("anchored_loudness.anchor_element")
+    );
+
+    // Control: distinct anchors reach the generic presentation finding.
+    let error = build_single(without_stereo(&[1, 2]))
         .expect_err("a sub-mix without a stereo layout is a presentation finding");
     assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
     assert_eq!(error.at(), Location::Field("descriptors"));

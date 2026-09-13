@@ -167,6 +167,20 @@ pub enum ErrorKind {
     // DISAGREEMENT: libiamf@v1.1.0 has no check; spec and iamf-tools are stricter and win
     #[error("a Mix Presentation references the same Audio Element more than once")]
     DuplicateMixPresentationAudioElement,
+    /// A Mix Presentation lists the same `annotations_language` more than once.
+    // ref: IAMF v1.1.0 index.bs:1273 ("The same language SHALL NOT be duplicated in this array.")
+    // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:471-473 (write), :528-530 (read) ValidateUnique
+    // DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:748-749 reads without checking; iamf-tools
+    // compares bytes exactly, the spec's BCP-47 tags are case-insensitive (RFC 5646 2.1.1), so the stricter
+    // ASCII-case-insensitive comparison is used
+    #[error("a Mix Presentation duplicates an annotations_language")]
+    DuplicateAnnotationsLanguage,
+    /// A `loudness_info` lists the same `anchor_element` more than once.
+    // ref: IAMF v1.1.0 index.bs:1485 (no duplicate anchor_element within one LoudnessInfo())
+    // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:56-67 ValidateUniqueAnchorElements (write :135-136, read :257-258)
+    // DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:957-959 reads without checking
+    #[error("a loudness_info duplicates an anchor_element")]
+    DuplicateAnchorElement,
     #[error("a mix-gain parameter_rate differs from the Codec Config output sample rate")]
     ParameterRateMismatch,
     #[error("a temporal unit references an unknown substream handle")]

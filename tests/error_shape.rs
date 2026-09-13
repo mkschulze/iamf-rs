@@ -181,6 +181,8 @@ fn static_builder_errors_are_compact_typed_kinds() {
         ErrorKind::ReservedHeadphonesRenderingMode,
         ErrorKind::NoMixPresentation,
         ErrorKind::DuplicateMixPresentationAudioElement,
+        ErrorKind::DuplicateAnnotationsLanguage,
+        ErrorKind::DuplicateAnchorElement,
     ] {
         let error = Error::new(kind.clone(), Location::Unlocated);
         assert_eq!(error.kind(), &kind);

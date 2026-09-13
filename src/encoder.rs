@@ -1206,6 +1206,42 @@ impl EncoderBuilder {
                     Location::Field("mix_presentation.audio_elements"),
                 ));
             }
+            // ref: IAMF v1.1.0 index.bs:1273; iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:471-473
+            // ASCII-case-insensitive (RFC 5646 2.1.1), stricter than iamf-tools' exact bytes.
+            let languages = &declaration.presentation.annotations_language;
+            if languages.iter().enumerate().any(|(position, language)| {
+                languages
+                    .iter()
+                    .take(position)
+                    .any(|earlier| earlier.eq_ignore_ascii_case(language))
+            }) {
+                return Err(Error::new(
+                    ErrorKind::DuplicateAnnotationsLanguage,
+                    Location::Field("annotations_language"),
+                ));
+            }
+            // ref: IAMF v1.1.0 index.bs:1485; iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:135-136
+            if declaration
+                .presentation
+                .sub_mixes
+                .iter()
+                .flat_map(|sub_mix| &sub_mix.layouts)
+                .filter_map(|layout| layout.loudness.anchored.as_ref())
+                .any(|anchored| {
+                    let anchors = &anchored.anchor_elements;
+                    anchors.iter().enumerate().any(|(position, anchor)| {
+                        anchors
+                            .iter()
+                            .take(position)
+                            .any(|earlier| earlier.anchor_element == anchor.anchor_element)
+                    })
+                })
+            {
+                return Err(Error::new(
+                    ErrorKind::DuplicateAnchorElement,
+                    Location::Field("anchored_loudness.anchor_element"),
+                ));
+            }
             // Templates carry placeholder ids (tests/support/parallax_contract.rs
             // uses 0 for every element), so presentation findings are checked on
             // the ids build() will write. Distinct handles give distinct ids, so

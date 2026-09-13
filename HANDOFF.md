@@ -38,8 +38,10 @@ state, source position, terminal, or lineage enters `iamf-rs`.
    sequence (IAMF v1.0.0-errata as adopted by v1.1.0), and the header carries the highest
    requirement. `build()` rejects a sequence with no Mix Presentation (`NoMixPresentation`), and a
    Presentation whose `num_sub_mixes != 1`, whose rendering config carries a reserved headphones
-   mode, or that lists the same Audio Element handle more than once
-   (`DuplicateMixPresentationAudioElement`).
+   mode, that lists the same Audio Element handle more than once
+   (`DuplicateMixPresentationAudioElement`), that repeats an `annotations_language` (compared
+   ASCII-case-insensitively, `DuplicateAnnotationsLanguage`), or that repeats an `anchor_element`
+   within one loudness info (`DuplicateAnchorElement`).
 3. Call `start` with a plain `W: Write` sink. The frozen descriptor prologue is written immediately.
 4. Submit one complete `TemporalUnitInput` at a time. Its frame order and coverage, codec kind,
    LPCM byte/sample count, trimming, and parameter identity/duration are preflighted before the unit
