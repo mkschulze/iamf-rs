@@ -7,6 +7,7 @@ use iamf::obu::{
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixGainParameterData,
     MixPresentation, ObuType, ParameterBlock, ParameterData, ParameterSubblock, RenderingConfig,
     SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming,
+    TypeSpecific,
 };
 use iamf::sequence::{SequenceObu, parse_sequence};
 use iamf::{ErrorKind, Location};
@@ -141,18 +142,25 @@ fn overflowing_trim_sum_writes_no_temporal_bytes() -> iamf::Result<()> {
 
 #[test]
 fn lpcm_flac_and_opus_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> {
-    for result in [
-        mono_builder(CodecConfig::lpcm(
-            0,
-            128,
-            LpcmDecoderConfig {
-                sample_format_flags: SampleFormatFlags::LittleEndian,
-                sample_size: 16,
-                sample_rate: 16_000,
-            },
-        )),
-        mono_builder(CodecConfig::flac(0, 128, 16_000, 16)?),
-        mono_builder(CodecConfig::opus(0, 960, 48_000, 312)?),
+    // ref: IAMF v1.1.0 index.bs:1819 (an Opus stream trims exactly pre_skip samples at its start)
+    for (result, trimming) in [
+        (
+            mono_builder(CodecConfig::lpcm(
+                0,
+                128,
+                LpcmDecoderConfig {
+                    sample_format_flags: SampleFormatFlags::LittleEndian,
+                    sample_size: 16,
+                    sample_rate: 16_000,
+                },
+            )),
+            None,
+        ),
+        (mono_builder(CodecConfig::flac(0, 128, 16_000, 16)?), None),
+        (
+            mono_builder(CodecConfig::opus(0, 960, 48_000, 312)?),
+            Some(start_trim(312)),
+        ),
     ] {
         let (encoder, frame) = result?;
         let mut writer = encoder.start(Vec::new())?;
@@ -164,7 +172,7 @@ fn lpcm_flac_and_opus_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> 
         writer.push_temporal_unit(TemporalUnitInput {
             frames: vec![(frame.0, frame.1)],
             parameter_blocks: Vec::new(),
-            trimming: None,
+            trimming,
         })?;
         let written = writer.finish()?;
         let frames: Vec<_> = parse_sequence(&written)?
@@ -673,6 +681,117 @@ fn units_without_parameter_blocks_remain_accepted() -> iamf::Result<()> {
     }
     writer.finish()?;
     Ok(())
+}
+
+#[test]
+fn opus_unit_without_a_start_trim_is_rejected() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(960, 312)?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(opus_unit(handle, None))
+        .expect_err("an Opus stream must trim pre_skip samples at its start");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimShortOfPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn opus_start_trim_short_of_pre_skip_is_rejected() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(960, 312)?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(opus_unit(handle, Some(start_trim(311))))
+        .expect_err("a start trim below pre_skip closes the run short");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimShortOfPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn opus_start_trim_exceeding_pre_skip_in_one_unit_is_rejected() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(960, 312)?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(opus_unit(handle, Some(start_trim(313))))
+        .expect_err("a start trim above pre_skip removes real audio");
+    assert_eq!(error.kind(), &ErrorKind::OpusStartTrimExceedsPreSkip);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+
+    // The rejected unit committed no start-trim total.
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(312))))?;
+    Ok(())
+}
+
+#[test]
+fn opus_start_trim_equal_to_pre_skip_round_trips() -> iamf::Result<()> {
+    let (mut writer, handle) = opus_writer(960, 312)?;
+    writer.push_temporal_unit(opus_unit(handle, Some(start_trim(312))))?;
+    writer.push_temporal_unit(opus_unit(handle, None))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(opus_unit(handle, Some(start_trim(1))))
+        .expect_err("the closed start-trim run keeps the placement rule");
+    assert_eq!(error.kind(), &ErrorKind::StartTrimAfterUntrimmedAudio);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(opus_unit(handle, Some(end_trim(100))))?;
+    let bytes = writer.finish()?;
+
+    assert_eq!(
+        audio_frame_trims(&bytes)?,
+        vec![
+            TypeSpecific::Trimming(Some(start_trim(312))),
+            TypeSpecific::Trimming(None),
+            TypeSpecific::Trimming(Some(end_trim(100))),
+        ]
+    );
+    Ok(())
+}
+
+fn opus_writer(
+    num_samples_per_frame: u32,
+    pre_skip: u16,
+) -> iamf::Result<(
+    iamf::encoder::EncodingWriter<Vec<u8>>,
+    iamf::encoder::SubstreamHandle,
+)> {
+    let (encoder, (handle, _)) = mono_builder(CodecConfig::opus(
+        0,
+        num_samples_per_frame,
+        48_000,
+        pre_skip,
+    )?)?;
+    Ok((encoder.start(Vec::new())?, handle))
+}
+
+fn opus_unit(
+    handle: iamf::encoder::SubstreamHandle,
+    trimming: Option<Trimming>,
+) -> TemporalUnitInput {
+    TemporalUnitInput {
+        frames: vec![(handle, FrameInput::Opus(vec![0xf8]))],
+        parameter_blocks: Vec::new(),
+        trimming,
+    }
+}
+
+fn audio_frame_trims(bytes: &[u8]) -> iamf::Result<Vec<TypeSpecific>> {
+    Ok(parse_sequence(bytes)?
+        .obus
+        .into_iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioFrame(frame) => Some(frame.header.type_specific),
+            _ => None,
+        })
+        .collect())
 }
 
 const fn start_trim(at_start: u32) -> Trimming {

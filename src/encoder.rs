@@ -205,7 +205,8 @@ pub struct TemporalUnitInput {
     ///
     /// A non-zero start trim is accepted only while every earlier unit was
     /// fully trimmed at its start, and no unit may follow one with a non-zero
-    /// end trim.
+    /// end trim. For an Opus Codec Config, the start trims of that leading run
+    /// must add up to exactly the Codec Config's `pre_skip`.
     pub trimming: Option<Trimming>,
 }
 
@@ -228,6 +229,9 @@ struct TemporalProgress {
     start_trim_open: bool,
     /// The last pushed unit trimmed samples at its end.
     end_trimmed: bool,
+    /// Samples trimmed at the start across the leading start-trim run (tracked
+    /// for Opus only; 48 kHz samples per index.bs:1825).
+    start_trim_total: u32,
 }
 
 impl TemporalProgress {
@@ -236,6 +240,7 @@ impl TemporalProgress {
             parameter_ids: None,
             start_trim_open: true,
             end_trimmed: false,
+            start_trim_total: 0,
         }
     }
 }
@@ -253,8 +258,8 @@ impl<W: Write> EncodingWriter<W> {
     /// Therefore a typed input failure leaves the sink exactly at the previous
     /// temporal-unit boundary.
     ///
-    /// Cross-unit rules (parameter coverage, start-trim placement and the
-    /// terminal end trim) are judged against the last successfully pushed
+    /// Cross-unit rules (parameter coverage, start-trim placement, the Opus
+    /// `pre_skip` start-trim total and the terminal end trim) are judged against the last successfully pushed
     /// unit. A rejected or failed push advances neither the sink nor that
     /// state.
     pub fn push_temporal_unit(&mut self, input: TemporalUnitInput) -> Result<()> {
@@ -335,6 +340,42 @@ impl<W: Write> EncodingWriter<W> {
         // start-trim chain and the terminal end trim cannot conflict.
         let start_trim_open = self.progress.start_trim_open && Some(at_start) == self.frame_size();
         let end_trimmed = at_end > 0;
+
+        // ref: IAMF v1.1.0 index.bs:1819 "Pre-skip SHALL be the same as the number of audio
+        //      samples to be trimmed at the start of coded Audio Substreams"
+        // ref: IAMF v1.1.0 index.bs:541 (the start trim spans fully trimmed frames, then at
+        //      most one remainder frame)
+        // ref: IAMF v1.1.0 index.bs:1825 (offsets are counted at 48 kHz)
+        // ref: iamf-tools@v2.1.0 iamf/cli/proto_conversion/proto_to_obu/audio_frame_generator.cc:141-156 ValidateUserStartTrimIncludesCodecDelay
+        // ref: eclipsa-audio-plugin@c9646092 common/processors/file_output/iamf_export_utils/IAMFExportUtil.cpp:124-130
+        //      (pre_skip 312, codec delay as the whole start trim)
+        // DISAGREEMENT: iamf-tools requires only trim >= codec delay; the spec requires
+        //      equality (user decision 260913-vvx).
+        // Neither pinned decoder reads pre_skip (research 260913-vvx probes a-e), so this
+        // crate is the only guard.
+        let mut start_trim_total = self.progress.start_trim_total;
+        if let Some(pre_skip) = self.opus_pre_skip() {
+            if self.progress.start_trim_open {
+                let pre_skip = u32::from(pre_skip);
+                start_trim_total = match start_trim_total.checked_add(at_start) {
+                    Some(total) if total <= pre_skip => total,
+                    _ => {
+                        return Err(temporal_input(
+                            ErrorKind::OpusStartTrimExceedsPreSkip,
+                            "trimming",
+                        ));
+                    }
+                };
+                // Once the run is closed, T3 above rejects any later non-zero start trim,
+                // so the total stays frozen.
+                if !start_trim_open && start_trim_total != pre_skip {
+                    return Err(temporal_input(
+                        ErrorKind::OpusStartTrimShortOfPreSkip,
+                        "trimming",
+                    ));
+                }
+            }
+        }
 
         let parameter_definitions = ParamDefinitionRegistry::from_descriptors(&self.descriptors)?;
         let mut parameter_blocks = Vec::with_capacity(input.parameter_blocks.len());
@@ -425,6 +466,7 @@ impl<W: Write> EncodingWriter<W> {
                 parameter_ids: Some(parameter_ids),
                 start_trim_open,
                 end_trimmed,
+                start_trim_total,
             },
         ))
     }
@@ -435,6 +477,15 @@ impl<W: Write> EncodingWriter<W> {
             .codec_configs
             .first()
             .map(|config| config.num_samples_per_frame)
+    }
+
+    /// The frozen Opus `pre_skip`; `build()` guarantees exactly one Codec Config.
+    fn opus_pre_skip(&self) -> Option<u16> {
+        self.descriptors
+            .codec_configs
+            .first()
+            .and_then(CodecConfig::opus_config)
+            .map(|config| config.pre_skip)
     }
 
     fn declared_substreams(&self) -> Vec<u32> {

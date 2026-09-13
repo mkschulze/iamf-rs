@@ -197,6 +197,10 @@ pub enum ErrorKind {
     StartTrimAfterUntrimmedAudio,
     #[error("a temporal unit follows one that trimmed samples at its end")]
     TemporalUnitAfterEndTrim,
+    #[error("the total num_samples_to_trim_at_start exceeds the Opus pre_skip")]
+    OpusStartTrimExceedsPreSkip,
+    #[error("the start trim ended before reaching the Opus pre_skip")]
+    OpusStartTrimShortOfPreSkip,
 }
 
 /// An error, with the position it happened at attached exactly once.

@@ -205,6 +205,8 @@ fn temporal_input_errors_are_compact_typed_kinds() {
         ErrorKind::DuplicateTemporalParameterBlock,
         ErrorKind::StartTrimAfterUntrimmedAudio,
         ErrorKind::TemporalUnitAfterEndTrim,
+        ErrorKind::OpusStartTrimExceedsPreSkip,
+        ErrorKind::OpusStartTrimShortOfPreSkip,
     ] {
         let error = Error::new(kind.clone(), Location::Field("temporal_input"));
         assert_eq!(error.kind(), &kind);
