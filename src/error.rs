@@ -147,6 +147,15 @@ pub enum ErrorKind {
     WireIdAllocationExhausted,
     #[error("an IA sequence permits only one Codec Config")]
     MultipleCodecConfigs,
+    /// `num_sub_mixes` is not 1.
+    // ref: IAMF v1.1.0 index.bs:1278 (SHALL NOT be 0), :1920 (SHOULD be 1)
+    // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:760-782 (any other count fails the parse)
+    #[error("a Mix Presentation must carry exactly one sub-mix")]
+    SubMixCountNotOne,
+    /// A rendering config carries a reserved `headphones_rendering_mode` (2 or 3).
+    // ref: IAMF v1.1.0 index.bs:1337-1341 (parsers SHALL ignore the Mix Presentation)
+    #[error("headphones_rendering_mode is reserved")]
+    ReservedHeadphonesRenderingMode,
     #[error("a mix-gain parameter_rate differs from the Codec Config output sample rate")]
     ParameterRateMismatch,
     #[error("a temporal unit references an unknown substream handle")]

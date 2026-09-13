@@ -4,9 +4,10 @@ use iamf::encoder::EncoderBuilder;
 use iamf::model::Profile;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, Layout,
-    LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, HeadphonesRenderingMode,
+    Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition,
+    MixPresentation, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix,
+    SubMixAudioElement,
 };
 use iamf::{ErrorKind, Location};
 
@@ -179,6 +180,84 @@ fn build_rejects_duplicate_authored_parameter_definition_ids() {
 
     assert_eq!(error.kind(), &ErrorKind::DuplicateDeclaration);
     assert_eq!(error.at(), Location::Field("parameter_id"));
+}
+
+// ref: IAMF v1.1.0 index.bs:1278, :1920; libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:760-782
+#[test]
+fn build_rejects_two_sub_mixes() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, codec, stereo_element());
+    let second = add_fresh_element(&mut builder, codec, stereo_element());
+    let mut presentation = presentation_for_elements(&[99], 100, 110);
+    let second_sub_mix = presentation_for_elements(&[100], 200, 210)
+        .sub_mixes
+        .into_iter()
+        .next()
+        .expect("the helper presentation has one sub-mix");
+    presentation.sub_mixes.push(second_sub_mix);
+    builder.add_mix_presentation(vec![first, second], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("libiamf fails the Mix Presentation parse on two sub-mixes");
+
+    assert_eq!(error.kind(), &ErrorKind::SubMixCountNotOne);
+    assert_eq!(error.at(), Location::Field("num_sub_mixes"));
+}
+
+// ref: IAMF v1.1.0 index.bs:1278 (num_sub_mixes SHALL NOT be 0)
+#[test]
+fn build_rejects_zero_sub_mixes() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    add_fresh_element(&mut builder, codec, stereo_element());
+    let mut presentation = stereo_presentation();
+    presentation.sub_mixes.clear();
+    builder.add_mix_presentation(vec![], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("a Mix Presentation without a sub-mix is not conformant");
+
+    assert_eq!(error.kind(), &ErrorKind::SubMixCountNotOne);
+    assert_eq!(error.at(), Location::Field("num_sub_mixes"));
+}
+
+// ref: IAMF v1.1.0 index.bs:1337-1341; libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1309-1315
+#[test]
+fn build_rejects_reserved_headphones_rendering_modes() {
+    for mode in [2, 3] {
+        let mut presentation = stereo_presentation();
+        presentation
+            .sub_mixes
+            .first_mut()
+            .and_then(|sub_mix| sub_mix.elements.first_mut())
+            .expect("the stereo presentation references one element")
+            .rendering_config
+            .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(mode);
+
+        let error = build_presentation(presentation)
+            .expect_err("a reserved headphones_rendering_mode drops the Mix Presentation");
+
+        assert_eq!(error.kind(), &ErrorKind::ReservedHeadphonesRenderingMode);
+        assert_eq!(error.at(), Location::Field("headphones_rendering_mode"));
+    }
+}
+
+#[test]
+fn build_accepts_binaural_headphones_rendering_mode() {
+    let mut presentation = stereo_presentation();
+    presentation
+        .sub_mixes
+        .first_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .expect("the stereo presentation references one element")
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Binaural;
+
+    let (_, manifest) = build_presentation(presentation).unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Simple);
 }
 
 #[test]

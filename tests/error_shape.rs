@@ -177,6 +177,8 @@ fn static_builder_errors_are_compact_typed_kinds() {
         ErrorKind::ParameterRateMismatch,
         ErrorKind::ParameterBlockDurationMismatch,
         ErrorKind::CoupledSubstreamCountMismatch,
+        ErrorKind::SubMixCountNotOne,
+        ErrorKind::ReservedHeadphonesRenderingMode,
     ] {
         let error = Error::new(kind.clone(), Location::Unlocated);
         assert_eq!(error.kind(), &kind);

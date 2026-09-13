@@ -8,8 +8,8 @@ use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
 use crate::model::{DescriptorSet, Profile, select_minimum_profile};
 use crate::obu::{
     AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
-    CodecConfig, DecoderConfig, IaSequenceHeader, MixGainParamDefinition, MixPresentation, Obu,
-    ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
+    CodecConfig, DecoderConfig, HeadphonesRenderingMode, IaSequenceHeader, MixGainParamDefinition,
+    MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::io::Write;
@@ -1076,6 +1076,39 @@ impl EncoderBuilder {
             }
             for handle in &declaration.audio_elements {
                 self.audio_element(*handle)?;
+            }
+            // Both checks run before the generic presentation findings, so the
+            // caller gets the dedicated kind rather than a descriptor finding.
+            // ref: IAMF v1.1.0 index.bs:1278 (num_sub_mixes SHALL NOT be 0), :1920 (SHOULD be 1; > 1 SHOULD be ignored)
+            // ref: iamf-tools@v2.1.0 iamf/cli/profile_filter.cc:220-238 FilterProfileForNumSubmixes
+            // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:195-197 ValidateNumSubMixes
+            // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:760-782 (num_sub_mixes != 1 fails the parse)
+            // DISAGREEMENT: the spec only says > 1 SHOULD be ignored; both references reject, so the stricter reference rule stays (qk3 directive)
+            if declaration.presentation.sub_mixes.len() != 1 {
+                return Err(Error::new(
+                    ErrorKind::SubMixCountNotOne,
+                    Location::Field("num_sub_mixes"),
+                ));
+            }
+            // ref: IAMF v1.1.0 index.bs:1337-1341 (reserved headphones_rendering_mode: parsers SHALL ignore the Mix Presentation)
+            // ref: iamf-tools@v2.1.0 iamf/cli/profile_filter.cc:240-271
+            // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1309-1315
+            if declaration
+                .presentation
+                .sub_mixes
+                .iter()
+                .flat_map(|sub_mix| &sub_mix.elements)
+                .any(|element| {
+                    matches!(
+                        element.rendering_config.headphones_rendering_mode,
+                        HeadphonesRenderingMode::Reserved(_)
+                    )
+                })
+            {
+                return Err(Error::new(
+                    ErrorKind::ReservedHeadphonesRenderingMode,
+                    Location::Field("headphones_rendering_mode"),
+                ));
             }
             validate_findings(declaration.presentation.validate())?;
             for sub_mix in &declaration.presentation.sub_mixes {
