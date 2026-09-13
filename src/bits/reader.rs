@@ -14,9 +14,57 @@
 //! [`BitCursor::read_uint8_span`] is where that rule is first enforced, and it
 //! is stated here rather than there because it governs code that does not exist
 //! yet.
+//!
+//! Capping against `bytes_remaining()` is half the rule: it gives the early,
+//! typed error. It bounds a count in *bytes*, though, not in bytes times element
+//! size, so the reservation itself always goes through [`bounded_vec`], which
+//! never requests more than [`MAX_PREALLOCATION_BYTES`] however large the count
+//! (T-01-24, T-01-26, T-01-32). No parser reserves capacity any other way, and
+//! `tests/allocation_bounds.rs` fails the build if one starts to.
 
 use crate::bits::leb128;
 use crate::error::{Error, ErrorKind, Location, Result};
+
+/// The most bytes any single parser-side reservation may request on the
+/// strength of a parsed count.
+///
+/// Crate policy with no reference counterpart. 64 KiB covers every realistic
+/// IAMF count — a full 16x16 demixing matrix, dozens of sub-mixes — and still
+/// bounds a hostile count inside a 2 MiB OBU to a fixed cost per nesting level.
+pub(crate) const MAX_PREALLOCATION_BYTES: usize = 1 << 16;
+
+/// How many `T` [`bounded_vec`] reserves for `count`: `count`, or as many `T`
+/// as fit in [`MAX_PREALLOCATION_BYTES`] if that is fewer.
+///
+/// A zero-sized `T` returns `count` unchanged — a zero-sized `Vec` never
+/// allocates.
+#[must_use]
+const fn bounded_capacity<T>(count: usize) -> usize {
+    match MAX_PREALLOCATION_BYTES.checked_div(core::mem::size_of::<T>()) {
+        None => count,
+        Some(limit) => {
+            if count < limit {
+                count
+            } else {
+                limit
+            }
+        }
+    }
+}
+
+/// An empty `Vec` with room reserved for `count` elements, capped at
+/// [`MAX_PREALLOCATION_BYTES`] worth of `T`.
+///
+/// Every parse-path reservation goes through here. The caller has already
+/// rejected `count > bytes_remaining()`, but that check bounds the count in
+/// bytes, not in bytes times `size_of::<T>()`: a 2 MiB count of a 100-byte
+/// element is 200 MB before the first element read fails. Elements past the
+/// reserved capacity grow by push, so memory follows the elements actually
+/// decoded — each of which consumed input — never the claimed count.
+#[must_use]
+pub(crate) fn bounded_vec<T>(count: usize) -> Vec<T> {
+    Vec::with_capacity(bounded_capacity::<T>(count))
+}
 
 /// The reference's cap on a string field: 128 bytes **including** the NUL
 /// terminator. An unterminated 128-byte run is an error, not a truncation.
@@ -265,5 +313,65 @@ impl<'a> BitCursor<'a> {
         } else {
             self.bit_off = next;
         }
+    }
+}
+
+// Inline rather than in `tests/` because `bounded_capacity` is private: the
+// bound is a property of the helper, and the helper is not public API.
+#[cfg(test)]
+mod tests {
+    use super::{MAX_PREALLOCATION_BYTES, bounded_capacity, bounded_vec};
+    use crate::obu::{LayoutWithLoudness, SubMix, SubMixAudioElement};
+    use core::mem::size_of;
+
+    /// Mirrors `crate::obu::header::ENTIRE_OBU_SIZE_MAX` (2 MiB), which is
+    /// private to `obu` and so not nameable from `bits`. The `usize::MAX` case
+    /// below covers every count regardless.
+    const ENTIRE_OBU_SIZE_MAX: usize = 1 << 21;
+
+    /// `bounded_capacity::<T>(count) * size_of::<T>()`, asserted not to overflow
+    /// and not to exceed the cap.
+    fn assert_reservation_bounded<T>(count: usize) {
+        let elements = bounded_capacity::<T>(count);
+        let bytes = elements.checked_mul(size_of::<T>());
+        assert!(
+            bytes.is_some_and(|n| n <= MAX_PREALLOCATION_BYTES),
+            "{} x {count}: reserved {elements} elements = {bytes:?} bytes, cap {MAX_PREALLOCATION_BYTES}",
+            core::any::type_name::<T>()
+        );
+    }
+
+    #[test]
+    fn small_counts_reserve_exactly_their_count() {
+        assert_eq!(bounded_capacity::<u8>(1000), 1000);
+        assert_eq!(bounded_vec::<u8>(1000).capacity(), 1000);
+    }
+
+    #[test]
+    fn sixteen_byte_elements_cap_at_4096() {
+        // 65_536 / 16 = 4096, hand-computed.
+        assert_eq!(bounded_capacity::<[u8; 16]>(4096), 4096);
+        assert_eq!(bounded_capacity::<[u8; 16]>(4097), 4096);
+    }
+
+    #[test]
+    fn one_byte_elements_cap_at_65_536() {
+        assert_eq!(bounded_capacity::<u8>(65_537), 65_536);
+    }
+
+    #[test]
+    fn parser_element_types_never_reserve_more_than_the_cap_at_hostile_counts() {
+        for count in [ENTIRE_OBU_SIZE_MAX, usize::MAX] {
+            assert_reservation_bounded::<SubMix>(count);
+            assert_reservation_bounded::<SubMixAudioElement>(count);
+            assert_reservation_bounded::<LayoutWithLoudness>(count);
+            assert_reservation_bounded::<Vec<u8>>(count);
+            assert_reservation_bounded::<i16>(count);
+        }
+    }
+
+    #[test]
+    fn zero_sized_elements_return_the_count_unchanged() {
+        assert_eq!(bounded_capacity::<()>(usize::MAX), usize::MAX);
     }
 }

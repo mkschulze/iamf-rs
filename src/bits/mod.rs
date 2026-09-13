@@ -107,3 +107,9 @@ pub use writer::BitWriter;
 /// kEntireObuSizeMaxTwoMegabytes - 1 - size_of_obu_size`), so the OBU layer has
 /// to be able to ask.
 pub(crate) use leb128::minimal_len as minimal_uleb128_len;
+
+/// A `Vec` whose reservation is capped however large the parsed count.
+///
+/// Re-exported `pub(crate)` because every OBU reader that loops over a count
+/// reserves through it; see the module docs of `reader`.
+pub(crate) use reader::bounded_vec;

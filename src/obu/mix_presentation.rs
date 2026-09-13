@@ -20,7 +20,7 @@
 //! and it means no interleaving or partial write can produce a sub-mix carrying
 //! one definition and not the other (DESC-06).
 
-use crate::bits::{BitCursor, BitWriter};
+use crate::bits::{BitCursor, BitWriter, bounded_vec};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::layout::SoundSystem;
 use crate::model::loudness::Q7_8;
@@ -447,7 +447,7 @@ pub fn read_mix_presentation(r: &mut BitCursor<'_>) -> Result<MixPresentation> {
     let localized_presentation_annotations = read_strings(r, count_label)?;
 
     let num_sub_mixes = read_bounded_count(r)?;
-    let mut sub_mixes = Vec::with_capacity(num_sub_mixes);
+    let mut sub_mixes = bounded_vec(num_sub_mixes);
     for _ in 0..num_sub_mixes {
         sub_mixes.push(read_sub_mix(r, count_label)?);
     }
@@ -545,7 +545,7 @@ fn read_strings(r: &mut BitCursor<'_>, count: usize) -> Result<Vec<Vec<u8>>> {
             Location::InputOffset(r.byte_position()),
         ));
     }
-    let mut out = Vec::with_capacity(count);
+    let mut out = bounded_vec(count);
     for _ in 0..count {
         let mut bytes = r.read_string()?;
         // `read_string` returns the terminator; `write_string` appends one.
@@ -560,13 +560,13 @@ fn read_strings(r: &mut BitCursor<'_>, count: usize) -> Result<Vec<Vec<u8>>> {
 /// the element annotation arrays have no count of their own.
 fn read_sub_mix(r: &mut BitCursor<'_>, count_label: usize) -> Result<SubMix> {
     let num_audio_elements = read_bounded_count(r)?;
-    let mut elements = Vec::with_capacity(num_audio_elements);
+    let mut elements = bounded_vec(num_audio_elements);
     for _ in 0..num_audio_elements {
         elements.push(read_sub_mix_audio_element(r, count_label)?);
     }
     let output_mix_gain = read_mix_gain_param_definition(r)?;
     let num_layouts = read_bounded_count(r)?;
-    let mut layouts = Vec::with_capacity(num_layouts);
+    let mut layouts = bounded_vec(num_layouts);
     for _ in 0..num_layouts {
         layouts.push(read_layout_with_loudness(r)?);
     }
@@ -747,7 +747,7 @@ fn read_loudness(r: &mut BitCursor<'_>) -> Result<Loudness> {
                 Location::InputOffset(start),
             ));
         }
-        let mut anchor_elements = Vec::with_capacity(count);
+        let mut anchor_elements = bounded_vec(count);
         for _ in 0..count {
             anchor_elements.push(AnchorElement {
                 anchor_element: u8::try_from(r.read_unsigned(8)?).unwrap_or(0),
