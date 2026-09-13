@@ -176,6 +176,7 @@ fn static_builder_errors_are_compact_typed_kinds() {
         ErrorKind::MultipleCodecConfigs,
         ErrorKind::ParameterRateMismatch,
         ErrorKind::ParameterBlockDurationMismatch,
+        ErrorKind::CoupledSubstreamCountMismatch,
     ] {
         let error = Error::new(kind.clone(), Location::Unlocated);
         assert_eq!(error.kind(), &kind);

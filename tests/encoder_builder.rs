@@ -407,6 +407,157 @@ fn build_rejects_incoherent_channel_topology() {
 }
 
 #[test]
+fn build_rejects_substream_topologies_the_reference_rejects() {
+    // Every row is a shape pinned iamf-tools@v2.1.0 decoder_main rejected (research 260913-o3k E),
+    // plus the correct-coupled / wrong-substream case the reference checks second.
+    let coupled = (
+        ErrorKind::CoupledSubstreamCountMismatch,
+        "coupled_substream_count",
+    );
+    let substreams = (ErrorKind::ChannelCountMismatch, "substream_count");
+    for (layout, substream_count, coupled_substream_count, (kind, field)) in [
+        (LoudspeakerLayout::Stereo, 2, 0, coupled.clone()),
+        (LoudspeakerLayout::Binaural, 2, 0, coupled.clone()),
+        (LoudspeakerLayout::Ch5_1, 6, 0, coupled.clone()),
+        (LoudspeakerLayout::Ch5_1, 5, 1, coupled.clone()),
+        (LoudspeakerLayout::Ch7_1_4, 8, 4, coupled.clone()),
+        (LoudspeakerLayout::Ch3_1_2, 6, 0, coupled.clone()),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoS),
+            2,
+            0,
+            coupled.clone(),
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch3_0),
+            3,
+            0,
+            coupled.clone(),
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+            16,
+            0,
+            coupled.clone(),
+        ),
+        (LoudspeakerLayout::Ch5_1, 3, 2, substreams),
+    ] {
+        let row = format!("{layout:?} {substream_count}/{coupled_substream_count}");
+        let error = build_counts(layout, substream_count, coupled_substream_count)
+            .err()
+            .unwrap_or_else(|| panic!("{row} built, but the reference rejects it"));
+        assert_eq!(error.kind(), &kind, "{row}");
+        assert_eq!(error.at(), Location::Field(field), "{row}");
+    }
+}
+
+#[test]
+fn build_accepts_the_reference_substream_counts_for_every_named_layout() {
+    for (layout, substream_count, coupled_substream_count) in [
+        (LoudspeakerLayout::Mono, 1, 0),
+        (LoudspeakerLayout::Stereo, 1, 1),
+        (LoudspeakerLayout::Ch5_1, 4, 2),
+        (LoudspeakerLayout::Ch5_1_2, 5, 3),
+        (LoudspeakerLayout::Ch5_1_4, 6, 4),
+        (LoudspeakerLayout::Ch7_1, 5, 3),
+        (LoudspeakerLayout::Ch7_1_2, 6, 4),
+        (LoudspeakerLayout::Ch7_1_4, 7, 5),
+        (LoudspeakerLayout::Ch3_1_2, 4, 2),
+        (LoudspeakerLayout::Binaural, 1, 1),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe),
+            1,
+            0,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoS),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoSs),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoRs),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoTf),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoTb),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Top4Ch),
+            2,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch3_0),
+            2,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+            9,
+            7,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoF),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoSi),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoTpSi),
+            1,
+            1,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Top6Ch),
+            3,
+            3,
+        ),
+    ] {
+        assert_eq!(
+            layout.single_layer_substream_counts(),
+            Some((substream_count, coupled_substream_count)),
+            "{layout:?}"
+        );
+        assert_eq!(
+            layout.channel_count(),
+            Some(u32::from(substream_count).saturating_add(u32::from(coupled_substream_count))),
+            "{layout:?}"
+        );
+        if let Err(error) = build_counts(layout, substream_count, coupled_substream_count) {
+            panic!("{layout:?} {substream_count}/{coupled_substream_count} rejected: {error:?}");
+        }
+    }
+}
+
+#[test]
+fn reserved_layouts_have_no_single_layer_substream_counts() {
+    for layout in [
+        LoudspeakerLayout::Reserved(10),
+        LoudspeakerLayout::Reserved(14),
+        LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Reserved(13)),
+    ] {
+        assert_eq!(layout.single_layer_substream_counts(), None, "{layout:?}");
+    }
+}
+
+#[test]
 fn build_rejects_reserved_layout_even_when_unreferenced() {
     for layout in [
         LoudspeakerLayout::Reserved(10),
