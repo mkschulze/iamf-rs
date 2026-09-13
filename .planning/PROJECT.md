@@ -82,7 +82,9 @@ Advanced1, Advanced2), an AAC-LC encoder, and a re-laid-out `RenderingConfig`. *
 model produces files `libiamf` rejects** — precisely the "almost works" failure the handoff warns
 about, arriving from a direction nobody was watching.
 
-**Therefore: read `iamf-tools` at a v1.x tag, and pin the SHA in the code.** Same for `libiamf`.
+**Therefore: read `iamf-tools` at a pinned IAMF-v1.1.0 tag, and pin the SHA in the code.** Same for
+`libiamf`. *Resolved 2026-09-08:* the pin is `iamf-tools` v2.1.0 `848c6ff` — its tag numbering does
+not track the spec version (`REFERENCES.md`).
 
 ### Corrections to the handoff's corrections
 
@@ -213,8 +215,11 @@ discover it late.
   ported. `iamf-tools`, `libiamf`, `eclipsa-audio-plugin`, `libear` and `obr` may. — Contamination is
   irreversible; relicensing later needs every contributor's agreement. M5 (ISO-BMFF) is the
   contamination milestone, because `gpac` is the obvious and forbidden reference there.
-- **Pin the references**: pin an `iamf-tools` **v1.x tag and SHA** and a `libiamf` SHA, named in the
-  code. — HEAD is a draft-v2.0.0 tree; mirroring it produces files `libiamf` rejects.
+- **Pin the references**: `iamf-tools` **v2.1.0 `848c6ff`** and `libiamf` **v1.1.0 `f06e919`**, pinned
+  by commit in `REFERENCES.md` and cited as `// ref: <project>@<tag>` in the code. — Never `main`:
+  both have moved on to a draft-v2.0.0 tree whose files `libiamf@v1.1.0` rejects. (`iamf-tools`' tag
+  numbering is not the spec version; v2.1.0 is an IAMF v1.1.0 tree — see `REFERENCES.md` § "The
+  version-number caveat".)
 - **Pin the spec version**: `SPEC_VERSION = "1.1.0"`, named in the code. — **Decided 2026-09-08.**
   `libiamf` is a v1.1.0 decoder and the Core Value is that it accepts the file; Base-Enhanced does not
   exist in v1.0 at all. The profile enum's legal range and the expanded-layout set follow from this.

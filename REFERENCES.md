@@ -82,7 +82,7 @@ actually needed; prepending that directory to `PATH` is sufficient.
 
 ## The version-number caveat — read this before hunting for a v1.1.x tag
 
-PROJECT.md says to pin "an `iamf-tools` **v1.x** tag and SHA". **There is no
+PROJECT.md originally said to pin "an `iamf-tools` **v1.x** tag and SHA". **There is no
 `v1.1.x` tag in `iamf-tools`.** The available tags are `v1.0.0` (2024-01-26),
 `v2.0.0` (2025-08-18) and `v2.1.0` (2025-11-06). The version number tracks the
 **tool**, not the spec: `v2.1.0`'s changelog records that v2.0.0 added "support

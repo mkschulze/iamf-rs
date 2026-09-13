@@ -110,7 +110,7 @@ pub(crate) fn read_uleb128(r: &mut BitCursor<'_>) -> Result<u32> {
 - Sources you may cite: iamf-tools, libiamf, eclipsa-audio-plugin, libear, obr. Never read or cite gpac or libspatialaudio.
 
 **Read/write pairing (D-10):**
-- The write function and its reader live in the same file, write first and reader immediately after. The module doc says so (see `src/obu/header.rs`, `src/bits/leb128.rs`). This keeps any asymmetry between the two visible.
+- The read and write functions for a type live in the same file, next to each other. OBU modules put `read_*` first, as `CONTRIBUTING.md` requires (e.g. `src/obu/codec_config.rs`, `src/obu/sequence_header.rs`). `src/bits/leb128.rs` is the exception and has its writers first. Keeping the pair together makes any asymmetry between them visible.
 - Where possible, build one primitive on another so the two cannot drift. For example, `write_uleb128_minimal` calls `write_uleb128_fixed` with the minimal length.
 
 **Doc comments:**

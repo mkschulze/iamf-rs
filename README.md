@@ -22,6 +22,14 @@ no renderer or decoder implementation belongs in this crate.
 
 Targets **IAMF v1.1.0** (`iamf::SPEC_VERSION`).
 
+> **Part of the IAMF library portfolio.** `iamf-rs` is one of six IAMF repositories consumed by
+> Parallax. The
+> **[IAMF Library Portfolio: Boundaries and Integration Contract](https://github.com/mkschulze/Parallax/blob/gsd/v1.0-milestone/docs/superpowers/specs/2026-09-13-iamf-library-portfolio-boundaries-design.md)**
+> (`Parallax/docs/superpowers/specs/2026-09-13-iamf-library-portfolio-boundaries-design.md`) is the
+> source of truth for what each library owns, which dependency directions are allowed, and which
+> objects cross between libraries. This README narrows that contract for this crate and must not
+> contradict it.
+
 ## Release status
 
 **v0.1.0-beta.1** is the first beta release. The v1 encoder API, parser and
@@ -49,6 +57,28 @@ immutable delivery snapshot and owns delivery UI state, source identity,
 panning/HOA preparation, codec encoding, resampling, loudness measurement,
 timeline interpolation, rendering, and carrier/container work. This crate
 performs none of those responsibilities.
+
+## Live spatial playback and export
+
+`iamf-rs` is a bitstream library, not a real-time audio engine. A live source
+does not need to be encoded as IAMF in order to be played. For example, a
+stereo synthesizer with position automation follows this runtime path:
+
+```text
+Synth PCM + position automation
+  -> source spatializer / HOA encoder
+  -> IAMF-oriented renderer
+  -> binaural or loudspeaker PCM
+```
+
+The source spatializer (including HOA encoding) and renderer belong in a
+separate playback/rendering component. `iamf-rs` is needed when a caller also
+wants to import, inspect, write, or export an IAMF IA Sequence. In that export
+path, this crate serializes prepared PCM or pre-encoded codec access units with
+their IAMF descriptors and parameter blocks; it does not compress PCM into
+Opus, FLAC, or AAC-LC. A future media/authoring encoder may supply those codec
+access units and authoring decisions while depending on this crate for the
+IAMF wire format.
 
 Public Rust snippets intentionally use only this crate's surface. In
 particular, they contain no application-specific type or import,
