@@ -826,6 +826,22 @@ impl EncoderBuilder {
             }
             validate_findings(config.validate())?;
         }
+        // An IA sequence carries exactly one Codec Config. An Audio Element's frame size, sample
+        // rate and bit depth come only from its Codec Config, so this single check also enforces
+        // the reference's per-sub-mix frame-size rule and its sample-rate/bit-depth equality rule.
+        // The scope is the whole sequence, not a sub-mix: the pinned `decoder_main` fails on two
+        // Codec Configs even when their timing is equal. It runs after the per-config loop so a
+        // malformed single config still reports its own error first.
+        // ref: IAMF v1.1.0 index.bs:1912 "There SHALL be only one unique Codec Config OBU"
+        // ref: iamf-tools@v2.1.0 iamf/cli/obu_processor.cc GetSampleRateAndFrameSize
+        // ref: iamf-tools@v2.1.0 iamf/cli/rendering_mix_presentation_finalizer.cc GetCommonCodecConfigPropertiesFromAudioElementIds
+        // ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc FillDescriptorStatistics
+        if self.codec_configs.len() > 1 {
+            return Err(Error::new(
+                ErrorKind::MultipleCodecConfigs,
+                Location::Field("codec_configs"),
+            ));
+        }
         for declaration in &self.audio_elements {
             self.codec_config(declaration.codec_config)?;
             validate_element_topology(&declaration.element)?;

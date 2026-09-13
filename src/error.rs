@@ -143,6 +143,8 @@ pub enum ErrorKind {
     DuplicateDeclaration,
     #[error("the builder cannot allocate another IAMF wire id")]
     WireIdAllocationExhausted,
+    #[error("an IA sequence permits only one Codec Config")]
+    MultipleCodecConfigs,
     #[error("a temporal unit references an unknown substream handle")]
     UnknownTemporalSubstreamHandle,
     #[error("a temporal unit references an unknown parameter handle")]

@@ -96,6 +96,9 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
         .collect();
 
     let mut builder = EncoderBuilder::new();
+    // IAMF v1.1.0 (index.bs:1912) permits one Codec Config per IA sequence, so the FLAC and Opus
+    // candidates lower onto this shared LPCM config here. Separate per-codec Parallax deliveries
+    // are recorded as a follow-up in 260913-lta-deferred-items.md.
     let lpcm = builder.add_codec_config(CodecConfig::lpcm(
         88,
         128,
@@ -105,8 +108,6 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
             sample_rate: 48_000,
         },
     ));
-    let flac = builder.add_codec_config(CodecConfig::flac(89, 128, 48_000, 16)?);
-    let opus = builder.add_codec_config(CodecConfig::opus(90, 960, 48_000, 312)?);
 
     let mut lpcm_element = None;
     let mut flac_element = None;
@@ -115,8 +116,8 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
     for candidate in retained.iter().copied() {
         let element = match candidate.kind {
             CandidateKind::LpcmStereo => builder.add_audio_element(lpcm, stereo_element(10)),
-            CandidateKind::FlacStereo => builder.add_audio_element(flac, stereo_element(20)),
-            CandidateKind::OpusStereo => builder.add_audio_element(opus, stereo_element(30)),
+            CandidateKind::FlacStereo => builder.add_audio_element(lpcm, stereo_element(20)),
+            CandidateKind::OpusStereo => builder.add_audio_element(lpcm, stereo_element(30)),
             CandidateKind::AmbisonicsMono => {
                 let streams = (0..4).map(|_| builder.add_substream()).collect();
                 builder.add_ambisonics_mono(
@@ -175,15 +176,10 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
     let parameter = parameters.first().copied().expect("supplied gain handle");
     let parameter_id = manifest.parameter_id(parameter).expect("supplied gain id");
 
-    // These are committed opaque access units. The fixture never encodes FLAC
-    // or Opus; it only submits their existing corpus packets through the
-    // public streaming boundary.
-    let flac_payload = include_bytes!("../fixtures/codecs/flac/packet-000.bin").to_vec();
-    let opus_payload = include_bytes!("../fixtures/codecs/opus/packet-000.bin").to_vec();
     let mut frames = vec![
         (lpcm_stream, FrameInput::Lpcm(vec![0; 512])),
-        (flac_stream, FrameInput::Flac(flac_payload)),
-        (opus_stream, FrameInput::Opus(opus_payload)),
+        (flac_stream, FrameInput::Lpcm(vec![0; 512])),
+        (opus_stream, FrameInput::Lpcm(vec![0; 512])),
     ];
     frames.extend(
         ambisonics_streams

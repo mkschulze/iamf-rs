@@ -233,6 +233,24 @@ fn largest_presentation_sets_the_sequence_profile() {
     assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
 }
 
+#[test]
+fn build_rejects_codec_configs_with_mismatched_frame_timing() -> iamf::Result<()> {
+    let mut builder = EncoderBuilder::new();
+    let lpcm = builder.add_codec_config(lpcm_config());
+    let opus = builder.add_codec_config(CodecConfig::opus(90, 960, 48_000, 312)?);
+    let first = add_fresh_element(&mut builder, lpcm, stereo_element());
+    let second = add_fresh_element(&mut builder, opus, stereo_element());
+    let _presentation = builder.add_mix_presentation(
+        vec![first, second],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+
+    let error = builder.build().unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::MultipleCodecConfigs);
+    assert_eq!(error.at(), Location::Field("codec_configs"));
+    Ok(())
+}
+
 fn lpcm_config() -> CodecConfig {
     CodecConfig::lpcm(
         42,

@@ -192,8 +192,8 @@ fn filtered_delivery_is_deterministic_and_retains_only_public_contract_data() {
         .collect::<Vec<_>>();
     assert_eq!(
         codec_ids,
-        vec![0, 1, 2],
-        "LPCM, FLAC, Opus declaration order"
+        vec![0],
+        "one Codec Config per IA sequence (IAMF v1.1.0 index.bs:1912)"
     );
     assert_eq!(
         element_ids,
