@@ -1,6 +1,5 @@
 //! Public streaming tests for the immutable high-level encoder.
 
-use iamf::ErrorKind;
 use iamf::encoder::{EncoderBuilder, FrameInput, SubmittedParameterBlock, TemporalUnitInput};
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
@@ -10,6 +9,7 @@ use iamf::obu::{
     SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming,
 };
 use iamf::sequence::{SequenceObu, parse_sequence};
+use iamf::{ErrorKind, Location};
 use std::io::{self, Write};
 
 #[test]
@@ -420,18 +420,18 @@ fn mode_1_submitted_blocks_require_non_empty_positive_exact_tiling() -> iamf::Re
             block: ParameterBlock {
                 parameter_id: 0,
                 duration_fields: Some(BlockDurationFields {
-                    duration: 10,
+                    duration: 128,
                     constant_subblock_duration: 0,
                 }),
                 subblocks: vec![
                     ParameterSubblock {
-                        subblock_duration: Some(4),
+                        subblock_duration: Some(64),
                         data: ParameterData::MixGain(MixGainParameterData::Step {
                             start_point_value: 0,
                         }),
                     },
                     ParameterSubblock {
-                        subblock_duration: Some(6),
+                        subblock_duration: Some(64),
                         data: ParameterData::MixGain(MixGainParameterData::Step {
                             start_point_value: 0,
                         }),
@@ -443,6 +443,110 @@ fn mode_1_submitted_blocks_require_non_empty_positive_exact_tiling() -> iamf::Re
     })?;
 
     Ok(())
+}
+
+#[test]
+fn mode_1_block_duration_must_equal_the_frame_size() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(
+            left,
+            right,
+            vec![gain_block(parameter, 64, 32, 32)],
+            None,
+        ))
+        .expect_err("a 64-tick block cannot cover a 128-sample frame");
+    assert_eq!(error.kind(), &ErrorKind::ParameterBlockDurationMismatch);
+    assert_eq!(error.at(), Location::Field("parameter_block.duration"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(
+        left,
+        right,
+        vec![gain_block(parameter, 128, 64, 64)],
+        None,
+    ))?;
+    Ok(())
+}
+
+#[test]
+fn mode_1_blocks_matching_the_frame_round_trip_in_every_unit() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    for _ in 0..3 {
+        writer.push_temporal_unit(gain_unit(
+            left,
+            right,
+            vec![gain_block(parameter, 128, 64, 64)],
+            None,
+        ))?;
+    }
+    let bytes = writer.finish()?;
+
+    let sequence = parse_sequence(&bytes)?;
+    let durations: Vec<u32> = sequence
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::ParameterBlock(block) => {
+                block.payload.duration_fields.map(|fields| fields.duration)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(durations, vec![128, 128, 128]);
+    Ok(())
+}
+
+fn gain_block(
+    parameter: iamf::encoder::ParameterHandle,
+    duration: u32,
+    first: u32,
+    second: u32,
+) -> SubmittedParameterBlock {
+    SubmittedParameterBlock {
+        parameter,
+        block: ParameterBlock {
+            parameter_id: 0,
+            duration_fields: Some(BlockDurationFields {
+                duration,
+                constant_subblock_duration: 0,
+            }),
+            subblocks: vec![
+                ParameterSubblock {
+                    subblock_duration: Some(first),
+                    data: ParameterData::MixGain(MixGainParameterData::Step {
+                        start_point_value: 0,
+                    }),
+                },
+                ParameterSubblock {
+                    subblock_duration: Some(second),
+                    data: ParameterData::MixGain(MixGainParameterData::Step {
+                        start_point_value: 0,
+                    }),
+                },
+            ],
+        },
+    }
+}
+
+fn gain_unit(
+    left: iamf::encoder::SubstreamHandle,
+    right: iamf::encoder::SubstreamHandle,
+    parameter_blocks: Vec<SubmittedParameterBlock>,
+    trimming: Option<Trimming>,
+) -> TemporalUnitInput {
+    TemporalUnitInput {
+        frames: vec![
+            (left, FrameInput::Lpcm(stereo_pcm_frame())),
+            (right, FrameInput::Lpcm(stereo_pcm_frame())),
+        ],
+        parameter_blocks,
+        trimming,
+    }
 }
 
 fn mono_builder(

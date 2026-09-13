@@ -294,6 +294,24 @@ impl<W: Write> EncodingWriter<W> {
                 &governing.context,
                 &submitted.block,
             )?;
+            // ref: IAMF v1.1.0 index.bs:1915 "Every Parameter Block OBU SHALL have the same
+            //      duration as its corresponding Audio Frame OBU under the same sample rate"
+            // ref: iamf-tools@v2.1.0 iamf/cli/obu_processor.cc GetAndStoreParameterBlockWithData
+            // ref: iamf-tools@v2.1.0 iamf/cli/temporal_unit_view.cc ValidateAllParameterBlocksMatchStatistics
+            // Ticks equal samples here because `build()` pins every parameter_rate to the
+            // Codec Config output sample rate (P1). Mode-0 blocks carry no duration; their
+            // definition duration is checked by P2 in `build()`.
+            if governing.definition.param_definition_mode()
+                && submitted
+                    .block
+                    .duration_fields
+                    .is_some_and(|fields| Some(fields.duration) != self.frame_size())
+            {
+                return Err(temporal_input(
+                    ErrorKind::ParameterBlockDurationMismatch,
+                    "parameter_block.duration",
+                ));
+            }
             parameter_blocks.push(Obu::new(
                 ObuHeader::new(ObuType::ParameterBlock),
                 submitted.block,
@@ -305,6 +323,14 @@ impl<W: Write> EncodingWriter<W> {
             parameter_blocks,
             audio_frames: frames,
         })
+    }
+
+    /// The frozen frame size; `build()` guarantees exactly one Codec Config.
+    fn frame_size(&self) -> Option<u32> {
+        self.descriptors
+            .codec_configs
+            .first()
+            .map(|config| config.num_samples_per_frame)
     }
 
     fn declared_substreams(&self) -> Vec<u32> {

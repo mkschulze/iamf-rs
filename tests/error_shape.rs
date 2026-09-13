@@ -193,6 +193,7 @@ fn temporal_input_errors_are_compact_typed_kinds() {
         ErrorKind::FrameCodecMismatch,
         ErrorKind::LpcmFrameByteAlignment,
         ErrorKind::LpcmFrameSampleCountMismatch,
+        ErrorKind::ParameterBlockDurationMismatch,
     ] {
         let error = Error::new(kind.clone(), Location::Field("temporal_input"));
         assert_eq!(error.kind(), &kind);

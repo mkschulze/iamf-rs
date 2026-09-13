@@ -161,6 +161,8 @@ pub enum ErrorKind {
     LpcmFrameByteAlignment,
     #[error("the LPCM frame payload does not carry the frozen sample count")]
     LpcmFrameSampleCountMismatch,
+    #[error("a Parameter Block duration differs from its Audio Frame duration")]
+    ParameterBlockDurationMismatch,
 }
 
 /// An error, with the position it happened at attached exactly once.
