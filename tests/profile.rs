@@ -13,8 +13,18 @@
 //! A Mix Presentation with an element whose first layer is an expanded
 //! loudspeaker layout needs Base-Enhanced regardless of the counts.
 //!
-//! **Both counts are per Mix Presentation**, not per sequence. Every test below
-//! passes the Audio Elements of one Mix Presentation.
+//! Scopes follow IAMF v1.1.0, which adopts the v1.0.0-errata Simple and Base
+//! sections (quick 260913-qk3):
+//!
+//! - R1/R3: the Simple and Base unique-element limits (1, 2) span the IA Sequence.
+//! - R4/R5: Base's "at most one scene-based" and "at most one channel-based
+//!   element with `num_layers > 1`" span the IA Sequence.
+//! - R2/R6: the Simple and Base channel limits (16, 18) are per Mix Presentation.
+//! - R7: the Base-Enhanced 28-element limit is per Mix Presentation.
+//! - R8: the Base-Enhanced 28-channel limit spans the IA Sequence.
+//!
+//! The per-presentation channel tests below still pass one Mix Presentation's
+//! elements to `select_minimum_profile`, which applies both scopes to that set.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,12 +37,14 @@ use iamf::model::layout::{
 use iamf::model::profile::{
     BASE_ENHANCED_MAX_AUDIO_ELEMENTS, BASE_ENHANCED_MAX_CHANNELS, BASE_MAX_AUDIO_ELEMENTS,
     BASE_MAX_CHANNELS, SIMPLE_MAX_AUDIO_ELEMENTS, SIMPLE_MAX_CHANNELS,
+    presentation_minimum_profile, select_sequence_profile,
 };
 use iamf::model::{Profile, Q7_8, lufs_to_q7_8, select_minimum_profile};
 use iamf::obu::{
-    AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
-    LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    AudioElement, ChannelAudioLayerConfig, CodecConfig, HeadphonesRenderingMode, IaSequenceHeader,
+    Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition,
+    MixPresentation, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix,
+    SubMixAudioElement,
 };
 
 // ---------------------------------------------------------------------------
@@ -537,6 +549,151 @@ fn a_layout_with_no_fixed_channel_count_is_a_typed_error_not_a_guess() {
     let elements = vec![element(0, LoudspeakerLayout::Reserved(11))];
     let err = select(&elements).expect_err("a reserved layout has no channel count");
     assert_eq!(err.kind(), &ErrorKind::UnsupportedLayout);
+}
+
+// ---------------------------------------------------------------------------
+// PROF-02 — which limits span the IA Sequence (quick 260913-qk3)
+// ---------------------------------------------------------------------------
+
+/// A channel-based Audio Element with two layers: Stereo, then 5.1. It
+/// contributes the last layer's six channels.
+fn two_layer_element(id: u32) -> AudioElement {
+    AudioElement::channel_based(
+        id,
+        200,
+        (0..6).collect(),
+        ScalableChannelLayoutConfig {
+            reserved: 0,
+            layers: vec![
+                ChannelAudioLayerConfig::new(LoudspeakerLayout::Stereo, 1, 1),
+                ChannelAudioLayerConfig::new(LoudspeakerLayout::Ch5_1, 3, 1),
+            ],
+        },
+    )
+}
+
+/// A one-sub-mix Mix Presentation referencing `element_ids` in order.
+fn presentation_referencing(element_ids: &[u32]) -> MixPresentation {
+    MixPresentation {
+        mix_presentation_id: 7,
+        annotations_language: vec![b"en".to_vec()],
+        localized_presentation_annotations: vec![b"mix".to_vec()],
+        sub_mixes: vec![SubMix {
+            elements: element_ids
+                .iter()
+                .map(|&audio_element_id| SubMixAudioElement {
+                    audio_element_id,
+                    localized_element_annotations: vec![b"bed".to_vec()],
+                    rendering_config: RenderingConfig::stereo(),
+                    element_mix_gain: MixGainParamDefinition::mode_1(100, 16_000),
+                })
+                .collect(),
+            output_mix_gain: MixGainParamDefinition::mode_1(101, 16_000),
+            layouts: vec![LayoutWithLoudness {
+                layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                reserved: 0,
+                loudness: Loudness::new(0, 0),
+            }],
+        }],
+        trailing: Vec::new(),
+    }
+}
+
+#[test]
+fn two_multi_layer_channel_elements_select_base_enhanced() {
+    // Two elements, 12 channels: inside Base's counts, but Base permits at most
+    // one channel-based element with num_layers > 1.
+    // ref: IAMF v1.0.0-errata index.bs:1867
+    let elements = vec![two_layer_element(0), two_layer_element(1)];
+    assert_eq!(
+        select(&elements).unwrap(),
+        (Profile::BaseEnhanced, Profile::BaseEnhanced)
+    );
+}
+
+#[test]
+fn one_multi_layer_channel_element_plus_ambisonics_selects_base() {
+    let elements = vec![two_layer_element(1), ambisonics_element(4).unwrap()];
+    assert_eq!(select(&elements).unwrap(), (Profile::Base, Profile::Base));
+}
+
+#[test]
+fn two_ambisonics_elements_with_distinct_ids_select_base_enhanced() {
+    // ref: IAMF v1.0.0-errata index.bs:1868 (Base: at most one Scene-based Audio Element)
+    let first = ambisonics_element(4).unwrap();
+    let mut second = ambisonics_element(4).unwrap();
+    second.audio_element_id = 1;
+    assert!(second.audio_element_type.scene_based_config().is_some());
+    assert_eq!(
+        select(&[first, second]).unwrap(),
+        (Profile::BaseEnhanced, Profile::BaseEnhanced)
+    );
+}
+
+#[test]
+fn select_sequence_profile_counts_unique_elements_across_presentations() {
+    let first = element(1, LoudspeakerLayout::Stereo);
+    let second = element(2, LoudspeakerLayout::Stereo);
+    let elements = vec![&first, &second];
+    let (one, two) = (
+        presentation_referencing(&[1]),
+        presentation_referencing(&[2]),
+    );
+    assert_eq!(
+        select_sequence_profile(&elements, &[&one, &two]).unwrap(),
+        (Profile::Base, Profile::Base)
+    );
+
+    let lone = vec![&first];
+    let again = presentation_referencing(&[1]);
+    assert_eq!(
+        select_sequence_profile(&lone, &[&one, &again]).unwrap(),
+        (Profile::Simple, Profile::Simple)
+    );
+}
+
+#[test]
+fn presentation_minimum_profile_rejects_what_no_profile_permits() {
+    let stereo = element(1, LoudspeakerLayout::Stereo);
+    let elements = vec![&stereo];
+
+    let mut none = presentation_referencing(&[1]);
+    none.sub_mixes.clear();
+    let error = presentation_minimum_profile(&none, &elements).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::SubMixCountNotOne);
+    assert_eq!(error.at(), iamf::Location::Field("num_sub_mixes"));
+
+    let mut two = presentation_referencing(&[1]);
+    two.sub_mixes
+        .extend(presentation_referencing(&[1]).sub_mixes);
+    let error = presentation_minimum_profile(&two, &elements).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::SubMixCountNotOne);
+    assert_eq!(error.at(), iamf::Location::Field("num_sub_mixes"));
+
+    let mut reserved = presentation_referencing(&[1]);
+    reserved
+        .sub_mixes
+        .first_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .unwrap()
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(2);
+    let error = presentation_minimum_profile(&reserved, &elements).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::ReservedHeadphonesRenderingMode);
+    assert_eq!(
+        error.at(),
+        iamf::Location::Field("headphones_rendering_mode")
+    );
+
+    let absent = presentation_referencing(&[9]);
+    let error = presentation_minimum_profile(&absent, &elements).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), iamf::Location::Field("audio_element_id"));
+
+    assert_eq!(
+        presentation_minimum_profile(&presentation_referencing(&[1]), &elements).unwrap(),
+        Profile::Simple
+    );
 }
 
 // ---------------------------------------------------------------------------

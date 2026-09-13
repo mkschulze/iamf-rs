@@ -261,20 +261,24 @@ fn build_accepts_binaural_headphones_rendering_mode() {
 }
 
 #[test]
-fn unrelated_presentations_do_not_sum_their_element_or_channel_limits() {
-    // Two independent 16-channel TOA Presentations would total 32 channels,
-    // above the 28-channel ceiling, if their elements were unioned. Each one
-    // alone needs only Simple.
-    //
-    // Per-presentation scope follows both references. IAMF v1.0.0-errata words
-    // the Simple and Base element limits sequence-wide; the references win
-    // (260913-p28 research A, Disagreement 1).
-    let (_, manifest) = two_presentation_builder().build().unwrap();
-    assert_eq!(manifest.sequence_profile(), Profile::Simple);
+fn two_presentations_sum_channels_against_the_sequence_wide_base_enhanced_ceiling() {
+    // Two 16-channel TOA elements, one per Presentation, total 32 channels
+    // across the IA Sequence. Base-Enhanced permits at most 28 channels in
+    // total across all Audio Elements in the IA Sequence, so no profile
+    // permits the configuration.
+    // ref: IAMF v1.1.0 index.bs:1953
+    let error = two_presentation_builder()
+        .build()
+        .expect_err("32 channels across the sequence exceed every profile");
+    assert_eq!(error.kind(), &ErrorKind::ChannelCountExceedsProfile);
+    assert_eq!(error.at(), Location::Field("loudspeaker_layout"));
 }
 
 #[test]
-fn shared_element_is_counted_in_each_presentation_that_references_it() {
+fn three_unique_elements_across_presentations_select_base_enhanced() {
+    // Three unique Audio Elements in the IA Sequence exceed Base's two, even
+    // though each Presentation references only two.
+    // ref: IAMF v1.0.0-errata index.bs:1866 (adopted by v1.1.0 index.bs:1943)
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
     let shared = add_fresh_element(&mut builder, codec, stereo_element());
@@ -289,6 +293,104 @@ fn shared_element_is_counted_in_each_presentation_that_references_it() {
         vec![shared, second],
         presentation_for_elements(&[99, 101], 200, 210),
     );
+
+    let (_, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+}
+
+#[test]
+fn a_shared_element_counts_once_toward_the_sequence_unique_element_limit() {
+    // Three references, two unique Audio Elements: Base.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let shared = add_fresh_element(&mut builder, codec, stereo_element());
+    let other = add_fresh_element(&mut builder, codec, stereo_element());
+
+    let _first_presentation = builder.add_mix_presentation(
+        vec![shared, other],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+    let _second_presentation =
+        builder.add_mix_presentation(vec![shared], presentation_for_elements(&[99], 200, 210));
+
+    let (encoder, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Base);
+    assert_eq!(encoder.descriptors().sequence_header.primary_profile, 1);
+}
+
+#[test]
+fn two_single_stereo_presentations_write_base_profile_bytes() {
+    // ref: IAMF v1.0.0-errata index.bs:1853 (Simple: only one unique Audio Element OBU in the IA Sequence)
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, codec, stereo_element());
+    let second = add_fresh_element(&mut builder, codec, stereo_element());
+    let _first_presentation =
+        builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));
+    let _second_presentation =
+        builder.add_mix_presentation(vec![second], presentation_for_elements(&[100], 200, 210));
+
+    let (encoder, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Base);
+    assert_eq!(encoder.descriptors().sequence_header.primary_profile, 1);
+    assert_eq!(encoder.descriptors().sequence_header.additional_profile, 1);
+}
+
+#[test]
+fn two_ambisonics_elements_in_separate_presentations_select_base_enhanced() {
+    // ref: IAMF v1.0.0-errata index.bs:1868 (Base: at most one Scene-based Audio Element)
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_foa_element(&mut builder, codec);
+    let second = add_foa_element(&mut builder, codec);
+    let _first_presentation =
+        builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));
+    let _second_presentation =
+        builder.add_mix_presentation(vec![second], presentation_for_elements(&[100], 200, 210));
+
+    let (_, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+}
+
+#[test]
+fn two_ambisonics_elements_in_one_presentation_select_base_enhanced() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_foa_element(&mut builder, codec);
+    let second = add_foa_element(&mut builder, codec);
+    let _presentation = builder.add_mix_presentation(
+        vec![first, second],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+
+    let (_, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+}
+
+#[test]
+fn ambisonics_plus_stereo_in_one_presentation_selects_base() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let scene = add_foa_element(&mut builder, codec);
+    let bed = add_fresh_element(&mut builder, codec, stereo_element());
+    let _presentation = builder.add_mix_presentation(
+        vec![scene, bed],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+
+    let (_, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Base);
+}
+
+#[test]
+fn an_unreferenced_second_element_raises_simple_to_base() {
+    // Unique Audio Element OBUs are counted in the IA Sequence, referenced or not.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, codec, stereo_element());
+    let _unreferenced = add_fresh_element(&mut builder, codec, stereo_element());
+    let _presentation =
+        builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));
 
     let (_, manifest) = builder.build().unwrap();
     assert_eq!(manifest.sequence_profile(), Profile::Base);
@@ -1257,6 +1359,23 @@ fn add_toa_element(
             output_channel_count: 16,
             substream_count: 16,
             channel_mapping: (0..16).collect(),
+        },
+    )
+}
+
+/// A 4-channel first-order Ambisonics mono element on fresh substreams.
+fn add_foa_element(
+    builder: &mut EncoderBuilder,
+    codec: iamf::encoder::CodecConfigHandle,
+) -> iamf::encoder::AudioElementHandle {
+    let streams = (0..4).map(|_| builder.add_substream()).collect();
+    builder.add_ambisonics_mono(
+        codec,
+        streams,
+        iamf::model::layout::AmbisonicsMonoConfig {
+            output_channel_count: 4,
+            substream_count: 4,
+            channel_mapping: (0..4).collect(),
         },
     )
 }

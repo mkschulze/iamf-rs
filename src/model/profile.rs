@@ -28,10 +28,36 @@
 //! header over a lone expanded LFE element exits 0, decodes 0 frames and writes
 //! a bare 44-byte WAV. Patching only the two profile bytes to `02 02` makes the
 //! same file decode 1 frame.
+//!
+//! # Which limits span the IA Sequence
+//!
+//! IAMF v1.1.0 hands the Simple and Base profiles to v1.0.0-errata
+//! (`index.bs:1936`, `:1943`), and the errata scope each limit differently:
+//!
+//! | #  | Rule                                                    | Scope             | Source                          |
+//! |----|---------------------------------------------------------|-------------------|---------------------------------|
+//! | R1 | Simple: at most 1 unique Audio Element                  | IA Sequence       | errata `:1853`                  |
+//! | R2 | Simple: at most 16 channels                             | Mix Presentation  | errata `:1857`, v1.1.0 `:1927`  |
+//! | R3 | Base: at most 2 unique Audio Elements                   | IA Sequence       | errata `:1866`                  |
+//! | R4 | Base: at most 1 scene-based Audio Element               | IA Sequence       | errata `:1868`                  |
+//! | R5 | Base: at most 1 channel-based element, `num_layers > 1` | IA Sequence       | errata `:1867`                  |
+//! | R6 | Base: at most 18 channels                               | Mix Presentation  | errata `:1878-1879`             |
+//! | R7 | Base-Enhanced: at most 28 Audio Elements                | Mix Presentation  | v1.1.0 `:1921`, `:1951`         |
+//! | R8 | Base-Enhanced: at most 28 channels in total             | IA Sequence       | v1.1.0 `:1953`                  |
+//!
+//! Unique means distinct `audio_element_id`: an OBU that only varies by
+//! `obu_redundant_copy` is the same OBU (v1.1.0 `:1906`). Channels are counted
+//! as `libiamf` counts them — the last layer's layout, or a scene-based
+//! element's `output_channel_count` (`IAMF_decoder.c:1284-1337`).
+//!
+//! Both pinned references count every limit per Mix Presentation and have no
+//! R4/R5 rule. The spec is stricter, and a file this crate writes must satisfy
+//! both, so the spec's scopes are applied. The profile is raised to satisfy
+//! them; a configuration is rejected only above the Base-Enhanced ceilings.
 
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::LoudspeakerLayout;
-use crate::obu::{AudioElement, AudioElementType};
+use crate::obu::{AudioElement, AudioElementType, HeadphonesRenderingMode, MixPresentation};
 
 /// A profile byte, as `primary_profile` or `additional_profile` carries it.
 ///
@@ -124,14 +150,17 @@ pub const BASE_MAX_CHANNELS: u32 = 18;
 /// `kBaseEnhancedProfileMaxChannels`.
 pub const BASE_ENHANCED_MAX_CHANNELS: u32 = 28;
 
-/// PROF-02 — the lowest profile that permits this configuration, as the
-/// `(primary, additional)` pair the IA Sequence Header carries.
+/// PROF-02 — the lowest profile that permits this set of Audio Elements, as
+/// the `(primary, additional)` pair the IA Sequence Header carries.
 ///
-/// **Both counts are per Mix Presentation, not per sequence.** `elements` is
-/// the Audio Elements of *one* Mix Presentation's sub-mixes. Summing across a
-/// whole multi-presentation sequence is the obvious wrong reading and would
-/// select a higher profile than the file needs — possibly one the decoder in
-/// front of it does not implement.
+/// `elements` is read as **both** one Mix Presentation's references and the
+/// whole IA Sequence's Audio Elements, and the higher requirement wins. See
+/// "Which limits span the IA Sequence" in the module documentation: the
+/// unique-element limits, Base's scene-based and multi-layer limits and the
+/// Base-Enhanced channel total span the sequence; the Simple and Base channel
+/// limits and the Base-Enhanced element limit are per Mix Presentation. For a
+/// multi-presentation sequence use [`select_sequence_profile`], which applies
+/// each scope to the right set.
 ///
 /// The pair is always returned **equal**. See the module documentation: only
 /// `libiamf` enforces `primary <= additional`, it rejects the entire sequence
@@ -149,12 +178,171 @@ pub const BASE_ENHANCED_MAX_CHANNELS: u32 = 28;
 /// [`ErrorKind::ElementCountExceedsProfile`] above 28 Audio Elements and
 /// [`ErrorKind::ChannelCountExceedsProfile`] above 28 channels — the
 /// Base-Enhanced ceilings, above which no profile in this spec version
-/// permits the configuration.
+/// permits the configuration. [`ErrorKind::UnsupportedLayout`] when a channel
+/// count is not fixed by this spec version.
 // ref: iamf-tools@v2.1.0 iamf/cli/profile_filter.cc ProfileFilter::FilterProfilesForAudioElement
 pub fn select_minimum_profile(elements: &[&AudioElement]) -> Result<(Profile, Profile)> {
+    let presentation = presentation_floor(elements)?;
+    let sequence = sequence_floor(elements)?;
+    let profile = presentation.max(sequence);
+    // Equal, always. The ordering rule can then never be tripped.
+    Ok((profile, profile))
+}
+
+/// The lowest profile one Mix Presentation complies with, on its own.
+///
+/// `elements` are the IA Sequence's Audio Elements; each sub-mix reference
+/// resolves to the first element carrying its `audio_element_id`. Only the
+/// per-presentation limits apply here (R2, R6, R7, plus R4/R5 and the
+/// expanded-layout floor over the presentation's own references); the
+/// sequence-wide limits are [`select_sequence_profile`]'s.
+///
+/// # Errors
+///
+/// - [`ErrorKind::SubMixCountNotOne`] at `num_sub_mixes` when the presentation
+///   does not carry exactly one sub-mix.
+/// - [`ErrorKind::ReservedHeadphonesRenderingMode`] at
+///   `headphones_rendering_mode` for a reserved mode.
+/// - [`ErrorKind::InvalidDescriptorReference`] at `audio_element_id` for a
+///   reference no element carries.
+/// - The ceiling and channel-count errors of [`select_minimum_profile`].
+// ref: IAMF v1.1.0 index.bs:1278, :1920 (num_sub_mixes), :1337-1341 (reserved headphones_rendering_mode)
+// ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:760-782; iamf-tools@v2.1.0 iamf/cli/profile_filter.cc:220-271
+pub fn presentation_minimum_profile(
+    presentation: &MixPresentation,
+    elements: &[&AudioElement],
+) -> Result<Profile> {
+    if presentation.sub_mixes.len() != 1 {
+        return Err(Error::new(
+            ErrorKind::SubMixCountNotOne,
+            Location::Field("num_sub_mixes"),
+        ));
+    }
+    let references = || {
+        presentation
+            .sub_mixes
+            .iter()
+            .flat_map(|sub_mix| &sub_mix.elements)
+    };
+    if references().any(|reference| {
+        matches!(
+            reference.rendering_config.headphones_rendering_mode,
+            HeadphonesRenderingMode::Reserved(_)
+        )
+    }) {
+        return Err(Error::new(
+            ErrorKind::ReservedHeadphonesRenderingMode,
+            Location::Field("headphones_rendering_mode"),
+        ));
+    }
+    let resolved = references()
+        .map(|reference| {
+            elements
+                .iter()
+                .copied()
+                .find(|element| element.audio_element_id == reference.audio_element_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidDescriptorReference,
+                        Location::Field("audio_element_id"),
+                    )
+                })
+        })
+        .collect::<Result<Vec<&AudioElement>>>()?;
+    presentation_floor(&resolved)
+}
+
+/// PROF-02 for a whole IA Sequence: the sequence-wide floor over every Audio
+/// Element (referenced or not), raised by each Mix Presentation's own floor,
+/// as the equal `(primary, additional)` pair.
+///
+/// The sequence ceilings run first, then each presentation in list order.
+///
+/// # Errors
+///
+/// Those of [`presentation_minimum_profile`], plus
+/// [`ErrorKind::ElementCountExceedsProfile`] above 28 unique Audio Elements and
+/// [`ErrorKind::ChannelCountExceedsProfile`] above 28 channels summed over the
+/// unique Audio Elements of the sequence.
+// ref: IAMF v1.0.0-errata index.bs:1852-1853, :1865-1873, :1878-1879 (adopted by v1.1.0 index.bs:1936, :1943)
+// ref: IAMF v1.1.0 index.bs:1906, :1927, :1951, :1953
+pub fn select_sequence_profile(
+    elements: &[&AudioElement],
+    presentations: &[&MixPresentation],
+) -> Result<(Profile, Profile)> {
+    let mut profile = sequence_floor(elements)?;
+    for presentation in presentations {
+        profile = profile.max(presentation_minimum_profile(presentation, elements)?);
+    }
+    Ok((profile, profile))
+}
+
+/// Whether an element's first layer is an expanded loudspeaker layout.
+///
+/// It reads the FIRST layer, as the reference does
+/// (`channel_audio_layer_configs[0]`, libiamf `layer[0]`), while channel
+/// counting keeps the last.
+fn is_expanded_first_layer(element: &AudioElement) -> bool {
+    matches!(
+        &element.audio_element_type,
+        AudioElementType::ChannelBased(config)
+            if config
+                .scalable_channel_layout
+                .layers
+                .first()
+                .is_some_and(|layer| matches!(
+                    layer.loudspeaker_layout,
+                    LoudspeakerLayout::Expanded(_)
+                ))
+    )
+}
+
+/// Base's combination rules: at most one scene-based Audio Element, and at
+/// most one channel-based Audio Element with `num_layers > 1`.
+// ref: IAMF v1.0.0-errata index.bs:1867-1873 (adopted by v1.1.0 index.bs:1943)
+// DISAGREEMENT: neither iamf-tools@v2.1.0 iamf/cli/profile_filter.cc nor libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1284-1337 has a scene-based or num_layers rule; the spec is stricter, so the spec wins (qk3 directive, CONTEXT D-SPEC)
+fn base_combination_allowed(elements: &[&AudioElement]) -> bool {
+    let scene_based = elements
+        .iter()
+        .filter(|element| matches!(element.audio_element_type, AudioElementType::SceneBased(_)))
+        .count();
+    let multi_layer = elements
+        .iter()
+        .filter(|element| {
+            matches!(
+                &element.audio_element_type,
+                AudioElementType::ChannelBased(config)
+                    if config.scalable_channel_layout.layers.len() > 1
+            )
+        })
+        .count();
+    scene_based <= 1 && multi_layer <= 1
+}
+
+/// The unique Audio Elements: the first binding of each distinct
+/// `audio_element_id`, in input order. An OBU that differs only by
+/// `obu_redundant_copy` repeats its original's id, so it is not counted again.
+// ref: IAMF v1.1.0 index.bs:1906 (a unique OBU is still unique if it only varies by obu_redundant_copy)
+fn unique_by_id<'a>(elements: &[&'a AudioElement]) -> Vec<&'a AudioElement> {
+    let mut unique: Vec<&'a AudioElement> = Vec::new();
+    for element in elements {
+        if !unique
+            .iter()
+            .any(|seen| seen.audio_element_id == element.audio_element_id)
+        {
+            unique.push(element);
+        }
+    }
+    unique
+}
+
+/// The per-presentation floor over one Mix Presentation's references.
+/// Duplicated references count, as iamf-tools does.
+fn presentation_floor(elements: &[&AudioElement]) -> Result<Profile> {
     let element_count = elements.len();
     let channel_count = total_channel_count(elements)?;
 
+    // ref: IAMF v1.1.0 index.bs:1921, :1951 (Base-Enhanced: at most 28 Audio Elements per Mix Presentation)
     if element_count > BASE_ENHANCED_MAX_AUDIO_ELEMENTS {
         return Err(Error::new(
             ErrorKind::ElementCountExceedsProfile,
@@ -178,40 +366,69 @@ pub fn select_minimum_profile(elements: &[&AudioElement]) -> Result<(Profile, Pr
     // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:643-648 iamf_element_is_valid (layout 15 under Simple or Base drops the element)
     // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1402-1410 (effective profile is min(additional_profile, Base-Enhanced))
     // ref: eclipsa-audio-plugin@c964609 common/data_structures/src/FileExport.h:91-106 minimumProfile
-    let has_expanded_first_layer = elements.iter().any(|element| {
-        matches!(
-            &element.audio_element_type,
-            AudioElementType::ChannelBased(config)
-                if config
-                    .scalable_channel_layout
-                    .layers
-                    .first()
-                    .is_some_and(|layer| matches!(
-                        layer.loudspeaker_layout,
-                        LoudspeakerLayout::Expanded(_)
-                    ))
-        )
-    });
+    let has_expanded_first_layer = elements
+        .iter()
+        .any(|element| is_expanded_first_layer(element));
 
     // The floor first, then the tiers in ascending order. Without an expanded
     // first layer, a configuration takes the first tier that
     // permits BOTH its element count and its channel count — which is what
     // makes two stereo elements Base even though four channels would fit
     // Simple twice over.
-    let profile = if has_expanded_first_layer {
+    // ref: IAMF v1.1.0 index.bs:1927 (the channel limit sums a Mix Presentation's Audio Elements)
+    // ref: IAMF v1.0.0-errata index.bs:1878-1879 (Base: 18 channels per Mix Presentation)
+    Ok(if has_expanded_first_layer {
         Profile::BaseEnhanced
     } else if element_count <= SIMPLE_MAX_AUDIO_ELEMENTS && channel_count <= SIMPLE_MAX_CHANNELS {
         Profile::Simple
-    } else if element_count <= BASE_MAX_AUDIO_ELEMENTS && channel_count <= BASE_MAX_CHANNELS {
+    } else if element_count <= BASE_MAX_AUDIO_ELEMENTS
+        && channel_count <= BASE_MAX_CHANNELS
+        && base_combination_allowed(elements)
+    {
         Profile::Base
     } else {
         // Both Base-Enhanced ceilings were checked above, so this arm is
         // reached only when the configuration fits them.
         Profile::BaseEnhanced
-    };
+    })
+}
 
-    // Equal, always. The ordering rule can then never be tripped.
-    Ok((profile, profile))
+/// The sequence-wide floor from the unique Audio Elements alone, without any
+/// channel test: the Simple and Base channel limits are per Mix Presentation.
+fn sequence_count_floor(unique: &[&AudioElement]) -> Profile {
+    if unique
+        .iter()
+        .any(|element| is_expanded_first_layer(element))
+    {
+        Profile::BaseEnhanced
+    } else if unique.len() <= SIMPLE_MAX_AUDIO_ELEMENTS {
+        Profile::Simple
+    } else if unique.len() <= BASE_MAX_AUDIO_ELEMENTS && base_combination_allowed(unique) {
+        Profile::Base
+    } else {
+        Profile::BaseEnhanced
+    }
+}
+
+/// The sequence-wide floor over every Audio Element of the IA Sequence.
+// ref: IAMF v1.0.0-errata index.bs:1852-1853, :1865-1873 (adopted by v1.1.0 index.bs:1936, :1943)
+// ref: IAMF v1.1.0 index.bs:1953 (Base-Enhanced: at most 28 channels in total across the IA Sequence)
+// DISAGREEMENT: iamf-tools@v2.1.0 iamf/cli/profile_filter.cc:282-362 and libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1284-1337 count per Mix Presentation and have no scene-based or num_layers rule; the spec is stricter, so the spec wins (qk3 directive, CONTEXT D-SPEC)
+fn sequence_floor(elements: &[&AudioElement]) -> Result<Profile> {
+    let unique = unique_by_id(elements);
+    if unique.len() > BASE_ENHANCED_MAX_AUDIO_ELEMENTS {
+        return Err(Error::new(
+            ErrorKind::ElementCountExceedsProfile,
+            Location::Field("num_audio_elements"),
+        ));
+    }
+    if total_channel_count(&unique)? > BASE_ENHANCED_MAX_CHANNELS {
+        return Err(Error::new(
+            ErrorKind::ChannelCountExceedsProfile,
+            Location::Field("loudspeaker_layout"),
+        ));
+    }
+    Ok(sequence_count_floor(&unique))
 }
 
 /// The channels the Audio Elements of one Mix Presentation carry, summed with

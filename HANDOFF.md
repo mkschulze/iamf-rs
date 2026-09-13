@@ -32,9 +32,12 @@ state, source position, terminal, or lineage enters `iamf-rs`.
    be shared across Presentations.
 2. Call `build()`. It validates descriptor syntax and references, layouts and profile limits,
    codec/frame-plan compatibility, parameter definitions, and ID capacity, then returns immutable
-   descriptors and the deterministic handle-to-wire-ID `IdManifest`. Each Presentation is assessed
-   separately and the sequence uses the highest required minimum profile rather than a union of
-   unrelated Presentations.
+   descriptors and the deterministic handle-to-wire-ID `IdManifest`. The Simple/Base channel limits
+   and the Base-Enhanced element limit are assessed per Presentation; the unique-element limits,
+   Base's scene-based and multi-layer limits and the 28-channel Base-Enhanced total span the whole
+   sequence (IAMF v1.0.0-errata as adopted by v1.1.0), and the header carries the highest
+   requirement. `build()` rejects a Presentation whose `num_sub_mixes != 1` or whose rendering
+   config carries a reserved headphones mode.
 3. Call `start` with a plain `W: Write` sink. The frozen descriptor prologue is written immediately.
 4. Submit one complete `TemporalUnitInput` at a time. Its frame order and coverage, codec kind,
    LPCM byte/sample count, trimming, and parameter identity/duration are preflighted before the unit

@@ -5,7 +5,7 @@
 
 use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
-use crate::model::{DescriptorSet, Profile, select_minimum_profile};
+use crate::model::{DescriptorSet, Profile};
 use crate::obu::{
     AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
     CodecConfig, DecoderConfig, HeadphonesRenderingMode, IaSequenceHeader, MixGainParamDefinition,
@@ -929,8 +929,12 @@ impl EncoderBuilder {
             descriptors.mix_presentations.push(presentation);
         }
 
+        // Every Audio Element counts toward the sequence-wide limits, referenced
+        // or not; each Mix Presentation adds its own floor.
+        let elements: Vec<&AudioElement> = descriptors.audio_elements.iter().collect();
+        let presentations: Vec<&MixPresentation> = descriptors.mix_presentations.iter().collect();
         let (primary_profile, additional_profile) =
-            select_sequence_profile(&descriptors.mix_presentations, &descriptors.audio_elements)?;
+            crate::model::profile::select_sequence_profile(&elements, &presentations)?;
         descriptors.sequence_header =
             IaSequenceHeader::new(primary_profile.to_wire(), additional_profile.to_wire());
         manifest.sequence_profile = primary_profile;
@@ -1256,48 +1260,6 @@ impl EncoderBuilder {
             .get(handle.index)
             .ok_or_else(|| Error::new(ErrorKind::UnknownAudioElementHandle, Location::Unlocated))
     }
-}
-
-/// Select a sequence profile from Presentation-local minima.
-///
-/// Audio Elements are resolved once for each sub-mix reference, so a shared
-/// declaration contributes to every Presentation that uses it. Presentations
-/// are never unioned: their concurrent-element and channel limits apply one
-/// Presentation at a time, and the IA Sequence Header receives the highest
-/// resulting pair.
-fn select_sequence_profile(
-    presentations: &[MixPresentation],
-    elements: &[AudioElement],
-) -> Result<(Profile, Profile)> {
-    let mut selected = (Profile::Simple, Profile::Simple);
-
-    for presentation in presentations {
-        let presentation_elements: Result<Vec<&AudioElement>> = presentation
-            .sub_mixes
-            .iter()
-            .flat_map(|sub_mix| &sub_mix.elements)
-            .map(|reference| {
-                let index = usize::try_from(reference.audio_element_id).map_err(|_| {
-                    Error::new(
-                        ErrorKind::InvalidDescriptorReference,
-                        Location::Field("mix_presentation.audio_elements"),
-                    )
-                })?;
-                elements.get(index).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::InvalidDescriptorReference,
-                        Location::Field("mix_presentation.audio_elements"),
-                    )
-                })
-            })
-            .collect();
-        let candidate = select_minimum_profile(&presentation_elements?)?;
-        if candidate.0 > selected.0 {
-            selected = candidate;
-        }
-    }
-
-    Ok(selected)
 }
 
 impl Default for EncoderBuilder {
