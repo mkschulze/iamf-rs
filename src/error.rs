@@ -89,6 +89,8 @@ pub enum ErrorKind {
     SubstreamIdMismatch,
     #[error("channel count disagrees with the layout's")]
     ChannelCountMismatch,
+    #[error("coupled_substream_count differs from the count the loudspeaker layout requires")]
+    CoupledSubstreamCountMismatch,
     #[error("this loudspeaker layout has no packing plan in this crate")]
     UnsupportedLayout,
     #[error("num_samples_per_frame is zero")]

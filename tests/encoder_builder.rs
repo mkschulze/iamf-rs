@@ -925,18 +925,51 @@ fn high_level_rejects_recon_gain_layer_gate() {
     assert!(build_element(element).is_err());
 }
 
-fn element_with_layout(layout: LoudspeakerLayout) -> AudioElement {
-    let channels = layout.channel_count().unwrap_or(0);
+fn element_with_counts(
+    layout: LoudspeakerLayout,
+    substream_count: u8,
+    coupled_substream_count: u8,
+) -> AudioElement {
     AudioElement::channel_based(
         99,
         42,
-        (0..channels).collect(),
+        (0..u32::from(substream_count)).collect(),
         ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
             layout,
-            u8::try_from(channels).unwrap_or(0),
-            0,
+            substream_count,
+            coupled_substream_count,
         )),
     )
+}
+
+fn build_counts(
+    layout: LoudspeakerLayout,
+    substream_count: u8,
+    coupled_substream_count: u8,
+) -> iamf::Result<(iamf::encoder::Encoder, iamf::encoder::IdManifest)> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(
+        &mut builder,
+        codec,
+        element_with_counts(layout, substream_count, coupled_substream_count),
+    );
+    builder.add_mix_presentation(vec![element], presentation_for_elements(&[99], 100, 101));
+    builder.build()
+}
+
+#[test]
+fn build_rejects_stereo_without_its_coupled_substream() {
+    let error = build_counts(LoudspeakerLayout::Stereo, 2, 0).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::CoupledSubstreamCountMismatch);
+    assert_eq!(error.at(), Location::Field("coupled_substream_count"));
+    assert!(build_counts(LoudspeakerLayout::Stereo, 1, 1).is_ok());
+}
+
+fn element_with_layout(layout: LoudspeakerLayout) -> AudioElement {
+    let (substream_count, coupled_substream_count) =
+        layout.single_layer_substream_counts().unwrap_or((0, 0));
+    element_with_counts(layout, substream_count, coupled_substream_count)
 }
 
 fn presentation_for_elements(

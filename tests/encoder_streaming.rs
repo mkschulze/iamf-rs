@@ -14,13 +14,13 @@ use std::io::{self, Write};
 
 #[test]
 fn invalid_complete_unit_writes_no_temporal_bytes() -> iamf::Result<()> {
-    let (encoder, left, _right) = stereo_builder()?;
+    let (encoder, [front, _surround, _centre, _lfe]) = surround_builder()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![(left, FrameInput::Lpcm(stereo_pcm_frame()))],
+            frames: vec![(front, FrameInput::Lpcm(stereo_pcm_frame()))],
             parameter_blocks: Vec::new(),
             trimming: None,
         })
@@ -32,16 +32,15 @@ fn invalid_complete_unit_writes_no_temporal_bytes() -> iamf::Result<()> {
 
 #[test]
 fn duplicate_frame_handle_writes_no_temporal_bytes() -> iamf::Result<()> {
-    let (encoder, left, _right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
             frames: vec![
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (_right, FrameInput::Lpcm(stereo_pcm_frame())),
+                (stereo, FrameInput::Lpcm(stereo_pcm_frame())),
+                (stereo, FrameInput::Lpcm(stereo_pcm_frame())),
             ],
             parameter_blocks: Vec::new(),
             trimming: None,
@@ -54,13 +53,24 @@ fn duplicate_frame_handle_writes_no_temporal_bytes() -> iamf::Result<()> {
 
 #[test]
 fn temporal_frames_follow_first_descriptor_substream_order() -> iamf::Result<()> {
-    let (encoder, first_declared, second_declared) = reverse_substream_order_builder()?;
+    let (
+        encoder,
+        [
+            first_declared,
+            second_declared,
+            third_declared,
+            fourth_declared,
+        ],
+    ) = reverse_substream_order_builder()?;
     let mut writer = encoder.start(Vec::new())?;
 
+    // Positions 0 and 1 are the two coupled substreams of 5.1 4/2; 2 and 3 are mono.
     writer.push_temporal_unit(TemporalUnitInput {
         frames: vec![
             (first_declared, FrameInput::Lpcm(stereo_pcm_frame())),
             (second_declared, FrameInput::Lpcm(stereo_pcm_frame())),
+            (third_declared, FrameInput::Lpcm(mono_pcm_frame())),
+            (fourth_declared, FrameInput::Lpcm(mono_pcm_frame())),
         ],
         parameter_blocks: Vec::new(),
         trimming: None,
@@ -71,16 +81,13 @@ fn temporal_frames_follow_first_descriptor_substream_order() -> iamf::Result<()>
 
 #[test]
 fn wrong_codec_frame_writes_no_temporal_bytes() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![
-                (left, FrameInput::Opus(vec![0xf8])),
-                (right, FrameInput::Lpcm(stereo_pcm_frame())),
-            ],
+            frames: vec![(stereo, FrameInput::Opus(vec![0xf8]))],
             parameter_blocks: Vec::new(),
             trimming: None,
         })
@@ -92,16 +99,13 @@ fn wrong_codec_frame_writes_no_temporal_bytes() -> iamf::Result<()> {
 
 #[test]
 fn trims_exceeding_the_frozen_frame_size_write_no_temporal_bytes() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (right, FrameInput::Lpcm(stereo_pcm_frame())),
-            ],
+            frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
             parameter_blocks: Vec::new(),
             trimming: Some(Trimming {
                 at_end: 29,
@@ -116,16 +120,13 @@ fn trims_exceeding_the_frozen_frame_size_write_no_temporal_bytes() -> iamf::Resu
 
 #[test]
 fn overflowing_trim_sum_writes_no_temporal_bytes() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (right, FrameInput::Lpcm(stereo_pcm_frame())),
-            ],
+            frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
             parameter_blocks: Vec::new(),
             trimming: Some(Trimming {
                 at_end: 1,
@@ -186,7 +187,7 @@ fn lpcm_flac_and_opus_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> 
 
 #[test]
 fn ungoverned_parameter_block_writes_no_temporal_bytes() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut foreign = EncoderBuilder::new();
     let foreign_parameter =
         foreign.add_mix_gain_parameter(MixGainParamDefinition::mode_1(9, 16_000));
@@ -195,10 +196,7 @@ fn ungoverned_parameter_block_writes_no_temporal_bytes() -> iamf::Result<()> {
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (right, FrameInput::Lpcm(stereo_pcm_frame())),
-            ],
+            frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
             parameter_blocks: vec![SubmittedParameterBlock {
                 parameter: foreign_parameter,
                 block: ParameterBlock {
@@ -239,7 +237,7 @@ fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
         }
     }
 
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let prologue_len = encoder.clone().start(Vec::new())?.finish()?.len();
     let mut writer = encoder.start(PartialThenFail {
         accepted: 0,
@@ -247,7 +245,7 @@ fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
     })?;
 
     let first = writer
-        .push_temporal_unit(stereo_temporal_unit(left, right))
+        .push_temporal_unit(stereo_temporal_unit(stereo))
         .expect_err("a temporal write partially reaches the refusing sink");
     assert_eq!(first.kind(), &ErrorKind::SinkWrite);
     assert_eq!(
@@ -257,7 +255,7 @@ fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
 
     let malformed_frame_retry = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![(left, FrameInput::Lpcm(stereo_pcm_frame()))],
+            frames: Vec::new(),
             parameter_blocks: Vec::new(),
             trimming: None,
         })
@@ -272,10 +270,7 @@ fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
         foreign_builder.add_mix_gain_parameter(MixGainParamDefinition::mode_1(0, 16_000));
     let malformed_parameter_retry = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (right, FrameInput::Lpcm(stereo_pcm_frame())),
-            ],
+            frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
             parameter_blocks: vec![SubmittedParameterBlock {
                 parameter: foreign_parameter,
                 block: ParameterBlock {
@@ -301,16 +296,13 @@ fn partial_sink_failure_poisoned_high_level_writer() -> iamf::Result<()> {
 
 #[test]
 fn parameter_subblocks_must_tile_the_declared_duration() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(TemporalUnitInput {
-            frames: vec![
-                (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                (right, FrameInput::Lpcm(stereo_pcm_frame())),
-            ],
+            frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
             parameter_blocks: vec![SubmittedParameterBlock {
                 parameter,
                 block: ParameterBlock {
@@ -345,7 +337,7 @@ fn parameter_subblocks_must_tile_the_declared_duration() -> iamf::Result<()> {
 
 #[test]
 fn mode_1_submitted_blocks_reject_zero_duration_and_zero_duration_subblocks() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
 
     for block in [
         ParameterBlock {
@@ -391,10 +383,7 @@ fn mode_1_submitted_blocks_reject_zero_duration_and_zero_duration_subblocks() ->
 
         let error = writer
             .push_temporal_unit(TemporalUnitInput {
-                frames: vec![
-                    (left, FrameInput::Lpcm(stereo_pcm_frame())),
-                    (right, FrameInput::Lpcm(stereo_pcm_frame())),
-                ],
+                frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
                 parameter_blocks: vec![SubmittedParameterBlock { parameter, block }],
                 trimming: None,
             })
@@ -407,14 +396,11 @@ fn mode_1_submitted_blocks_reject_zero_duration_and_zero_duration_subblocks() ->
 
 #[test]
 fn mode_1_submitted_blocks_require_non_empty_positive_exact_tiling() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
 
     writer.push_temporal_unit(TemporalUnitInput {
-        frames: vec![
-            (left, FrameInput::Lpcm(stereo_pcm_frame())),
-            (right, FrameInput::Lpcm(stereo_pcm_frame())),
-        ],
+        frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
         parameter_blocks: vec![SubmittedParameterBlock {
             parameter,
             block: ParameterBlock {
@@ -447,14 +433,13 @@ fn mode_1_submitted_blocks_require_non_empty_positive_exact_tiling() -> iamf::Re
 
 #[test]
 fn mode_1_block_duration_must_equal_the_frame_size() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(gain_unit(
-            left,
-            right,
+            stereo,
             vec![gain_block(parameter, 64, 32, 32)],
             None,
         ))
@@ -464,8 +449,7 @@ fn mode_1_block_duration_must_equal_the_frame_size() -> iamf::Result<()> {
     assert_eq!(writer.bytes_written(), before);
 
     writer.push_temporal_unit(gain_unit(
-        left,
-        right,
+        stereo,
         vec![gain_block(parameter, 128, 64, 64)],
         None,
     ))?;
@@ -474,12 +458,11 @@ fn mode_1_block_duration_must_equal_the_frame_size() -> iamf::Result<()> {
 
 #[test]
 fn mode_1_blocks_matching_the_frame_round_trip_in_every_unit() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     for _ in 0..3 {
         writer.push_temporal_unit(gain_unit(
-            left,
-            right,
+            stereo,
             vec![gain_block(parameter, 128, 64, 64)],
             None,
         ))?;
@@ -503,26 +486,24 @@ fn mode_1_blocks_matching_the_frame_round_trip_in_every_unit() -> iamf::Result<(
 
 #[test]
 fn parameter_block_missing_from_a_later_unit_is_rejected() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     writer.push_temporal_unit(gain_unit(
-        left,
-        right,
+        stereo,
         vec![gain_block(parameter, 128, 64, 64)],
         None,
     ))?;
     let before = writer.bytes_written();
 
     let error = writer
-        .push_temporal_unit(gain_unit(left, right, Vec::new(), None))
+        .push_temporal_unit(gain_unit(stereo, Vec::new(), None))
         .expect_err("a parameter substream cannot have a gap");
     assert_eq!(error.kind(), &ErrorKind::ParameterSubstreamCoverageMismatch);
     assert_eq!(error.at(), Location::Field("parameter_blocks"));
     assert_eq!(writer.bytes_written(), before);
 
     writer.push_temporal_unit(gain_unit(
-        left,
-        right,
+        stereo,
         vec![gain_block(parameter, 128, 64, 64)],
         None,
     ))?;
@@ -531,15 +512,14 @@ fn parameter_block_missing_from_a_later_unit_is_rejected() -> iamf::Result<()> {
 
 #[test]
 fn parameter_block_added_in_a_later_unit_is_rejected() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(gain_unit(
-            left,
-            right,
+            stereo,
             vec![gain_block(parameter, 128, 64, 64)],
             None,
         ))
@@ -548,20 +528,19 @@ fn parameter_block_added_in_a_later_unit_is_rejected() -> iamf::Result<()> {
     assert_eq!(error.at(), Location::Field("parameter_blocks"));
     assert_eq!(writer.bytes_written(), before);
 
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
     Ok(())
 }
 
 #[test]
 fn duplicate_parameter_block_in_one_unit_is_rejected() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(gain_unit(
-            left,
-            right,
+            stereo,
             vec![
                 gain_block(parameter, 128, 64, 64),
                 gain_block(parameter, 128, 64, 64),
@@ -574,8 +553,7 @@ fn duplicate_parameter_block_in_one_unit_is_rejected() -> iamf::Result<()> {
     assert_eq!(writer.bytes_written(), before);
 
     writer.push_temporal_unit(gain_unit(
-        left,
-        right,
+        stereo,
         vec![gain_block(parameter, 128, 64, 64)],
         None,
     ))?;
@@ -584,50 +562,50 @@ fn duplicate_parameter_block_in_one_unit_is_rejected() -> iamf::Result<()> {
 
 #[test]
 fn start_trim_after_a_partially_trimmed_unit_is_rejected() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), Some(start_trim(48))))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), Some(start_trim(48))))?;
     let before = writer.bytes_written();
 
     let error = writer
-        .push_temporal_unit(gain_unit(left, right, Vec::new(), Some(start_trim(48))))
+        .push_temporal_unit(gain_unit(stereo, Vec::new(), Some(start_trim(48))))
         .expect_err("a start trim may only follow fully trimmed frames");
     assert_eq!(error.kind(), &ErrorKind::StartTrimAfterUntrimmedAudio);
     assert_eq!(error.at(), Location::Field("trimming"));
     assert_eq!(writer.bytes_written(), before);
 
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
     Ok(())
 }
 
 #[test]
 fn start_trim_after_untrimmed_audio_is_rejected() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
     let before = writer.bytes_written();
 
     let error = writer
-        .push_temporal_unit(gain_unit(left, right, Vec::new(), Some(start_trim(1))))
+        .push_temporal_unit(gain_unit(stereo, Vec::new(), Some(start_trim(1))))
         .expect_err("a start trim cannot follow untrimmed audio");
     assert_eq!(error.kind(), &ErrorKind::StartTrimAfterUntrimmedAudio);
     assert_eq!(error.at(), Location::Field("trimming"));
     assert_eq!(writer.bytes_written(), before);
 
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
     Ok(())
 }
 
 #[test]
 fn unit_after_an_end_trim_is_rejected() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), Some(end_trim(10))))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), Some(end_trim(10))))?;
     let before = writer.bytes_written();
 
     for _ in 0..2 {
         let error = writer
-            .push_temporal_unit(gain_unit(left, right, Vec::new(), None))
+            .push_temporal_unit(gain_unit(stereo, Vec::new(), None))
             .expect_err("an end trim is terminal");
         assert_eq!(error.kind(), &ErrorKind::TemporalUnitAfterEndTrim);
         assert_eq!(error.at(), Location::Field("trimming"));
@@ -640,14 +618,13 @@ fn unit_after_an_end_trim_is_rejected() -> iamf::Result<()> {
 
 #[test]
 fn rejected_units_do_not_advance_temporal_state() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     let before = writer.bytes_written();
 
     let error = writer
         .push_temporal_unit(gain_unit(
-            left,
-            right,
+            stereo,
             vec![gain_block(parameter, 64, 32, 32)],
             Some(end_trim(10)),
         ))
@@ -655,14 +632,14 @@ fn rejected_units_do_not_advance_temporal_state() -> iamf::Result<()> {
     assert_eq!(error.kind(), &ErrorKind::ParameterBlockDurationMismatch);
     assert_eq!(writer.bytes_written(), before);
 
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
-    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(stereo, Vec::new(), None))?;
     Ok(())
 }
 
 #[test]
 fn trims_and_blocks_follow_placement_rules_across_units() -> iamf::Result<()> {
-    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let (encoder, stereo, parameter) = stereo_builder_with_parameter()?;
     let mut writer = encoder.start(Vec::new())?;
     for trimming in [
         Some(start_trim(128)),
@@ -671,8 +648,7 @@ fn trims_and_blocks_follow_placement_rules_across_units() -> iamf::Result<()> {
         Some(end_trim(50)),
     ] {
         writer.push_temporal_unit(gain_unit(
-            left,
-            right,
+            stereo,
             vec![gain_block(parameter, 128, 64, 64)],
             trimming,
         ))?;
@@ -690,10 +666,10 @@ fn trims_and_blocks_follow_placement_rules_across_units() -> iamf::Result<()> {
 
 #[test]
 fn units_without_parameter_blocks_remain_accepted() -> iamf::Result<()> {
-    let (encoder, left, right) = stereo_builder()?;
+    let (encoder, stereo) = stereo_builder()?;
     let mut writer = encoder.start(Vec::new())?;
     for _ in 0..3 {
-        writer.push_temporal_unit(stereo_temporal_unit(left, right))?;
+        writer.push_temporal_unit(stereo_temporal_unit(stereo))?;
     }
     writer.finish()?;
     Ok(())
@@ -746,21 +722,16 @@ fn gain_block(
 }
 
 fn gain_unit(
-    left: iamf::encoder::SubstreamHandle,
-    right: iamf::encoder::SubstreamHandle,
+    stereo: iamf::encoder::SubstreamHandle,
     parameter_blocks: Vec<SubmittedParameterBlock>,
     trimming: Option<Trimming>,
 ) -> TemporalUnitInput {
     TemporalUnitInput {
-        frames: vec![
-            (left, FrameInput::Lpcm(stereo_pcm_frame())),
-            (right, FrameInput::Lpcm(stereo_pcm_frame())),
-        ],
+        frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
         parameter_blocks,
         trimming,
     }
 }
-
 fn mono_builder(
     config: CodecConfig,
 ) -> iamf::Result<(
@@ -795,13 +766,8 @@ fn mono_builder(
         .map(|(encoder, _)| (encoder, (substream, input)))
 }
 
-fn stereo_builder() -> iamf::Result<(
-    iamf::encoder::Encoder,
-    iamf::encoder::SubstreamHandle,
-    iamf::encoder::SubstreamHandle,
-)> {
-    let mut builder = EncoderBuilder::new();
-    let codec = builder.add_codec_config(CodecConfig::lpcm(
+fn lpcm_config() -> CodecConfig {
+    CodecConfig::lpcm(
         0,
         128,
         LpcmDecoderConfig {
@@ -809,56 +775,50 @@ fn stereo_builder() -> iamf::Result<(
             sample_size: 16,
             sample_rate: 16_000,
         },
-    ));
-    let left = builder.add_substream();
-    let right = builder.add_substream();
+    )
+}
+
+fn stereo_builder() -> iamf::Result<(iamf::encoder::Encoder, iamf::encoder::SubstreamHandle)> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let stereo = builder.add_substream();
     let element = builder.add_audio_element_with_substreams(
         codec,
-        vec![left, right],
+        vec![stereo],
         AudioElement::channel_based(
             0,
             0,
-            vec![0, 1],
+            vec![0],
             ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
                 LoudspeakerLayout::Stereo,
-                2,
-                0,
+                1,
+                1,
             )),
         ),
     );
     builder.add_mix_presentation(vec![element], presentation());
-    builder.build().map(|(encoder, _)| (encoder, left, right))
+    builder.build().map(|(encoder, _)| (encoder, stereo))
 }
 
 fn stereo_builder_with_parameter() -> iamf::Result<(
     iamf::encoder::Encoder,
     iamf::encoder::SubstreamHandle,
-    iamf::encoder::SubstreamHandle,
     iamf::encoder::ParameterHandle,
 )> {
     let mut builder = EncoderBuilder::new();
-    let codec = builder.add_codec_config(CodecConfig::lpcm(
-        0,
-        128,
-        LpcmDecoderConfig {
-            sample_format_flags: SampleFormatFlags::LittleEndian,
-            sample_size: 16,
-            sample_rate: 16_000,
-        },
-    ));
-    let left = builder.add_substream();
-    let right = builder.add_substream();
+    let codec = builder.add_codec_config(lpcm_config());
+    let stereo = builder.add_substream();
     let element = builder.add_audio_element_with_substreams(
         codec,
-        vec![left, right],
+        vec![stereo],
         AudioElement::channel_based(
             0,
             0,
-            vec![0, 1],
+            vec![0],
             ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
                 LoudspeakerLayout::Stereo,
-                2,
-                0,
+                1,
+                1,
             )),
         ),
     );
@@ -872,58 +832,78 @@ fn stereo_builder_with_parameter() -> iamf::Result<(
     );
     builder
         .build()
-        .map(|(encoder, _)| (encoder, left, right, parameter))
+        .map(|(encoder, _)| (encoder, stereo, parameter))
 }
 
-fn stereo_temporal_unit(
-    left: iamf::encoder::SubstreamHandle,
-    right: iamf::encoder::SubstreamHandle,
-) -> TemporalUnitInput {
+fn stereo_temporal_unit(stereo: iamf::encoder::SubstreamHandle) -> TemporalUnitInput {
     TemporalUnitInput {
-        frames: vec![
-            (left, FrameInput::Lpcm(stereo_pcm_frame())),
-            (right, FrameInput::Lpcm(stereo_pcm_frame())),
-        ],
+        frames: vec![(stereo, FrameInput::Lpcm(stereo_pcm_frame()))],
         parameter_blocks: Vec::new(),
         trimming: None,
     }
 }
 
-fn reverse_substream_order_builder() -> iamf::Result<(
-    iamf::encoder::Encoder,
-    iamf::encoder::SubstreamHandle,
-    iamf::encoder::SubstreamHandle,
-)> {
+/// A 5.1 element with its reference 4/2 topology: two coupled substreams, then two mono.
+fn surround_builder() -> iamf::Result<(iamf::encoder::Encoder, [iamf::encoder::SubstreamHandle; 4])>
+{
     let mut builder = EncoderBuilder::new();
-    let codec = builder.add_codec_config(CodecConfig::lpcm(
-        0,
-        128,
-        LpcmDecoderConfig {
-            sample_format_flags: SampleFormatFlags::LittleEndian,
-            sample_size: 16,
-            sample_rate: 16_000,
-        },
-    ));
-    let first_allocated = builder.add_substream();
-    let second_allocated = builder.add_substream();
+    let codec = builder.add_codec_config(lpcm_config());
+    let handles = [
+        builder.add_substream(),
+        builder.add_substream(),
+        builder.add_substream(),
+        builder.add_substream(),
+    ];
     let element = builder.add_audio_element_with_substreams(
         codec,
-        vec![second_allocated, first_allocated],
+        handles.to_vec(),
         AudioElement::channel_based(
             0,
             0,
-            vec![0, 1],
+            vec![0, 1, 2, 3],
             ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
-                LoudspeakerLayout::Stereo,
+                LoudspeakerLayout::Ch5_1,
+                4,
                 2,
-                0,
             )),
         ),
     );
     builder.add_mix_presentation(vec![element], presentation());
-    builder
-        .build()
-        .map(|(encoder, _)| (encoder, second_allocated, first_allocated))
+    builder.build().map(|(encoder, _)| (encoder, handles))
+}
+
+/// 5.1 4/2 with the element's substreams declared in reverse allocation order. Returns the
+/// handles in declared order.
+fn reverse_substream_order_builder()
+-> iamf::Result<(iamf::encoder::Encoder, [iamf::encoder::SubstreamHandle; 4])> {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first_allocated = builder.add_substream();
+    let second_allocated = builder.add_substream();
+    let third_allocated = builder.add_substream();
+    let fourth_allocated = builder.add_substream();
+    let declared = [
+        fourth_allocated,
+        third_allocated,
+        second_allocated,
+        first_allocated,
+    ];
+    let element = builder.add_audio_element_with_substreams(
+        codec,
+        declared.to_vec(),
+        AudioElement::channel_based(
+            0,
+            0,
+            vec![0, 1, 2, 3],
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                LoudspeakerLayout::Ch5_1,
+                4,
+                2,
+            )),
+        ),
+    );
+    builder.add_mix_presentation(vec![element], presentation());
+    builder.build().map(|(encoder, _)| (encoder, declared))
 }
 
 fn presentation() -> MixPresentation {
@@ -949,6 +929,13 @@ fn presentation() -> MixPresentation {
     }
 }
 
+/// One coupled substream frame: 128 samples x 2 channels x 2 bytes, because a coupled
+/// substream carries two channels.
 fn stereo_pcm_frame() -> Vec<u8> {
+    vec![0; 512]
+}
+
+/// One non-coupled substream frame: 128 samples x 1 channel x 2 bytes.
+fn mono_pcm_frame() -> Vec<u8> {
     vec![0; 256]
 }

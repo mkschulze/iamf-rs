@@ -1385,13 +1385,24 @@ fn validate_element_topology(element: &AudioElement) -> Result<()> {
                     Location::Field("recon_gain_is_present"),
                 ));
             }
-            if layer.coupled_substream_count > layer.substream_count
-                || layer.loudspeaker_layout.channel_count()
-                    != Some(
-                        u32::from(layer.substream_count)
-                            .saturating_add(u32::from(layer.coupled_substream_count)),
-                    )
-            {
+            // ref: iamf-tools@v2.1.0 iamf/cli/obu_with_data_generator.cc ValidateSubstreamCounts
+            // The coupled count is checked first, as in the reference; pinned decoder_main rejects
+            // e.g. Stereo 2/0 ("Coupled substream count different from the required number").
+            let Some((required_substreams, required_coupled)) =
+                layer.loudspeaker_layout.single_layer_substream_counts()
+            else {
+                return Err(Error::new(
+                    ErrorKind::UnsupportedLayout,
+                    Location::Field("loudspeaker_layout"),
+                ));
+            };
+            if layer.coupled_substream_count != required_coupled {
+                return Err(Error::new(
+                    ErrorKind::CoupledSubstreamCountMismatch,
+                    Location::Field("coupled_substream_count"),
+                ));
+            }
+            if layer.substream_count != required_substreams {
                 return Err(Error::new(
                     ErrorKind::ChannelCountMismatch,
                     Location::Field("substream_count"),

@@ -144,6 +144,37 @@ impl LoudspeakerLayout {
         }
     }
 
+    /// The `(substream_count, coupled_substream_count)` a **single-layer**
+    /// (base channel group) element with this layout must declare, or `None`
+    /// for a layout with no defined channel set.
+    ///
+    /// The tuple is in the argument order of `ChannelAudioLayerConfig::new`.
+    /// Every coupled channel pair SHALL be coded as one stereo substream
+    /// (IAMF v1.1.0 `index.bs:1002-1006`), so the coupled count is the number
+    /// of pairs and the substream count is the pairs plus the non-coupled
+    /// channels. The two numbers always sum to [`Self::channel_count`].
+    ///
+    /// Valid only for a single layer: the demixed channel groups of a
+    /// scalable element carry different per-layer counts.
+    // ref: iamf-tools@v2.1.0 iamf/cli/obu_with_data_generator.cc ValidateSubstreamCounts / CollectBaseChannelGroupLabels
+    #[must_use]
+    pub const fn single_layer_substream_counts(self) -> Option<(u8, u8)> {
+        match self {
+            Self::Mono => Some((1, 0)),     // non-coupled C.
+            Self::Stereo => Some((1, 1)),   // coupled L2/R2.
+            Self::Ch5_1 => Some((4, 2)),    // coupled L5/R5, Ls5/Rs5; non-coupled C, LFE.
+            Self::Ch5_1_2 => Some((5, 3)), // coupled L5/R5, Ls5/Rs5, Ltf2/Rtf2; non-coupled C, LFE.
+            Self::Ch5_1_4 => Some((6, 4)), // coupled L5/R5, Ls5/Rs5, Ltf4/Rtf4, Ltb4/Rtb4; non-coupled C, LFE.
+            Self::Ch7_1 => Some((5, 3)), // coupled L7/R7, Lss7/Rss7, Lrs7/Rrs7; non-coupled C, LFE.
+            Self::Ch7_1_2 => Some((6, 4)), // coupled L7/R7, Lss7/Rss7, Lrs7/Rrs7, Ltf2/Rtf2; non-coupled C, LFE.
+            Self::Ch7_1_4 => Some((7, 5)), // coupled L7/R7, Lss7/Rss7, Lrs7/Rrs7, Ltf4/Rtf4, Ltb4/Rtb4; non-coupled C, LFE.
+            Self::Ch3_1_2 => Some((4, 2)), // coupled L3/R3, Ltf3/Rtf3; non-coupled C, LFE.
+            Self::Binaural => Some((1, 1)), // coupled L2/R2.
+            Self::Reserved(_) => None,
+            Self::Expanded(expanded) => expanded.single_layer_substream_counts(),
+        }
+    }
+
     /// The `expanded_loudspeaker_layout` byte this layout carries, if any.
     #[must_use]
     pub const fn expanded(self) -> Option<ExpandedLoudspeakerLayout> {
@@ -213,6 +244,36 @@ impl ExpandedLoudspeakerLayout {
             Self::Ch3_0 => Some(3),
             Self::Ch9_1_6 => Some(16),
             Self::Top6Ch => Some(6),
+            Self::Reserved(_) => None,
+        }
+    }
+
+    /// The `(substream_count, coupled_substream_count)` a single-layer element
+    /// with this expanded layout must declare, or `None` for a reserved value.
+    ///
+    /// Same contract as `LoudspeakerLayout::single_layer_substream_counts`:
+    /// argument order of `ChannelAudioLayerConfig::new`, coupled pairs coded
+    /// as one stereo substream (`index.bs:1002-1006`), and the two numbers
+    /// sum to [`Self::channel_count`]. Expanded layouts are single-layer only.
+    // ref: iamf-tools@v2.1.0 iamf/cli/obu_with_data_generator.cc ValidateSubstreamCounts / CollectChannelLayersAndLabelsForExpandedLoudspeakerLayout
+    #[must_use]
+    pub const fn single_layer_substream_counts(self) -> Option<(u8, u8)> {
+        match self {
+            Self::Lfe => Some((1, 0)), // non-coupled LFE.
+            Self::StereoS
+            | Self::StereoSs
+            | Self::StereoRs
+            | Self::StereoTf
+            | Self::StereoTb
+            | Self::StereoF
+            | Self::StereoSi
+            | Self::StereoTpSi => Some((1, 1)), // one coupled pair.
+            Self::Top4Ch => Some((2, 2)), // coupled Ltf4/Rtf4, Ltb4/Rtb4.
+            Self::Ch3_0 => Some((2, 1)), // coupled L7/R7; non-coupled C.
+            // coupled FLc/FRc, FL/FR, SiL/SiR, BL/BR, TpFL/TpFR, TpSiL/TpSiR,
+            // TpBL/TpBR; non-coupled FC, LFE.
+            Self::Ch9_1_6 => Some((9, 7)),
+            Self::Top6Ch => Some((3, 3)), // coupled TpFL/TpFR, TpSiL/TpSiR, TpBL/TpBR.
             Self::Reserved(_) => None,
         }
     }
