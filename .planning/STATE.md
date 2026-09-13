@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-13 - Completed quick task 260913-js8: fix the count-field preallocation memory issue
+Last activity: 2026-09-13 - Completed quick task 260913-lta: reject mismatched codec frame timing in the builder and repair the Parallax delivery fixture
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -150,6 +150,7 @@ Recent decisions affecting current work:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260913-js8 | fix the count-field preallocation memory issue | 2026-09-13 | 1c5a5dd | [260913-js8-fix-the-count-field-preallocation-memory](./quick/260913-js8-fix-the-count-field-preallocation-memory/) |
+| 260913-lta | reject mismatched codec frame timing in the builder and repair the Parallax delivery fixture | 2026-09-13 | de829cf | [260913-lta-reject-mismatched-codec-frame-timing-in-](./quick/260913-lta-reject-mismatched-codec-frame-timing-in-/) |
 
 ### Resolved
 
