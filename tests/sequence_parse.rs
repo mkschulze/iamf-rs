@@ -9,11 +9,11 @@ use iamf::error::{ErrorKind, Finding, Location};
 use iamf::model::DescriptorSet;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout};
 use iamf::obu::{
-    AudioElement, AudioElementParam, AudioElementType, AudioFrame, BlockDurationFields,
-    ChannelAudioLayerConfig, HeadphonesRenderingMode, IaSequenceHeader, MixGainParameterData,
-    MixPresentation, Obu, ObuHeader, ObuType, ParamDefinition, ParamDefinitionRegistry,
-    ParameterBlock, ParameterData, ParameterDataContext, ParameterSubblock, SubMixAudioElement,
-    TemporalDelimiter, write_obu,
+    AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, AudioElementType, AudioFrame,
+    BlockDurationFields, ChannelAudioLayerConfig, HeadphonesRenderingMode, IaSequenceHeader,
+    MixGainParameterData, MixPresentation, Obu, ObuHeader, ObuType, ParamDefinition,
+    ParamDefinitionRegistry, ParameterBlock, ParameterData, ParameterDataContext,
+    ParameterSubblock, SubMixAudioElement, TemporalDelimiter, write_obu,
 };
 use iamf::sequence::{
     ParsedSequence, SequenceObu, UngovernedParameterBlock, UnknownObu, parse_sequence,
@@ -1027,4 +1027,123 @@ fn parsed_sequence_without_a_header_gains_no_profile_finding() {
         ],
     };
     assert_eq!(profile_findings(sequence.validate()), vec![]);
+}
+
+/// Only the wlv findings (languages, anchors, scalable layouts), in their returned order.
+fn wlv_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .filter(|finding| {
+            matches!(
+                finding.at,
+                Location::Field(
+                    "annotations_language"
+                        | "anchored_loudness.anchor_element"
+                        | "sub_mix.num_layouts"
+                )
+            )
+        })
+        .collect()
+}
+
+/// The duplicate `annotations_language` finding.
+fn lang(mix_presentation_id: u32, language: &str) -> Finding {
+    Finding {
+        at: Location::Field("annotations_language"),
+        message: format!(
+            "mix presentation {mix_presentation_id} lists annotations_language {language:?} more \
+             than once; the same language SHALL NOT be duplicated (IAMF v1.1.0 index.bs:1273)"
+        ),
+    }
+}
+
+/// The duplicate `anchor_element` finding.
+fn anchor(value: u8) -> Finding {
+    Finding {
+        at: Location::Field("anchored_loudness.anchor_element"),
+        message: format!(
+            "anchor_element {value} appears more than once in one loudness_info; there SHALL be \
+             no duplicate anchor_element within one LoudnessInfo() (IAMF v1.1.0 index.bs:1485)"
+        ),
+    }
+}
+
+/// MP 42 with `languages` (annotation counts matched) and, if given, `anchors` on every layout.
+fn presentation_with(languages: &[&[u8]], anchors: Option<&[u8]>) -> MixPresentation {
+    let mut presentation = support::published_mix_presentation().payload;
+    presentation.annotations_language =
+        languages.iter().map(|language| language.to_vec()).collect();
+    presentation.localized_presentation_annotations = vec![b"mix".to_vec(); languages.len()];
+    for sub_mix in &mut presentation.sub_mixes {
+        for element in &mut sub_mix.elements {
+            element.localized_element_annotations = vec![b"element".to_vec(); languages.len()];
+        }
+        if let Some(anchors) = anchors {
+            for layout in &mut sub_mix.layouts {
+                layout.loudness.anchored = Some(AnchoredLoudness {
+                    anchor_elements: anchors
+                        .iter()
+                        .map(|&anchor_element| AnchorElement {
+                            anchor_element,
+                            anchored_loudness: 0,
+                        })
+                        .collect(),
+                });
+            }
+        }
+    }
+    presentation
+}
+
+#[test]
+fn mix_presentation_validate_reports_each_later_case_insensitive_duplicate_language() {
+    let presentation = presentation_with(&[b"en-us", b"EN-US", b"en-us"], None);
+    assert_eq!(
+        wlv_findings(presentation.validate()),
+        vec![lang(42, "EN-US"), lang(42, "en-us")]
+    );
+    let distinct = presentation_with(&[b"en-us", b"es-mx"], None);
+    assert_eq!(wlv_findings(distinct.validate()), vec![]);
+}
+
+#[test]
+fn mix_presentation_validate_reports_duplicate_anchor_elements_per_loudness_info() {
+    let repeated = presentation_with(&[b"en-us"], Some(&[1, 2, 1]));
+    assert_eq!(wlv_findings(repeated.validate()), vec![anchor(1)]);
+    let unknown = presentation_with(&[b"en-us"], Some(&[0, 0]));
+    assert_eq!(wlv_findings(unknown.validate()), vec![anchor(0)]);
+    for distinct in [[1, 2], [3, 4]] {
+        let presentation = presentation_with(&[b"en-us"], Some(&distinct));
+        assert_eq!(wlv_findings(presentation.validate()), vec![]);
+    }
+}
+
+#[test]
+fn mix_presentation_language_findings_precede_anchor_findings() {
+    let presentation = presentation_with(&[b"en-us", b"EN-US"], Some(&[1, 1]));
+    assert_eq!(
+        wlv_findings(presentation.validate()),
+        vec![lang(42, "EN-US"), anchor(1)]
+    );
+}
+
+#[test]
+fn both_validators_carry_the_language_and_anchor_findings() {
+    let expected = vec![lang(42, "EN-US"), anchor(1)];
+
+    let mut set = published_descriptor_set();
+    set.mix_presentations = vec![presentation_with(&[b"en-us", b"EN-US"], Some(&[1, 1]))];
+    assert_eq!(wlv_findings(set.validate()), expected);
+
+    let mut presentation = support::published_mix_presentation();
+    presentation.payload = presentation_with(&[b"en-us", b"EN-US"], Some(&[1, 1]));
+    let sequence = ParsedSequence {
+        obus: vec![
+            SequenceObu::IaSequenceHeader(support::published_sequence_header()),
+            SequenceObu::CodecConfig(support::published_codec_config()),
+            SequenceObu::AudioElement(support::published_audio_element()),
+            SequenceObu::MixPresentation(presentation),
+        ],
+    };
+    assert_eq!(wlv_findings(sequence.validate()), expected);
 }

@@ -8,7 +8,7 @@ mod reference_expectations;
 use std::path::{Path, PathBuf};
 
 use iamf::bits::{BitCursor, BitWriter};
-use iamf::error::Location;
+use iamf::error::{Finding, Location};
 use iamf::obu::{
     AudioElementParam, DecoderConfig, DurationFields, FlacDecoderConfig, OpusDecoderConfig,
     ParamDefinition, ParameterData, ReconGainElement, ReconGainInfoParameterData,
@@ -124,6 +124,34 @@ fn every_positive_matches_its_complete_modeled_field_ledger() {
             expectation.path
         );
     }
+}
+
+/// Only the duplicate `anchor_element` findings of a parsed fixture.
+fn anchor_findings(path: &str) -> Vec<Finding> {
+    parse_sequence(&fixture_bytes(path))
+        .unwrap_or_else(|error| panic!("{path}: positive parse failed: {error}"))
+        .validate()
+        .into_iter()
+        .filter(|finding| finding.at == Location::Field("anchored_loudness.anchor_element"))
+        .collect()
+}
+
+#[test]
+fn test_000063_reports_its_duplicate_anchor_element_and_test_000062_does_not() {
+    // iamf-tools@v2.1.0 iamf/cli/testdata/test_000063.textproto:16-20 marks it
+    // is_valid: false ("anchor elements must be unique", two ANCHOR_TYPE_DIALOGUE);
+    // test_000062 carries Dialogue + Album and is valid.
+    assert_eq!(
+        anchor_findings("test_000063.iamf"),
+        vec![Finding {
+            at: Location::Field("anchored_loudness.anchor_element"),
+            message: "anchor_element 1 appears more than once in one loudness_info; there SHALL \
+                      be no duplicate anchor_element within one LoudnessInfo() (IAMF v1.1.0 \
+                      index.bs:1485)"
+                .to_owned(),
+        }]
+    );
+    assert_eq!(anchor_findings("test_000062.iamf"), vec![]);
 }
 
 #[test]

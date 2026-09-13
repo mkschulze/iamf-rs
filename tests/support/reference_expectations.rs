@@ -118,7 +118,7 @@ pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     ),
     positive!(
         "test_000063.iamf",
-        "793dcdaf78e53e80dba54de3ce39ec28e794b9deb587c437c6b5e346e67aba24"
+        "a2774dd684771a79f997a8b89764eaf61aa5d2271793303568596729b9465409"
     ),
     positive!(
         "test_000067.iamf",

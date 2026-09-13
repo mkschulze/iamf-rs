@@ -376,8 +376,9 @@ impl MixPresentation {
     /// Findings for this Mix Presentation and every sub-mix it holds.
     ///
     /// `EncoderBuilder::build()` checks `SubMixCountNotOne`,
-    /// `ReservedHeadphonesRenderingMode` and duplicate handles before calling
-    /// this, so these findings never pre-empt those dedicated kinds.
+    /// `ReservedHeadphonesRenderingMode`, duplicate handles,
+    /// `DuplicateAnnotationsLanguage` and `DuplicateAnchorElement` before
+    /// calling this, so these findings never pre-empt those dedicated kinds.
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
@@ -390,6 +391,28 @@ impl MixPresentation {
                     self.count_label()
                 ),
             });
+        }
+        // ref: IAMF v1.1.0 index.bs:1273 ("The same language SHALL NOT be duplicated in this array.")
+        // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:528-530 (read), :471-473 (write)
+        // DISAGREEMENT: libiamf@v1.1.0 does not check; BCP-47 tags are case-insensitive (RFC 5646 2.1.1), so
+        // the comparison is ASCII-case-insensitive, stricter than iamf-tools' exact bytes
+        for (position, language) in self.annotations_language.iter().enumerate() {
+            if self
+                .annotations_language
+                .iter()
+                .take(position)
+                .any(|earlier| earlier.eq_ignore_ascii_case(language))
+            {
+                findings.push(Finding {
+                    at: Location::Field("annotations_language"),
+                    message: format!(
+                        "mix presentation {} lists annotations_language {:?} more than once; the \
+                         same language SHALL NOT be duplicated (IAMF v1.1.0 index.bs:1273)",
+                        self.mix_presentation_id,
+                        String::from_utf8_lossy(language)
+                    ),
+                });
+            }
         }
         // ref: IAMF v1.1.0 index.bs:1278 (SHALL NOT be 0), :1920 (SHOULD be 1; > 1 SHOULD be ignored)
         // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:195-199 ValidateNumSubMixes
@@ -482,6 +505,29 @@ impl MixPresentation {
                     6
                 };
                 push_reserved_finding(&mut findings, layout.reserved, "layout.reserved", width);
+                // ref: IAMF v1.1.0 index.bs:1485 (no duplicate anchor_element within one LoudnessInfo())
+                // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:56-67 (read :257-258, write :135-136)
+                // DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:957-959 does not check
+                if let Some(anchored) = layout.loudness.anchored.as_ref() {
+                    let anchors = &anchored.anchor_elements;
+                    for (position, anchor) in anchors.iter().enumerate() {
+                        if anchors
+                            .iter()
+                            .take(position)
+                            .any(|earlier| earlier.anchor_element == anchor.anchor_element)
+                        {
+                            findings.push(Finding {
+                                at: Location::Field("anchored_loudness.anchor_element"),
+                                message: format!(
+                                    "anchor_element {} appears more than once in one loudness_info; \
+                                     there SHALL be no duplicate anchor_element within one \
+                                     LoudnessInfo() (IAMF v1.1.0 index.bs:1485)",
+                                    anchor.anchor_element
+                                ),
+                            });
+                        }
+                    }
+                }
             }
         }
         findings
