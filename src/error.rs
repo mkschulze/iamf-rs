@@ -163,6 +163,16 @@ pub enum ErrorKind {
     LpcmFrameSampleCountMismatch,
     #[error("a Parameter Block duration differs from its Audio Frame duration")]
     ParameterBlockDurationMismatch,
+    #[error(
+        "a temporal unit's Parameter Blocks do not cover the same parameters as the first temporal unit"
+    )]
+    ParameterSubstreamCoverageMismatch,
+    #[error("a temporal unit carries more than one Parameter Block for one parameter")]
+    DuplicateTemporalParameterBlock,
+    #[error("num_samples_to_trim_at_start follows audio that was not fully trimmed")]
+    StartTrimAfterUntrimmedAudio,
+    #[error("a temporal unit follows one that trimmed samples at its end")]
+    TemporalUnitAfterEndTrim,
 }
 
 /// An error, with the position it happened at attached exactly once.

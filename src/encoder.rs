@@ -162,6 +162,7 @@ impl Encoder {
             sequence,
             descriptors: self.descriptors,
             generation: self.generation,
+            progress: TemporalProgress::initial(),
         })
     }
 }
@@ -196,8 +197,15 @@ pub struct TemporalUnitInput {
     /// Frames in the frozen substream declaration order.
     pub frames: Vec<(SubstreamHandle, FrameInput)>,
     /// Parameter Blocks in their requested wire order.
+    ///
+    /// Every unit must carry blocks for exactly the same parameters as the
+    /// first successfully pushed unit, with at most one block per parameter.
     pub parameter_blocks: Vec<SubmittedParameterBlock>,
     /// The single trim plan shared by every frame in the unit.
+    ///
+    /// A non-zero start trim is accepted only while every earlier unit was
+    /// fully trimmed at its start, and no unit may follow one with a non-zero
+    /// end trim.
     pub trimming: Option<Trimming>,
 }
 
@@ -207,6 +215,29 @@ pub struct EncodingWriter<W: Write> {
     sequence: SequenceWriter<W>,
     descriptors: DescriptorSet,
     generation: u64,
+    progress: TemporalProgress,
+}
+
+/// Cross-unit temporal state, judged against the last successfully pushed unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TemporalProgress {
+    /// `None` until the first successful push; then that unit's parameter ids
+    /// in submission order.
+    parameter_ids: Option<Vec<u32>>,
+    /// Every unit so far was fully trimmed at its start.
+    start_trim_open: bool,
+    /// The last pushed unit trimmed samples at its end.
+    end_trimmed: bool,
+}
+
+impl TemporalProgress {
+    const fn initial() -> Self {
+        Self {
+            parameter_ids: None,
+            start_trim_open: true,
+            end_trimmed: false,
+        }
+    }
 }
 
 impl<W: Write> EncodingWriter<W> {
@@ -221,10 +252,17 @@ impl<W: Write> EncodingWriter<W> {
     /// All caller input is lowered before the underlying writer is called.
     /// Therefore a typed input failure leaves the sink exactly at the previous
     /// temporal-unit boundary.
+    ///
+    /// Cross-unit rules (parameter coverage, start-trim placement and the
+    /// terminal end trim) are judged against the last successfully pushed
+    /// unit. A rejected or failed push advances neither the sink nor that
+    /// state.
     pub fn push_temporal_unit(&mut self, input: TemporalUnitInput) -> Result<()> {
         self.sequence.check_not_poisoned()?;
-        let unit = self.preflight(input)?;
-        self.sequence.push_temporal_unit(&unit)
+        let (unit, next) = self.preflight(input)?;
+        self.sequence.push_temporal_unit(&unit)?;
+        self.progress = next;
+        Ok(())
     }
 
     /// Flush the append-only sequence and return its sink.
@@ -235,7 +273,7 @@ impl<W: Write> EncodingWriter<W> {
         self.sequence.finish()
     }
 
-    fn preflight(&self, input: TemporalUnitInput) -> Result<TemporalUnit> {
+    fn preflight(&self, input: TemporalUnitInput) -> Result<(TemporalUnit, TemporalProgress)> {
         let mut submitted_handles = Vec::with_capacity(input.frames.len());
         for (handle, _) in &input.frames {
             if submitted_handles.contains(handle) {
@@ -270,8 +308,37 @@ impl<W: Write> EncodingWriter<W> {
             frames.push(AudioFrame::new(id, frame_payload(frame)).into_obu(input.trimming));
         }
 
+        // ref: IAMF v1.1.0 index.bs:541 (a non-zero start trim requires every preceding
+        //      Audio Frame back to the Codec Config to be fully trimmed at its start)
+        // ref: IAMF v1.1.0 index.bs:542 (no subsequent Audio Frame after a non-zero end trim
+        //      until a non-redundant Codec Config; this builder never repeats descriptors)
+        // ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc PushTemporalUnit
+        // ref: iamf-tools@v2.1.0 iamf/cli/proto_conversion/proto_to_obu/audio_frame_generator.cc GetNumSamplesToTrimForFrame
+        // Pinned decoder_main does not check trim placement (research 260913-n56 probes
+        // g/h/o), so this crate is the only guard.
+        let (at_start, at_end) = input
+            .trimming
+            .map_or((0, 0), |trimming| (trimming.at_start, trimming.at_end));
+        if self.progress.end_trimmed {
+            return Err(temporal_input(
+                ErrorKind::TemporalUnitAfterEndTrim,
+                "trimming",
+            ));
+        }
+        if at_start > 0 && !self.progress.start_trim_open {
+            return Err(temporal_input(
+                ErrorKind::StartTrimAfterUntrimmedAudio,
+                "trimming",
+            ));
+        }
+        // The per-unit trim check makes a full start trim imply at_end == 0, so the
+        // start-trim chain and the terminal end trim cannot conflict.
+        let start_trim_open = self.progress.start_trim_open && Some(at_start) == self.frame_size();
+        let end_trimmed = at_end > 0;
+
         let parameter_definitions = ParamDefinitionRegistry::from_descriptors(&self.descriptors)?;
         let mut parameter_blocks = Vec::with_capacity(input.parameter_blocks.len());
+        let mut submitted_ids: Vec<u32> = Vec::with_capacity(input.parameter_blocks.len());
         for submitted in input.parameter_blocks {
             let parameter_id = self.parameter_id(submitted.parameter, &parameter_definitions)?;
             if submitted.block.parameter_id != parameter_id {
@@ -280,6 +347,15 @@ impl<W: Write> EncodingWriter<W> {
                     "parameter_id",
                 ));
             }
+            // ref: IAMF v1.1.0 index.bs:1918 "There SHALL be no redundant Parameter Block OBUs"
+            // ref: iamf-tools@v2.1.0 iamf/cli/temporal_unit_view.cc ValidateAllParameterBlocksMatchStatistics
+            if submitted_ids.contains(&parameter_id) {
+                return Err(temporal_input(
+                    ErrorKind::DuplicateTemporalParameterBlock,
+                    "parameter_blocks",
+                ));
+            }
+            submitted_ids.push(parameter_id);
             let governing = parameter_definitions.get(parameter_id).ok_or_else(|| {
                 temporal_input(
                     ErrorKind::UnknownTemporalParameterHandle,
@@ -318,11 +394,39 @@ impl<W: Write> EncodingWriter<W> {
             ));
         }
 
-        Ok(TemporalUnit {
-            temporal_delimiter: None,
-            parameter_blocks,
-            audio_frames: frames,
-        })
+        // ref: IAMF v1.1.0 index.bs:1914 "SHALL have the same start timestamp as the Audio
+        //      Substream … and SHALL consist of the same number of Parameter Block OBUs"
+        // ref: iamf-tools@v2.1.0 iamf/cli/global_timing_module.cc GetNextParameterBlockTimestamps
+        // A late start or a gap fails pinned decoder_main (research probes d, e); a truncated
+        // tail passes decoder_main but still violates the spec (probe l).
+        let parameter_ids = match &self.progress.parameter_ids {
+            Some(expected) => {
+                // P5 above excludes duplicates, so this is exact set equality.
+                if submitted_ids.len() != expected.len()
+                    || submitted_ids.iter().any(|id| !expected.contains(id))
+                {
+                    return Err(temporal_input(
+                        ErrorKind::ParameterSubstreamCoverageMismatch,
+                        "parameter_blocks",
+                    ));
+                }
+                expected.clone()
+            }
+            None => submitted_ids,
+        };
+
+        Ok((
+            TemporalUnit {
+                temporal_delimiter: None,
+                parameter_blocks,
+                audio_frames: frames,
+            },
+            TemporalProgress {
+                parameter_ids: Some(parameter_ids),
+                start_trim_open,
+                end_trimmed,
+            },
+        ))
     }
 
     /// The frozen frame size; `build()` guarantees exactly one Codec Config.

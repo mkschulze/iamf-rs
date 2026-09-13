@@ -501,6 +501,218 @@ fn mode_1_blocks_matching_the_frame_round_trip_in_every_unit() -> iamf::Result<(
     Ok(())
 }
 
+#[test]
+fn parameter_block_missing_from_a_later_unit_is_rejected() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(gain_unit(
+        left,
+        right,
+        vec![gain_block(parameter, 128, 64, 64)],
+        None,
+    ))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(left, right, Vec::new(), None))
+        .expect_err("a parameter substream cannot have a gap");
+    assert_eq!(error.kind(), &ErrorKind::ParameterSubstreamCoverageMismatch);
+    assert_eq!(error.at(), Location::Field("parameter_blocks"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(
+        left,
+        right,
+        vec![gain_block(parameter, 128, 64, 64)],
+        None,
+    ))?;
+    Ok(())
+}
+
+#[test]
+fn parameter_block_added_in_a_later_unit_is_rejected() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(
+            left,
+            right,
+            vec![gain_block(parameter, 128, 64, 64)],
+            None,
+        ))
+        .expect_err("a parameter substream cannot start late");
+    assert_eq!(error.kind(), &ErrorKind::ParameterSubstreamCoverageMismatch);
+    assert_eq!(error.at(), Location::Field("parameter_blocks"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    Ok(())
+}
+
+#[test]
+fn duplicate_parameter_block_in_one_unit_is_rejected() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(
+            left,
+            right,
+            vec![
+                gain_block(parameter, 128, 64, 64),
+                gain_block(parameter, 128, 64, 64),
+            ],
+            None,
+        ))
+        .expect_err("one unit carries at most one block per parameter");
+    assert_eq!(error.kind(), &ErrorKind::DuplicateTemporalParameterBlock);
+    assert_eq!(error.at(), Location::Field("parameter_blocks"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(
+        left,
+        right,
+        vec![gain_block(parameter, 128, 64, 64)],
+        None,
+    ))?;
+    Ok(())
+}
+
+#[test]
+fn start_trim_after_a_partially_trimmed_unit_is_rejected() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), Some(start_trim(48))))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(left, right, Vec::new(), Some(start_trim(48))))
+        .expect_err("a start trim may only follow fully trimmed frames");
+    assert_eq!(error.kind(), &ErrorKind::StartTrimAfterUntrimmedAudio);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    Ok(())
+}
+
+#[test]
+fn start_trim_after_untrimmed_audio_is_rejected() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(left, right, Vec::new(), Some(start_trim(1))))
+        .expect_err("a start trim cannot follow untrimmed audio");
+    assert_eq!(error.kind(), &ErrorKind::StartTrimAfterUntrimmedAudio);
+    assert_eq!(error.at(), Location::Field("trimming"));
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    Ok(())
+}
+
+#[test]
+fn unit_after_an_end_trim_is_rejected() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), Some(end_trim(10))))?;
+    let before = writer.bytes_written();
+
+    for _ in 0..2 {
+        let error = writer
+            .push_temporal_unit(gain_unit(left, right, Vec::new(), None))
+            .expect_err("an end trim is terminal");
+        assert_eq!(error.kind(), &ErrorKind::TemporalUnitAfterEndTrim);
+        assert_eq!(error.at(), Location::Field("trimming"));
+        assert_eq!(writer.bytes_written(), before);
+    }
+
+    writer.finish()?;
+    Ok(())
+}
+
+#[test]
+fn rejected_units_do_not_advance_temporal_state() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    let before = writer.bytes_written();
+
+    let error = writer
+        .push_temporal_unit(gain_unit(
+            left,
+            right,
+            vec![gain_block(parameter, 64, 32, 32)],
+            Some(end_trim(10)),
+        ))
+        .expect_err("the block duration does not match the frame");
+    assert_eq!(error.kind(), &ErrorKind::ParameterBlockDurationMismatch);
+    assert_eq!(writer.bytes_written(), before);
+
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    writer.push_temporal_unit(gain_unit(left, right, Vec::new(), None))?;
+    Ok(())
+}
+
+#[test]
+fn trims_and_blocks_follow_placement_rules_across_units() -> iamf::Result<()> {
+    let (encoder, left, right, parameter) = stereo_builder_with_parameter()?;
+    let mut writer = encoder.start(Vec::new())?;
+    for trimming in [
+        Some(start_trim(128)),
+        Some(start_trim(28)),
+        None,
+        Some(end_trim(50)),
+    ] {
+        writer.push_temporal_unit(gain_unit(
+            left,
+            right,
+            vec![gain_block(parameter, 128, 64, 64)],
+            trimming,
+        ))?;
+    }
+    let bytes = writer.finish()?;
+
+    let blocks = parse_sequence(&bytes)?
+        .obus
+        .iter()
+        .filter(|obu| matches!(obu, SequenceObu::ParameterBlock(_)))
+        .count();
+    assert_eq!(blocks, 4);
+    Ok(())
+}
+
+#[test]
+fn units_without_parameter_blocks_remain_accepted() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut writer = encoder.start(Vec::new())?;
+    for _ in 0..3 {
+        writer.push_temporal_unit(stereo_temporal_unit(left, right))?;
+    }
+    writer.finish()?;
+    Ok(())
+}
+
+const fn start_trim(at_start: u32) -> Trimming {
+    Trimming {
+        at_end: 0,
+        at_start,
+    }
+}
+
+const fn end_trim(at_end: u32) -> Trimming {
+    Trimming {
+        at_end,
+        at_start: 0,
+    }
+}
+
 fn gain_block(
     parameter: iamf::encoder::ParameterHandle,
     duration: u32,
