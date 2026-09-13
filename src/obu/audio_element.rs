@@ -1,7 +1,7 @@
 //! The Audio Element OBU (type 1) — DESC-04, and D-04's published
 //! [`AudioElementType`].
 
-use crate::bits::{BitCursor, BitWriter};
+use crate::bits::{BitCursor, BitWriter, bounded_vec};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::layout::{
     AmbisonicsConfig, AmbisonicsMonoConfig, AmbisonicsProjectionConfig, ExpandedLoudspeakerLayout,
@@ -560,7 +560,7 @@ where
             Location::InputOffset(start),
         ));
     }
-    let mut out = Vec::with_capacity(count);
+    let mut out = bounded_vec(count);
     for _ in 0..count {
         out.push(item(r)?);
     }
@@ -653,7 +653,7 @@ fn read_scalable_channel_layout_config(
             Location::InputOffset(start),
         ));
     }
-    let mut layers = Vec::with_capacity(num_layers);
+    let mut layers = bounded_vec(num_layers);
     for _ in 0..num_layers {
         layers.push(read_channel_audio_layer_config(r)?);
     }
@@ -788,7 +788,7 @@ fn read_ambisonics_config(r: &mut BitCursor<'_>) -> Result<AmbisonicsConfig> {
                     Location::InputOffset(start),
                 ));
             }
-            let mut demixing_matrix = Vec::with_capacity(entries);
+            let mut demixing_matrix = bounded_vec(entries);
             for _ in 0..entries {
                 demixing_matrix.push(i16::try_from(r.read_signed(16)?).unwrap_or(0));
             }

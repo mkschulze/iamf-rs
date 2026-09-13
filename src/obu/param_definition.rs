@@ -15,7 +15,7 @@
 //! The duration fields are therefore an `Option` gated by the mode, not fields
 //! with a "not applicable" value.
 
-use crate::bits::{BitCursor, BitWriter};
+use crate::bits::{BitCursor, BitWriter, bounded_vec};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::model::DescriptorSet;
 
@@ -297,7 +297,7 @@ pub fn read_param_definition(r: &mut BitCursor<'_>) -> Result<ParamDefinition> {
                     Location::InputOffset(start),
                 ));
             }
-            let mut durations = Vec::with_capacity(num_subblocks);
+            let mut durations = bounded_vec(num_subblocks);
             for _ in 0..num_subblocks {
                 durations.push(r.read_uleb128()?);
             }

@@ -47,7 +47,7 @@
 //! what DEC-03's pre-decimated-blocks choice costs. Recorded here; **Phase 4
 //! material, not acted on.**
 
-use crate::bits::{BitCursor, BitWriter};
+use crate::bits::{BitCursor, BitWriter, bounded_vec};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::obu::param_definition::{
     ParamDefinition, ParamDefinitionRegistry, ParameterDataContext,
@@ -449,7 +449,7 @@ pub fn read_parameter_block(
         ));
     }
 
-    let mut subblocks = Vec::with_capacity(num_subblocks);
+    let mut subblocks = bounded_vec(num_subblocks);
     let mut total_subblock_duration = 0_u64;
     for _ in 0..num_subblocks {
         let subblock_duration = if include_subblock_duration {
@@ -732,7 +732,7 @@ fn read_parameter_data(
         ParameterDataContext::ReconGain {
             recon_gain_is_present,
         } => {
-            let mut layers = Vec::with_capacity(recon_gain_is_present.len());
+            let mut layers = bounded_vec(recon_gain_is_present.len());
             for present in recon_gain_is_present {
                 if !present {
                     layers.push(None);

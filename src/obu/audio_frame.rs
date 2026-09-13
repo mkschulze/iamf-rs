@@ -29,7 +29,7 @@
 //! slice of the bounded sub-reader. Bit-walking a payload that may be 2 MiB
 //! long would be both slow and pointless.
 
-use crate::bits::{BitCursor, BitWriter};
+use crate::bits::{BitCursor, BitWriter, bounded_vec};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
 use crate::obu::header::{ObuType, Trimming, TypeSpecific};
 use crate::obu::{Obu, ObuHeader};
@@ -346,7 +346,7 @@ pub fn validate_temporal_unit(frames: &[Obu<AudioFrame>]) -> Result<()> {
     // containers, and a temporal unit holds `substream_count` frames — 4 for
     // the 5.1 fixture, at most 28 channels' worth under Base-Enhanced — so the
     // quadratic term is bounded by the format itself.
-    let mut seen: Vec<u32> = Vec::with_capacity(frames.len());
+    let mut seen: Vec<u32> = bounded_vec(frames.len());
     for frame in frames {
         if frame.header.type_specific != first.header.type_specific {
             return Err(Error::new(
