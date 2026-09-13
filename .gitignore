@@ -37,5 +37,8 @@ target
 # corpus, and intentionally minimized regression artifacts remain tracked.
 /fuzz/target/
 
+# Last-seen phase/milestone fingerprint for .claude/hooks/portfolio-sync.sh
+/.claude/portfolio-sync.state
+
 # Isolated development worktrees.
 /.worktrees/
