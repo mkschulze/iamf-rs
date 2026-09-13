@@ -1012,7 +1012,9 @@ struct TrimObservation {
 /// `iamf-tools`' stricter parser. Each reference-dependent clause **skips with a
 /// printed reason** when its tool is absent, and the offline ones still run —
 /// that is CONF-10, and it is what keeps the four-target PR gate fast and
-/// cross-platform.
+/// cross-platform. CONF-05 also skips, for the FLAC and Opus fixtures only, when
+/// `.reference-manifest.json` records a reference decoder built without those
+/// codecs (see [`libiamf_flac_opus_skip_reason`]); the later clauses still run.
 ///
 /// CONF-07 and CONF-08 are deliberately **not** here. CONF-07 needs a companion
 /// file produced by `encoder_main` from a description of the same configuration
@@ -1075,30 +1077,56 @@ fn assert_conformant(fixture: &Fixture) -> Result<GateReport, String> {
             report.note("CONF-05 (libiamf sample identity)", "SKIPPED — no iamfdec");
         }
         Some(decoder) => {
-            let dir = scratch_dir(fixture.name);
-            let trip = round_trip(&decoder, fixture, &dir);
-            assert_limiter_is_transparent(&trip, fixture.name);
-            if trip.differing != 0 {
-                // D-19: report a candidate permutation, never apply one.
-                let diagnosis = describe_channel_mismatch(pcm, &trip.decoded, spec.layout)
-                    .unwrap_or_else(|| "PCM differs".to_owned());
-                return Err(format!(
-                    "CONF-05 FAILED for {}: {} of {} samples differ after a round trip through \
-                     the pinned libiamf compared exactly with {}.\n{diagnosis}",
-                    fixture.name,
-                    trip.differing,
-                    pcm.len(),
-                    comparison_oracle_label(spec),
-                ));
+            // Exhaustive on purpose: LPCM never reads the flag, and a future
+            // codec has to decide rather than inherit a skip.
+            let skip = match spec.codec {
+                FixtureCodec::Lpcm { .. } => None,
+                FixtureCodec::Flac | FixtureCodec::Opus => {
+                    let manifest = std::fs::read_to_string(
+                        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".reference-manifest.json"),
+                    )
+                    .map_err(|e| {
+                        format!(
+                            "CONF-05: cannot read .reference-manifest.json: {e}. \
+                             IAMF_REF_DECODER is set, so tools/build-reference.sh must have \
+                             stamped it; re-run it."
+                        )
+                    })?;
+                    libiamf_flac_opus_skip_reason(fixture.name, &manifest)?
+                }
+            };
+            if let Some(reason) = skip {
+                println!("{reason}");
+                report.note(
+                    "CONF-05 (libiamf sample identity)",
+                    "SKIPPED — reference decoder built without FLAC/Opus (dep_codecs_disabled=true)",
+                );
+            } else {
+                let dir = scratch_dir(fixture.name);
+                let trip = round_trip(&decoder, fixture, &dir);
+                assert_limiter_is_transparent(&trip, fixture.name);
+                if trip.differing != 0 {
+                    // D-19: report a candidate permutation, never apply one.
+                    let diagnosis = describe_channel_mismatch(pcm, &trip.decoded, spec.layout)
+                        .unwrap_or_else(|| "PCM differs".to_owned());
+                    return Err(format!(
+                        "CONF-05 FAILED for {}: {} of {} samples differ after a round trip through \
+                         the pinned libiamf compared exactly with {}.\n{diagnosis}",
+                        fixture.name,
+                        trip.differing,
+                        pcm.len(),
+                        comparison_oracle_label(spec),
+                    ));
+                }
+                report.note(
+                    "CONF-05 (libiamf sample identity)",
+                    &format!(
+                        "{} sample frames, 0 of {} samples differ, limiter delta 0",
+                        trip.decoded_frames,
+                        pcm.len()
+                    ),
+                );
             }
-            report.note(
-                "CONF-05 (libiamf sample identity)",
-                &format!(
-                    "{} sample frames, 0 of {} samples differ, limiter delta 0",
-                    trip.decoded_frames,
-                    pcm.len()
-                ),
-            );
         }
     }
 
@@ -1172,6 +1200,155 @@ fn sha_on_line_naming(haystack: &str, needle: &str) -> Option<String> {
                 })
                 .map(str::to_owned)
         })
+}
+
+/// The raw JSON value text of `key` in the one-key-per-line manifest that
+/// `tools/build-reference.sh` writes, with the trailing comma removed.
+///
+/// A line scan, not a JSON parser, for the same reason as
+/// `tests/reference_manifest.rs`: no new dependency for a file whose shape this
+/// project writes itself. The `:` check is what keeps a key that merely starts
+/// with the same text (`"dep_codecs_disabled_note"`) from matching.
+fn manifest_raw_value<'a>(manifest: &'a str, key: &str) -> Option<&'a str> {
+    let quoted = format!("\"{key}\"");
+    manifest.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix(quoted.as_str())?;
+        let value = rest.trim_start().strip_prefix(':')?.trim();
+        Some(value.strip_suffix(',').unwrap_or(value).trim())
+    })
+}
+
+/// Whether CONF-05 must skip for a FLAC or Opus fixture, decided from the
+/// reference build manifest.
+///
+/// The pinned libiamf bundles FLAC and Opus only as x86_64-Linux archives, so
+/// `tools/build-reference.sh` disables them on every other host and stamps
+/// `dep_codecs_disabled`. The decision reads that stamp and **never** `iamfdec`'s
+/// output: `iamfdec` exits 0 on failure (CONFORMANCE-GATE.md, Experiment A), so
+/// inferring "codec missing" from its behaviour would also turn a real decode
+/// failure into a skip. CI cannot take this skip at all — the reference
+/// workflow fails before any test unless the flag is `false`.
+///
+/// # Errors
+///
+/// A missing or malformed flag, or `true` on a host where the build script
+/// ships the codecs, is an error rather than a skip.
+fn libiamf_flac_opus_skip_reason(
+    fixture_name: &str,
+    manifest: &str,
+) -> Result<Option<String>, String> {
+    match manifest_raw_value(manifest, "dep_codecs_disabled") {
+        None => Err(
+            "CONF-05: .reference-manifest.json has no dep_codecs_disabled field while \
+             IAMF_REF_DECODER is set, so it was written by an older tools/build-reference.sh; \
+             re-run tools/build-reference.sh"
+                .to_owned(),
+        ),
+        Some("false") => Ok(None),
+        Some("true") => {
+            let host = manifest_raw_value(manifest, "host_triple")
+                .map(|raw| {
+                    raw.strip_prefix('"')
+                        .and_then(|inner| inner.strip_suffix('"'))
+                        .unwrap_or(raw)
+                })
+                .ok_or_else(|| {
+                    "CONF-05: .reference-manifest.json says dep_codecs_disabled=true but has no \
+                     host_triple, so the skip cannot be checked against the host; re-run \
+                     tools/build-reference.sh"
+                        .to_owned()
+                })?;
+            if host == "x86_64-unknown-linux-gnu" {
+                return Err(format!(
+                    "CONF-05: .reference-manifest.json says dep_codecs_disabled=true on {host}, \
+                     where tools/build-reference.sh ships FLAC and Opus; the reference build is \
+                     broken or stale, and skipping would hide CONF-05"
+                ));
+            }
+            Ok(Some(format!(
+                "SKIP CONF-05 (libiamf FLAC/Opus) for {fixture_name}: reference decoder built \
+                 without FLAC/Opus codecs (dep_codecs_disabled=true in .reference-manifest.json; \
+                 only x86_64 Linux reference hosts ship them — tools/build-reference.sh)"
+            )))
+        }
+        Some(other) => Err(format!(
+            "CONF-05: .reference-manifest.json has dep_codecs_disabled = {other}, which is \
+             neither true nor false; re-run tools/build-reference.sh"
+        )),
+    }
+}
+
+/// The local FLAC/Opus CONF-05 skip is decided by the build manifest alone:
+/// true skips off x86_64 Linux, false runs the clause, and anything else fails.
+#[test]
+fn conf05_flac_opus_skip_is_decided_by_the_manifest() {
+    let manifest = |host: Option<&str>, flag: Option<&str>, decoy: bool| -> String {
+        let mut text = String::from("{\n  \"libiamf_sha\": \"f06e919e\",\n");
+        if let Some(host) = host {
+            text.push_str(&format!("  \"host_triple\": \"{host}\",\n"));
+        }
+        if decoy {
+            text.push_str("  \"dep_codecs_disabled_note\": false,\n");
+        }
+        if let Some(flag) = flag {
+            text.push_str(&format!("  \"dep_codecs_disabled\": {flag},\n"));
+        }
+        text.push_str("  \"smoke_frames\": 8000\n}\n");
+        text
+    };
+    let darwin = Some("x86_64-apple-darwin");
+    let linux = Some("x86_64-unknown-linux-gnu");
+
+    let skip = libiamf_flac_opus_skip_reason("phase3_flac", &manifest(darwin, Some("true"), false))
+        .expect("true on darwin skips")
+        .expect("true on darwin yields a reason");
+    assert!(
+        skip.starts_with("SKIP CONF-05 (libiamf FLAC/Opus) for phase3_flac: "),
+        "{skip}"
+    );
+    assert!(
+        skip.contains("dep_codecs_disabled=true in .reference-manifest.json"),
+        "{skip}"
+    );
+
+    assert_eq!(
+        libiamf_flac_opus_skip_reason("phase3_flac", &manifest(darwin, Some("false"), false)),
+        Ok(None)
+    );
+    assert_eq!(
+        libiamf_flac_opus_skip_reason("phase3_opus", &manifest(linux, Some("false"), false)),
+        Ok(None)
+    );
+
+    let absent = libiamf_flac_opus_skip_reason("phase3_flac", &manifest(darwin, None, false))
+        .expect_err("an absent flag fails");
+    assert!(
+        absent.contains("dep_codecs_disabled") && absent.contains("tools/build-reference.sh"),
+        "{absent}"
+    );
+
+    let malformed =
+        libiamf_flac_opus_skip_reason("phase3_flac", &manifest(darwin, Some("\"yes\""), false))
+            .expect_err("a malformed flag fails");
+    assert!(
+        malformed.contains("dep_codecs_disabled") && malformed.contains("\"yes\""),
+        "{malformed}"
+    );
+
+    let on_linux =
+        libiamf_flac_opus_skip_reason("phase3_opus", &manifest(linux, Some("true"), false))
+            .expect_err("true on x86_64 Linux fails");
+    assert!(on_linux.contains("x86_64-unknown-linux-gnu"), "{on_linux}");
+
+    let no_host =
+        libiamf_flac_opus_skip_reason("phase3_opus", &manifest(None, Some("true"), false))
+            .expect_err("true without host_triple fails");
+    assert!(no_host.contains("host_triple"), "{no_host}");
+
+    assert!(matches!(
+        libiamf_flac_opus_skip_reason("phase3_flac", &manifest(darwin, Some("true"), true)),
+        Ok(Some(_))
+    ));
 }
 
 /// **CONF-02.** The signal is non-silent and every channel's sample sequence
@@ -1682,6 +1859,7 @@ fn the_opus_fixture_is_conformant_to_the_pinned_libiamf_decode() {
         "Opus CONF-03 must report its explicit units/trims against the pinned libiamf decode, \
          never source PCM: {trim}"
     );
+    report.print(fixture.name);
 }
 
 /// **CONF-04 on the structure-only fixture.**
