@@ -741,7 +741,7 @@ fn mono_builder(
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(config.clone());
     let substream = builder.add_substream();
-    builder.add_audio_element_with_substreams(
+    let element = builder.add_audio_element_with_substreams(
         codec,
         vec![substream],
         AudioElement::channel_based(
@@ -755,12 +755,22 @@ fn mono_builder(
             )),
         ),
     );
-    let input = match config.decoder_config {
-        iamf::obu::DecoderConfig::Lpcm(_) => FrameInput::Lpcm(vec![0; 256]),
-        iamf::obu::DecoderConfig::Flac(_) => FrameInput::Flac(vec![0]),
-        iamf::obu::DecoderConfig::Opus(_) => FrameInput::Opus(vec![0xf8]),
+    // The mix-gain parameter_rate must equal the codec output rate
+    // (ParameterRateMismatch): 16 kHz for these LPCM/FLAC configs, 48 kHz for Opus.
+    let (input, rate) = match config.decoder_config {
+        iamf::obu::DecoderConfig::Lpcm(_) => (FrameInput::Lpcm(vec![0; 256]), 16_000),
+        iamf::obu::DecoderConfig::Flac(_) => (FrameInput::Flac(vec![0]), 16_000),
+        iamf::obu::DecoderConfig::Opus(_) => (FrameInput::Opus(vec![0xf8]), 48_000),
         iamf::obu::DecoderConfig::Raw { .. } | _ => unreachable!(),
     };
+    let mut mono = presentation();
+    for sub_mix in &mut mono.sub_mixes {
+        sub_mix.output_mix_gain.definition.parameter_rate = rate;
+        for reference in &mut sub_mix.elements {
+            reference.element_mix_gain.definition.parameter_rate = rate;
+        }
+    }
+    builder.add_mix_presentation(vec![element], mono);
     builder
         .build()
         .map(|(encoder, _)| (encoder, (substream, input)))

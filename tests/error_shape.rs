@@ -179,6 +179,8 @@ fn static_builder_errors_are_compact_typed_kinds() {
         ErrorKind::CoupledSubstreamCountMismatch,
         ErrorKind::SubMixCountNotOne,
         ErrorKind::ReservedHeadphonesRenderingMode,
+        ErrorKind::NoMixPresentation,
+        ErrorKind::DuplicateMixPresentationAudioElement,
     ] {
         let error = Error::new(kind.clone(), Location::Unlocated);
         assert_eq!(error.kind(), &kind);

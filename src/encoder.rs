@@ -1216,6 +1216,16 @@ impl EncoderBuilder {
         // Exercise every exact wire encoder before allocating the manifest or
         // accepting a sink. Lowering only replaces validated ids afterward.
         crate::model::write_descriptors(&mut crate::bits::BitWriter::new(), &descriptors)?;
+        // Checked last so earlier, more specific declaration errors keep their kinds.
+        // ref: IAMF v1.1.0 index.bs:1929 (at least one Mix Presentation SHALL comply with primary_profile)
+        // ref: iamf-tools@v2.1.0 iamf/cli/obu_processor.cc:531-533 ("No mix presentation OBUs found.")
+        // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:3157-3160 (IAMF_FLAG_CONFIG needs a Mix Presentation)
+        if self.mix_presentations.is_empty() {
+            return Err(Error::new(
+                ErrorKind::NoMixPresentation,
+                Location::Field("mix_presentations"),
+            ));
+        }
         Ok(())
     }
 

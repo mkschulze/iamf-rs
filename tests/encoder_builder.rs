@@ -206,6 +206,21 @@ fn build_rejects_two_sub_mixes() {
     assert_eq!(error.at(), Location::Field("num_sub_mixes"));
 }
 
+// ref: IAMF v1.1.0 index.bs:1929; iamf-tools@v2.1.0 iamf/cli/obu_processor.cc:531-533
+#[test]
+fn build_rejects_zero_mix_presentations() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    add_fresh_element(&mut builder, codec, stereo_element());
+
+    let error = builder
+        .build()
+        .expect_err("an IA sequence without a Mix Presentation never configures a decoder");
+
+    assert_eq!(error.kind(), &ErrorKind::NoMixPresentation);
+    assert_eq!(error.at(), Location::Field("mix_presentations"));
+}
+
 // ref: IAMF v1.1.0 index.bs:1278 (num_sub_mixes SHALL NOT be 0)
 #[test]
 fn build_rejects_zero_sub_mixes() {

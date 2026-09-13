@@ -156,6 +156,12 @@ pub enum ErrorKind {
     // ref: IAMF v1.1.0 index.bs:1337-1341 (parsers SHALL ignore the Mix Presentation)
     #[error("headphones_rendering_mode is reserved")]
     ReservedHeadphonesRenderingMode,
+    /// The builder declares no Mix Presentation.
+    // ref: IAMF v1.1.0 index.bs:1929 (at least one Mix Presentation SHALL comply with primary_profile)
+    // ref: iamf-tools@v2.1.0 iamf/cli/obu_processor.cc:531-533 ("No mix presentation OBUs found.")
+    // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:3157-3160 (IAMF_FLAG_CONFIG needs a Mix Presentation)
+    #[error("an IA sequence must carry at least one Mix Presentation")]
+    NoMixPresentation,
     /// A Mix Presentation references the same Audio Element more than once.
     // ref: IAMF v1.1.0 index.bs:1280; iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:41-54 ValidateUniqueAudioElementIds
     // DISAGREEMENT: libiamf@v1.1.0 has no check; spec and iamf-tools are stricter and win
