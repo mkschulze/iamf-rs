@@ -137,6 +137,12 @@ where
     // payload length is what is left of it once those are subtracted. The
     // after-size count is measured by the header reader rather than recomputed
     // here, so the two can never disagree.
+    //
+    // Since quick 260914-0sp the header reader cannot return an after-size
+    // count larger than `obu_size`: it reads those fields through an
+    // `obu_size`-bounded window and reports `TruncatedObu` at the OBU start
+    // itself. This check is therefore unreachable from valid calls and is kept
+    // as defence in depth; it reports the same kind and offset.
     let payload_len = u64::from(obu_size)
         .checked_sub(after_size_bytes)
         .ok_or_else(|| Error::new(ErrorKind::TruncatedObu, Location::InputOffset(before)))?;
