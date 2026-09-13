@@ -595,6 +595,12 @@ pre-authorised waiver was retired by research — the configuration is published
 and that DEC-04's settlement of the `iamf-tools` pin removed most of the
 CONF-06/07 risk, both of which are now demonstrated rather than merely expected.
 
+### Host-dependent skip: CONF-05 for FLAC and Opus (not a waiver)
+
+The pinned libiamf bundles FLAC and Opus only as x86_64-Linux archives, so `tools/build-reference.sh` disables them on other hosts and stamps `dep_codecs_disabled` in `.reference-manifest.json`.
+When that flag is `true`, `assert_conformant` skips only CONF-05 for the FLAC and Opus fixtures, with a printed reason, and every other clause still runs; a missing or malformed flag, or `true` on `x86_64-unknown-linux-gnu`, fails instead.
+The reference workflow asserts the flag is `false` before any test, so CONF-05 for FLAC and Opus executes on every PR. That is why this is a skip and not a D-17 waiver.
+
 
 ## Cross-target byte-identity evidence (GUARD-09 / ROADMAP criterion 4)
 
