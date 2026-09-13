@@ -1147,3 +1147,135 @@ fn both_validators_carry_the_language_and_anchor_findings() {
     };
     assert_eq!(wlv_findings(sequence.validate()), expected);
 }
+
+/// The single-scalable-channel-element `num_layouts` finding.
+fn scalable(
+    mix_presentation_id: u32,
+    audio_element_id: u32,
+    num_layers: usize,
+    num_layouts: usize,
+) -> Finding {
+    Finding {
+        at: Location::Field("sub_mix.num_layouts"),
+        message: format!(
+            "mix presentation {mix_presentation_id} has a sub-mix whose only audio element \
+             {audio_element_id} is scalable with num_layers {num_layers} but num_layouts is \
+             {num_layouts}; num_layouts SHALL be >= num_layers unless the highest loudness_layout \
+             is the layout the sub-mix was authored on (IAMF v1.1.0 index.bs:1305-1309)"
+        ),
+    }
+}
+
+/// Clones a channel-based element's first layer, making it scalable.
+fn with_second_layer(element: &mut AudioElement) {
+    if let AudioElementType::ChannelBased(config) = &mut element.audio_element_type {
+        let layers = &mut config.scalable_channel_layout.layers;
+        if let Some(layer) = layers.first().cloned() {
+            layers.push(layer);
+        }
+    }
+}
+
+/// The published sequence with a two-layer element 300 and `presentation` as its Mix Presentation.
+fn scalable_sequence(presentation: MixPresentation) -> ParsedSequence {
+    let mut element = support::published_audio_element();
+    with_second_layer(&mut element.payload);
+    let mut mix = support::published_mix_presentation();
+    mix.payload = presentation;
+    ParsedSequence {
+        obus: vec![
+            SequenceObu::IaSequenceHeader(support::published_sequence_header()),
+            SequenceObu::CodecConfig(support::published_codec_config()),
+            SequenceObu::AudioElement(element),
+            SequenceObu::MixPresentation(mix),
+        ],
+    }
+}
+
+/// The published descriptor set with a two-layer element 300 and `presentation`.
+fn scalable_set(presentation: MixPresentation) -> DescriptorSet {
+    let mut set = published_descriptor_set();
+    for element in &mut set.audio_elements {
+        with_second_layer(element);
+    }
+    set.mix_presentations = vec![presentation];
+    set
+}
+
+#[test]
+fn both_validators_report_num_layouts_below_num_layers_for_one_scalable_element() {
+    let presentation = support::published_mix_presentation().payload;
+    let expected = vec![scalable(42, 300, 2, 1)];
+    assert_eq!(
+        wlv_findings(scalable_set(presentation.clone()).validate()),
+        expected
+    );
+    assert_eq!(
+        wlv_findings(scalable_sequence(presentation).validate()),
+        expected
+    );
+
+    assert_eq!(wlv_findings(published_descriptor_set().validate()), vec![]);
+    let published = ParsedSequence {
+        obus: published_parsed_sequence(),
+    };
+    assert_eq!(wlv_findings(published.validate()), vec![]);
+}
+
+#[test]
+fn num_layouts_equal_to_num_layers_has_no_scalable_finding() {
+    let mut presentation = support::published_mix_presentation().payload;
+    for sub_mix in &mut presentation.sub_mixes {
+        let extra = sub_mix.layouts.first().cloned().unwrap();
+        sub_mix.layouts.push(extra);
+    }
+    assert_eq!(
+        wlv_findings(scalable_set(presentation.clone()).validate()),
+        vec![]
+    );
+    assert_eq!(
+        wlv_findings(scalable_sequence(presentation).validate()),
+        vec![]
+    );
+}
+
+#[test]
+fn a_sub_mix_with_two_elements_has_no_scalable_finding() {
+    let mut presentation = support::published_mix_presentation().payload;
+    for sub_mix in &mut presentation.sub_mixes {
+        let extra = sub_mix.elements.first().cloned().unwrap();
+        sub_mix.elements.push(extra);
+    }
+    assert_eq!(
+        wlv_findings(scalable_set(presentation.clone()).validate()),
+        vec![]
+    );
+    assert_eq!(
+        wlv_findings(scalable_sequence(presentation).validate()),
+        vec![]
+    );
+}
+
+#[test]
+fn an_unresolved_scalable_element_reference_has_no_scalable_finding() {
+    let mut presentation = support::published_mix_presentation().payload;
+    presentation
+        .sub_mixes
+        .first_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .unwrap()
+        .audio_element_id = 999;
+    let unresolved = |findings: &[Finding]| {
+        findings
+            .iter()
+            .any(|finding| finding.at == Location::Field("audio_element_id"))
+    };
+
+    let set_findings = scalable_set(presentation.clone()).validate();
+    assert!(unresolved(&set_findings));
+    assert_eq!(wlv_findings(set_findings), vec![]);
+
+    let sequence_findings = scalable_sequence(presentation).validate();
+    assert!(unresolved(&sequence_findings));
+    assert_eq!(wlv_findings(sequence_findings), vec![]);
+}

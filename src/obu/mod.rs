@@ -50,6 +50,7 @@ pub use codec_config::{
     required_opus_audio_roll_distance, write_codec_config,
 };
 pub use header::{ObuHeader, ObuType, Trimming, TypeSpecific, read_obu_header, write_obu};
+pub(crate) use mix_presentation::scalable_layout_finding;
 pub use mix_presentation::{
     AnchorElement, AnchoredLoudness, HeadphonesRenderingMode, Layout, LayoutWithLoudness, Loudness,
     LoudnessExtension, MixGainParamDefinition, MixPresentation, RenderingConfig, SubMix,

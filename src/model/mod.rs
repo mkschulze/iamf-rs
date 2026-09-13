@@ -193,6 +193,16 @@ impl DescriptorSet {
                         });
                     }
                 }
+                // ref: IAMF v1.1.0 index.bs:1305-1309
+                let only = sub_mix
+                    .elements
+                    .first()
+                    .and_then(|element| self.audio_element_by_id(element.audio_element_id));
+                findings.extend(crate::obu::scalable_layout_finding(
+                    presentation.mix_presentation_id,
+                    sub_mix,
+                    only,
+                ));
             }
         }
 

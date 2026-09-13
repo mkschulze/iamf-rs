@@ -318,6 +318,17 @@ impl ParsedSequence {
                                 });
                             }
                         }
+                        // ref: IAMF v1.1.0 index.bs:1305-1309 (first wire binding of the element id)
+                        let only = sub_mix.elements.first().and_then(|element| {
+                            audio_elements.iter().copied().find(|candidate| {
+                                candidate.audio_element_id == element.audio_element_id
+                            })
+                        });
+                        findings.extend(crate::obu::scalable_layout_finding(
+                            obu.payload.mix_presentation_id,
+                            sub_mix,
+                            only,
+                        ));
                     }
                 }
                 SequenceObu::ParameterBlock(obu) => {

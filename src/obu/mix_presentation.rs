@@ -534,6 +534,43 @@ impl MixPresentation {
     }
 }
 
+/// The single-scalable-channel-element loudness rule for one sub-mix.
+///
+/// Needs the referenced Audio Element, so it is called by the two cross-OBU
+/// validators rather than by [`MixPresentation::validate`].
+// ref: IAMF v1.1.0 index.bs:1305-1309 (num_layouts SHALL be >= num_layers, with exceptions)
+// ref: IAMF v1.1.0 index.bs:769-770 (scalable channel audio means num_layers > 1)
+// NOTE: neither iamf-tools@v2.1.0 nor libiamf@v1.1.0 checks this; the spec is stricter and wins.
+// The authoring-layout exception (index.bs:1308) is not observable in the bitstream, so this is a
+// finding, never a rejection.
+pub(crate) fn scalable_layout_finding(
+    mix_presentation_id: u32,
+    sub_mix: &SubMix,
+    element: Option<&crate::obu::AudioElement>,
+) -> Option<Finding> {
+    let [only] = sub_mix.elements.as_slice() else {
+        return None;
+    };
+    let crate::obu::AudioElementType::ChannelBased(config) = &element?.audio_element_type else {
+        return None;
+    };
+    let num_layers = config.scalable_channel_layout.num_layers();
+    if num_layers <= 1 || sub_mix.num_layouts() >= num_layers {
+        return None;
+    }
+    Some(Finding {
+        at: Location::Field("sub_mix.num_layouts"),
+        message: format!(
+            "mix presentation {mix_presentation_id} has a sub-mix whose only audio element {} is \
+             scalable with num_layers {num_layers} but num_layouts is {}; num_layouts SHALL be >= \
+             num_layers unless the highest loudness_layout is the layout the sub-mix was authored \
+             on (IAMF v1.1.0 index.bs:1305-1309)",
+            only.audio_element_id,
+            sub_mix.num_layouts()
+        ),
+    })
+}
+
 fn push_reserved_finding(findings: &mut Vec<Finding>, value: u8, field: &'static str, width: u8) {
     if value != 0 {
         findings.push(Finding {
