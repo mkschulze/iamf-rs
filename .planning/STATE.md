@@ -178,5 +178,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-14
-Stopped at: Completed quick tasks 260914-0sp and 260914-1mq (unpushed); open decision: per-parse memory budget (260914-1mq deferred item 1)
+Stopped at: Completed quick tasks 260914-0sp and 260914-1mq, pushed as 375fcaf; CI run 34790724346 and reference run 34790729874 green (FLAC/Opus CONF-05 0 differing samples); open decision: per-parse memory budget (260914-1mq deferred item 1)
 Resume file: .planning/.continue-here.md
