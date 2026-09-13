@@ -80,8 +80,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
-use iamf::model::{DescriptorSet, select_minimum_profile};
+use iamf::encoder::{EncoderBuilder, FrameInput, TemporalUnitInput};
+use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
+use iamf::model::{DescriptorSet, Profile, select_minimum_profile};
 use iamf::obu::{
     AudioElement, ChannelAudioLayerConfig, CodecConfig, IaSequenceHeader, Layout,
     LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
@@ -1741,6 +1742,227 @@ fn parallax_delivery_fixture_uses_the_offline_safe_reference_gates() {
     match run_decoder_main(&delivery.bytes, &dir, 1) {
         Ok(observed) => println!("[parallax delivery] CONF-06: {observed}"),
         Err(message) => panic!("{message}"),
+    }
+}
+
+/// One lone expanded-layout channel-based element, built through the public
+/// builder and encoded as one silent temporal unit, with the sequence profile
+/// the builder selected.
+///
+/// 48 kHz / 16-bit LE / 128 samples: the shape of the executed 260913-p28
+/// probe, so `-r 48000` involves no resampling and the expected decode
+/// (2 channels x 128 frames at `-s0`) is observed evidence, not a guess.
+fn expanded_layout_sequence(
+    layout: ExpandedLoudspeakerLayout,
+) -> Result<(Vec<u8>, Profile), String> {
+    let loudspeaker_layout = LoudspeakerLayout::Expanded(layout);
+    let (substream_count, coupled_substream_count) = loudspeaker_layout
+        .single_layer_substream_counts()
+        .ok_or_else(|| format!("{layout:?} has no reference substream counts"))?;
+
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(CodecConfig::lpcm(
+        0,
+        128,
+        LpcmDecoderConfig {
+            sample_format_flags: SampleFormatFlags::LittleEndian,
+            sample_size: 16,
+            sample_rate: 48_000,
+        },
+    ));
+    let streams: Vec<_> = (0..substream_count)
+        .map(|_| builder.add_substream())
+        .collect();
+    let element = builder.add_audio_element_with_substreams(
+        codec,
+        streams.clone(),
+        AudioElement::channel_based(
+            0,
+            0,
+            (0..u32::from(substream_count)).collect(),
+            ScalableChannelLayoutConfig::single_layer(ChannelAudioLayerConfig::new(
+                loudspeaker_layout,
+                substream_count,
+                coupled_substream_count,
+            )),
+        ),
+    );
+    let _presentation = builder.add_mix_presentation(
+        vec![element],
+        MixPresentation {
+            mix_presentation_id: 0,
+            annotations_language: vec![b"en".to_vec()],
+            localized_presentation_annotations: vec![b"expanded".to_vec()],
+            sub_mixes: vec![SubMix {
+                elements: vec![SubMixAudioElement {
+                    audio_element_id: 0,
+                    localized_element_annotations: vec![b"expanded".to_vec()],
+                    rendering_config: RenderingConfig::stereo(),
+                    element_mix_gain: MixGainParamDefinition::mode_1(0, 48_000),
+                }],
+                output_mix_gain: MixGainParamDefinition::mode_1(1, 48_000),
+                layouts: vec![LayoutWithLoudness {
+                    layout: Layout::SoundSystem(SoundSystem::A0_2_0),
+                    reserved: 0,
+                    loudness: Loudness::new(0, 0),
+                }],
+            }],
+            trailing: Vec::new(),
+        },
+    );
+    let (encoder, manifest) = builder
+        .build()
+        .map_err(|e| format!("{layout:?}: build failed: {e:?}"))?;
+    let profile = manifest.sequence_profile();
+
+    // 128 samples x channels x 2 bytes: a coupled substream (position below
+    // coupled_substream_count) carries 2 channels, any other carries 1.
+    let frames = streams
+        .iter()
+        .enumerate()
+        .map(|(position, &handle)| {
+            let coupled =
+                u8::try_from(position).is_ok_and(|position| position < coupled_substream_count);
+            let bytes = if coupled { vec![0; 512] } else { vec![0; 256] };
+            (handle, FrameInput::Lpcm(bytes))
+        })
+        .collect();
+
+    let mut writer = encoder
+        .start(Vec::new())
+        .map_err(|e| format!("{layout:?}: start failed: {e:?}"))?;
+    writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames,
+            parameter_blocks: Vec::new(),
+            trimming: None,
+        })
+        .map_err(|e| format!("{layout:?}: push_temporal_unit failed: {e:?}"))?;
+    let bytes = writer
+        .finish()
+        .map_err(|e| format!("{layout:?}: finish failed: {e:?}"))?;
+    Ok((bytes, profile))
+}
+
+/// **CONF-05 for expanded loudspeaker layouts.** Pinned libiamf drops an
+/// expanded element under a Simple or Base header (`IAMF_decoder.c:643-648`)
+/// and exits 0 having decoded 0 frames, so this is the check that catches a
+/// profile-selection regression. The Simple-header control proves it bites.
+#[test]
+fn expanded_layout_elements_decode_through_libiamf() {
+    let layouts = [
+        ExpandedLoudspeakerLayout::Lfe,
+        ExpandedLoudspeakerLayout::Ch9_1_6,
+    ];
+
+    // Offline, always. Byte offsets are hand-derived from the IA Sequence
+    // Header layout, never captured from output (D-25): byte 0 is the OBU
+    // header, byte 1 the one-byte leb128 obu_size 6, 2..6 the ia_code "iamf",
+    // 6 primary_profile and 7 additional_profile.
+    let mut sequences = Vec::new();
+    for layout in layouts {
+        let (bytes, profile) =
+            expanded_layout_sequence(layout).expect("the expanded-layout sequence encodes");
+        assert_eq!(profile, Profile::BaseEnhanced, "{layout:?}");
+        assert_eq!(bytes.get(2..6), Some(&b"iamf"[..]), "{layout:?} ia_code");
+        assert_eq!(
+            bytes.get(6..8),
+            Some(&[2_u8, 2][..]),
+            "{layout:?} profile bytes"
+        );
+        sequences.push((layout, bytes));
+    }
+
+    let Some(decoder) = reference_decoder() else {
+        skip_no_reference("expanded_layout_elements_decode_through_libiamf");
+        return;
+    };
+    let program = decoder.display().to_string();
+    let dir = scratch_dir("expanded-conf05");
+    let decode = |input: &Path, output: &Path| {
+        let args: Vec<String> = vec![
+            "-i0".to_owned(),
+            "-o3".to_owned(),
+            output.display().to_string(),
+            "-r".to_owned(),
+            "48000".to_owned(),
+            "-s0".to_owned(),
+            "-d".to_owned(),
+            "16".to_owned(),
+            "-disable_limiter".to_owned(),
+            input.display().to_string(),
+        ];
+        run_tool(&program, &args, output)
+    };
+
+    for (layout, bytes) in sequences {
+        let tag = format!("{layout:?}");
+        let input = dir.join(format!("{tag}.iamf"));
+        let output = dir.join(format!("{tag}.wav"));
+        std::fs::write(&input, &bytes).expect("the scratch input is writable");
+        let run = decode(&input, &output);
+        let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            size > BARE_WAV_HEADER_LEN,
+            "[expanded {tag}] iamfdec wrote {size} bytes (a bare WAV header is \
+             {BARE_WAV_HEADER_LEN}); command: {}; exit {:?}; stdout: {}; stderr: {}",
+            run.command,
+            run.exit_code,
+            run.stdout,
+            run.stderr
+        );
+        let wav = read_wav(&output).unwrap_or_else(|e| {
+            panic!(
+                "[expanded {tag}] {e}; command: {}; stdout: {}; stderr: {}",
+                run.command, run.stdout, run.stderr
+            )
+        });
+        assert_eq!(
+            (wav.channels, wav.frames),
+            (2, 128),
+            "[expanded {tag}] decoded shape; command: {}; stdout: {}; stderr: {}",
+            run.command,
+            run.stdout,
+            run.stderr
+        );
+
+        // The control: the same bytes with a Simple/Simple header.
+        let mut control = bytes.clone();
+        control
+            .get_mut(6..8)
+            .expect("the sequence header carries the profile bytes")
+            .copy_from_slice(&[0, 0]);
+        let control_input = dir.join(format!("{tag}-simple.iamf"));
+        let control_output = dir.join(format!("{tag}-simple.wav"));
+        std::fs::write(&control_input, &control).expect("the scratch control is writable");
+        let control_run = decode(&control_input, &control_output);
+        let control_size = std::fs::metadata(&control_output)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let control_frames = if control_size <= BARE_WAV_HEADER_LEN {
+            0
+        } else {
+            read_wav(&control_output)
+                .map(|w| w.frames)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[expanded {tag}] control: {e}; command: {}; stdout: {}; stderr: {}",
+                        control_run.command, control_run.stdout, control_run.stderr
+                    )
+                })
+        };
+        assert_eq!(
+            control_frames, 0,
+            "[expanded {tag}] the Simple-header control decoded frames, contradicting research \
+             260913-p28 E; command: {}; stdout: {}; stderr: {}",
+            control_run.command, control_run.stdout, control_run.stderr
+        );
+
+        println!(
+            "[expanded {tag}] CONF-05: iamfdec decoded {} frames from a Base-Enhanced header; \
+             the Simple-header control decoded {control_frames} frames ({control_size} bytes)",
+            wav.frames
+        );
     }
 }
 

@@ -255,6 +255,125 @@ fn a_lone_expanded_lfe_element_writes_base_enhanced_profile_bytes() {
 }
 
 #[test]
+fn every_named_expanded_layout_builds_a_base_enhanced_header() {
+    // Literal rows: every named expanded layout alone writes 2/2, and every
+    // standard layout alone stays Simple 0/0.
+    for (layout, profile, wire) in [
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoS),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoSs),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoRs),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoTf),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoTb),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Top4Ch),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch3_0),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoF),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoSi),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::StereoTpSi),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Top6Ch),
+            Profile::BaseEnhanced,
+            2,
+        ),
+        (LoudspeakerLayout::Mono, Profile::Simple, 0),
+        (LoudspeakerLayout::Stereo, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch5_1, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch5_1_2, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch5_1_4, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch7_1, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch7_1_2, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch7_1_4, Profile::Simple, 0),
+        (LoudspeakerLayout::Ch3_1_2, Profile::Simple, 0),
+        (LoudspeakerLayout::Binaural, Profile::Simple, 0),
+    ] {
+        let (substream_count, coupled_substream_count) = layout
+            .single_layer_substream_counts()
+            .expect("every named layout has reference substream counts");
+        let (encoder, manifest) = build_counts(layout, substream_count, coupled_substream_count)
+            .unwrap_or_else(|error| panic!("{layout:?} did not build: {error:?}"));
+        assert_eq!(manifest.sequence_profile(), profile, "{layout:?}");
+        let header = &encoder.descriptors().sequence_header;
+        assert_eq!(header.primary_profile, wire, "{layout:?} primary_profile");
+        assert_eq!(
+            header.additional_profile, wire,
+            "{layout:?} additional_profile"
+        );
+    }
+}
+
+#[test]
+fn a_stereo_presentation_and_an_expanded_presentation_make_a_base_enhanced_sequence() {
+    // The stereo presentation alone needs Simple; the expanded one needs
+    // Base-Enhanced. The highest presentation sets the sequence header.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let stereo = add_fresh_element(&mut builder, codec, stereo_element());
+    let lfe = add_fresh_element(
+        &mut builder,
+        codec,
+        element_with_layout(LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe)),
+    );
+    let _stereo_presentation =
+        builder.add_mix_presentation(vec![stereo], presentation_for_elements(&[99], 100, 110));
+    let _lfe_presentation =
+        builder.add_mix_presentation(vec![lfe], presentation_for_elements(&[100], 200, 210));
+
+    let (encoder, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+    assert_eq!(encoder.descriptors().sequence_header.primary_profile, 2);
+    assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
+}
+
+#[test]
 fn build_rejects_codec_configs_with_mismatched_frame_timing() -> iamf::Result<()> {
     let mut builder = EncoderBuilder::new();
     let lpcm = builder.add_codec_config(lpcm_config());

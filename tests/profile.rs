@@ -287,6 +287,112 @@ fn every_named_expanded_layout_has_its_normative_channel_count() {
 }
 
 #[test]
+fn every_named_expanded_layout_alone_selects_base_enhanced() {
+    // Literal rows, so a regression in the floor cannot hide behind a derived
+    // expectation. iamf-tools profile_filter.cc:165-171 erases Simple and Base
+    // for kLayoutExpanded, and the 13 named values keep Base-Enhanced.
+    for layout in [
+        ExpandedLoudspeakerLayout::Lfe,
+        ExpandedLoudspeakerLayout::StereoS,
+        ExpandedLoudspeakerLayout::StereoSs,
+        ExpandedLoudspeakerLayout::StereoRs,
+        ExpandedLoudspeakerLayout::StereoTf,
+        ExpandedLoudspeakerLayout::StereoTb,
+        ExpandedLoudspeakerLayout::Top4Ch,
+        ExpandedLoudspeakerLayout::Ch3_0,
+        ExpandedLoudspeakerLayout::Ch9_1_6,
+        ExpandedLoudspeakerLayout::StereoF,
+        ExpandedLoudspeakerLayout::StereoSi,
+        ExpandedLoudspeakerLayout::StereoTpSi,
+        ExpandedLoudspeakerLayout::Top6Ch,
+    ] {
+        let elements = vec![element(0, LoudspeakerLayout::Expanded(layout))];
+        assert_eq!(
+            select(&elements),
+            Ok((Profile::BaseEnhanced, Profile::BaseEnhanced)),
+            "expanded {layout:?} alone"
+        );
+    }
+
+    // Control: the standard layouts alone keep the count tiers.
+    for layout in [
+        LoudspeakerLayout::Mono,
+        LoudspeakerLayout::Stereo,
+        LoudspeakerLayout::Ch5_1,
+        LoudspeakerLayout::Ch5_1_2,
+        LoudspeakerLayout::Ch5_1_4,
+        LoudspeakerLayout::Ch7_1,
+        LoudspeakerLayout::Ch7_1_2,
+        LoudspeakerLayout::Ch7_1_4,
+        LoudspeakerLayout::Ch3_1_2,
+        LoudspeakerLayout::Binaural,
+    ] {
+        let elements = vec![element(0, layout)];
+        assert_eq!(
+            select(&elements),
+            Ok((Profile::Simple, Profile::Simple)),
+            "standard {layout:?} alone"
+        );
+    }
+}
+
+#[test]
+fn ambisonics_plus_an_expanded_lfe_selects_base_enhanced_not_base() {
+    // FOA + expanded LFE: 2 elements and 5 channels, which the count tiers
+    // alone would make Base. The same FOA + mono is Base, so the floor, not
+    // the counts, decides.
+    let foa = ambisonics_element(4).expect("an FOA element builds");
+    let with_lfe = vec![
+        foa.clone(),
+        element(
+            1,
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe),
+        ),
+    ];
+    assert_eq!(
+        select(&with_lfe),
+        Ok((Profile::BaseEnhanced, Profile::BaseEnhanced))
+    );
+
+    let with_mono = vec![foa, element(1, LoudspeakerLayout::Mono)];
+    assert_eq!(select(&with_mono), Ok((Profile::Base, Profile::Base)));
+}
+
+#[test]
+fn ceilings_are_checked_before_the_expanded_floor() {
+    // Expanded 9.1.6 + 7.1.4 is exactly 28 channels: within the ceiling.
+    let mut elements = vec![
+        element(
+            0,
+            LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Ch9_1_6),
+        ),
+        element(1, LoudspeakerLayout::Ch7_1_4),
+    ];
+    assert_eq!(
+        select(&elements),
+        Ok((Profile::BaseEnhanced, Profile::BaseEnhanced))
+    );
+
+    // One more channel: the ceiling wins over the floor.
+    elements.push(element(2, LoudspeakerLayout::Mono));
+    let err = select(&elements).expect_err("29 channels exceed every profile");
+    assert_eq!(err.kind(), &ErrorKind::ChannelCountExceedsProfile);
+
+    // 29 expanded LFE elements: 29 channels too, but the element ceiling is
+    // checked first.
+    let lfes: Vec<AudioElement> = (0..29)
+        .map(|id| {
+            element(
+                id,
+                LoudspeakerLayout::Expanded(ExpandedLoudspeakerLayout::Lfe),
+            )
+        })
+        .collect();
+    let err = select(&lfes).expect_err("29 elements exceed every profile");
+    assert_eq!(err.kind(), &ErrorKind::ElementCountExceedsProfile);
+}
+
+#[test]
 fn sixteen_channels_in_one_element_select_simple() {
     assert_eq!(SIMPLE_MAX_CHANNELS, 16);
     // TOA alone: one element, 16 channels. No channel-based layout without an
