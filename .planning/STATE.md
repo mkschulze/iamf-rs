@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-12 — pinned Rustfmt remediation landed; fresh release gates passed
+Last activity: 2026-09-13 - Completed quick task 260913-js8: fix the count-field preallocation memory issue
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -144,6 +144,12 @@ Recent decisions affecting current work:
   remains due diligence on the inbound grant.
 - ISO-BMFF (v2) is the licence contamination milestone and was not researched at all. `gpac` is
   LGPL-2.1 and forbidden.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260913-js8 | fix the count-field preallocation memory issue | 2026-09-13 | 1c5a5dd | [260913-js8-fix-the-count-field-preallocation-memory](./quick/260913-js8-fix-the-count-field-preallocation-memory/) |
 
 ### Resolved
 
