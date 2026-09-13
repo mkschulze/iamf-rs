@@ -251,6 +251,71 @@ fn build_rejects_codec_configs_with_mismatched_frame_timing() -> iamf::Result<()
     Ok(())
 }
 
+#[test]
+fn build_rejects_two_codec_configs_with_identical_timing() {
+    let mut builder = EncoderBuilder::new();
+    let first_codec = builder.add_codec_config(lpcm_config());
+    let second_codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, first_codec, stereo_element());
+    let second = add_fresh_element(&mut builder, second_codec, stereo_element());
+    let _presentation = builder.add_mix_presentation(
+        vec![first, second],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+
+    let error = builder.build().unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::MultipleCodecConfigs);
+    assert_eq!(error.at(), Location::Field("codec_configs"));
+}
+
+#[test]
+fn build_rejects_codec_configs_split_across_mix_presentations() {
+    let mut builder = EncoderBuilder::new();
+    let first_codec = builder.add_codec_config(lpcm_config());
+    let second_codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, first_codec, stereo_element());
+    let second = add_fresh_element(&mut builder, second_codec, stereo_element());
+    let _first_presentation =
+        builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));
+    let _second_presentation =
+        builder.add_mix_presentation(vec![second], presentation_for_elements(&[100], 200, 210));
+
+    let error = builder.build().unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::MultipleCodecConfigs);
+    assert_eq!(error.at(), Location::Field("codec_configs"));
+}
+
+#[test]
+fn build_rejects_a_declared_but_unreferenced_second_codec_config() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let _unreferenced = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    let _presentation =
+        builder.add_mix_presentation(vec![element], presentation_for_elements(&[99], 100, 110));
+
+    let error = builder.build().unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::MultipleCodecConfigs);
+    assert_eq!(error.at(), Location::Field("codec_configs"));
+}
+
+#[test]
+fn one_codec_config_shared_by_four_elements_in_one_sub_mix_builds() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let elements = (0..4)
+        .map(|_| add_fresh_element(&mut builder, codec, stereo_element()))
+        .collect();
+    let _presentation = builder.add_mix_presentation(
+        elements,
+        presentation_for_elements(&[99, 100, 101, 102], 100, 110),
+    );
+
+    let (encoder, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+    assert_eq!(encoder.descriptors().codec_configs.len(), 1);
+}
+
 fn lpcm_config() -> CodecConfig {
     CodecConfig::lpcm(
         42,

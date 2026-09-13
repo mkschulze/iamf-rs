@@ -539,6 +539,10 @@ impl EncoderBuilder {
     }
 
     /// Declare a codec configuration.
+    ///
+    /// An IA sequence carries exactly one Codec Config (IAMF v1.1.0 `index.bs:1912`), and every
+    /// Audio Element must share it. [`EncoderBuilder::build`] rejects a builder that declared more
+    /// than one with [`ErrorKind::MultipleCodecConfigs`].
     pub fn add_codec_config(&mut self, config: CodecConfig) -> CodecConfigHandle {
         let handle = CodecConfigHandle {
             generation: self.generation,
@@ -685,6 +689,9 @@ impl EncoderBuilder {
     }
 
     /// Validate every static declaration, allocate deterministic ids, and freeze it.
+    ///
+    /// Validation includes the single-Codec-Config rule: more than one declared Codec Config
+    /// fails with [`ErrorKind::MultipleCodecConfigs`].
     pub fn build(mut self) -> Result<(Encoder, IdManifest)> {
         self.resolve_parameter_references()?;
         self.validate_declarations()?;
