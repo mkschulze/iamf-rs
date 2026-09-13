@@ -397,6 +397,11 @@ pub fn write_obu(w: &mut BitWriter, header: &ObuHeader, payload: &[u8]) -> Resul
 /// first payload byte. Returns the header and `obu_size` itself — the payload
 /// length is `obu_size` minus whatever the after-size fields consumed, which
 /// only the caller can attribute.
+///
+/// The after-size fields are read inside `obu_size`: a trim field or extension
+/// header that runs past it is [`ErrorKind::TruncatedObu`] at the OBU's first
+/// byte (IAMF v1.1.0 `index.bs:548`). The payload itself need not be present in
+/// the input, so a header-only read of a truncated buffer still succeeds.
 pub fn read_obu_header(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32)> {
     let (header, obu_size, _) = read_obu_header_parts(r)?;
     Ok((header, obu_size))
@@ -413,6 +418,7 @@ pub fn read_obu_header(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32)> {
 /// PARSE-04). Deriving it would put every subsequent byte offset in the file
 /// wrong for exactly the files that are hardest to debug.
 pub(crate) fn read_obu_header_parts(r: &mut BitCursor<'_>) -> Result<(ObuHeader, u32, u64)> {
+    let obu_start = r.byte_position();
     let obu_type = ObuType::from_value(u8::try_from(r.read_unsigned(5)?).unwrap_or(0));
     let obu_redundant_copy = r.read_bool()?;
     let trimming_status_flag = r.read_bool()?;
@@ -430,7 +436,72 @@ pub(crate) fn read_obu_header_parts(r: &mut BitCursor<'_>) -> Result<(ObuHeader,
         Location::InputOffset(size_start.saturating_sub(1)),
     )?;
     let after_size_start = r.byte_position();
+    let declared = usize::try_from(obu_size)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(obu_start)))?;
+    let available = r.bytes_remaining();
+    let bounded_by_obu_size = declared <= available;
 
+    // The after-size fields are read through a window, never from `r` directly,
+    // so no trim or extension byte can be read or copied past `obu_size`. The
+    // window is cut from a *clone*: header-only readers (`read_obu_header`,
+    // `dump_one_obu`, `parse_sequence`'s inspection) may not have the payload in
+    // the input, so the parent must not be advanced past it, and the bound is
+    // the smaller of `obu_size` and the input.
+    let mut window = r.clone().sub_reader(declared.min(available))?;
+    let (type_specific, extension) =
+        read_fields_after_obu_size(&mut window, obu_type, trimming_status_flag, extension_flag)
+            .map_err(|error| {
+                // Running out of the window when `obu_size` was the bound is an
+                // after-size overrun: the same kind and offset
+                // `read_obu_with_header` already reports for that defect, so
+                // `read_obu_with` and `parse_sequence` callers see no change.
+                // Anything else keeps its absolute input offset.
+                if bounded_by_obu_size && error.kind() == &ErrorKind::UnexpectedEndOfInput {
+                    Error::new(ErrorKind::TruncatedObu, Location::InputOffset(obu_start))
+                } else {
+                    error.with_input_base(after_size_start)
+                }
+            })?;
+
+    let after_size_bytes = window.byte_position();
+    let consumed = usize::try_from(after_size_bytes)
+        .map_err(|_| Error::new(ErrorKind::ObuTooLarge, Location::InputOffset(obu_start)))?;
+    // Cannot fail: `consumed` is at most the window length, which is at most
+    // `available`. It leaves the parent on the first payload byte.
+    r.read_uint8_span(consumed)?;
+
+    Ok((
+        ObuHeader {
+            obu_type,
+            obu_redundant_copy,
+            type_specific,
+            extension,
+        },
+        obu_size,
+        after_size_bytes,
+    ))
+}
+
+// ref: IAMF v1.1.0 index.bs:548 (obu_size SHALL include the trimming and extension fields)
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ReadAndValidate
+// ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c IAMF_OBU_split
+// DISAGREEMENT: iamf-tools rejects a negative remaining payload
+// (`obu_header.cc:336`) only after reading the fields and resizing the
+// extension to the wire length (`:327`). libiamf wraps the uint32 payload size
+// (`IAMF_OBU.c:246-248`) and does not reject at all. The spec and iamf-tools
+// are stricter than libiamf and win; reading inside the window is stricter
+// than iamf-tools on allocation and reaches the same verdict.
+/// Read the trimming fields and the extension header that follow `obu_size`.
+///
+/// The caller must pass a cursor already bounded to the OBU (the
+/// `obu_size`-bounded window cut by [`read_obu_header_parts`]); offsets in any
+/// error are relative to that window.
+fn read_fields_after_obu_size(
+    r: &mut BitCursor<'_>,
+    obu_type: ObuType,
+    trimming_status_flag: bool,
+    extension_flag: bool,
+) -> Result<(TypeSpecific, Option<Vec<u8>>)> {
     // The reader is deliberately NOT stricter than the reference. It does not
     // apply `validate_header`'s two rules: `libiamf@v1.1.0` reads the trim
     // fields for *any* type whose bit 6 is set, so this is what the pinned
@@ -455,35 +526,19 @@ pub(crate) fn read_obu_header_parts(r: &mut BitCursor<'_>) -> Result<(ObuHeader,
         None
     };
 
-    let after_size_bytes = r
-        .byte_position()
-        .checked_sub(after_size_start)
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::ObuSizeOverflow,
-                Location::InputOffset(after_size_start),
-            )
-        })?;
-
-    Ok((
-        ObuHeader {
-            obu_type,
-            obu_redundant_copy,
-            type_specific,
-            extension,
-        },
-        obu_size,
-        after_size_bytes,
-    ))
+    Ok((type_specific, extension))
 }
 
-// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ReadFieldsAfterObuSize
+// ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::ReadAndValidate
 /// Read `extension_header_size` and exactly that many bytes.
 ///
 /// The length is attacker-controlled and drives an allocation, so it goes
 /// through `read_uint8_span`, which caps it against `bytes_remaining()` before
 /// anything is reserved — the one rule every count in this format obeys
-/// (`src/bits/reader.rs`, threat T-01-19).
+/// (`src/bits/reader.rs`, threat T-01-19). The cursor it gets is already
+/// bounded by `obu_size`, so the cap is the smaller of `obu_size` and the
+/// input, and the copy is at most `obu_size` bytes (at most 2 MiB after
+/// `validate_obu_size`).
 fn read_extension_header(r: &mut BitCursor<'_>) -> Result<Vec<u8>> {
     let start = r.byte_position();
     let len = r.read_uleb128()?;

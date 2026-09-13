@@ -67,6 +67,7 @@ pub enum ErrorKind {
     ObuSizeOverflow,
     #[error("OBU exceeds the 2 MiB maximum")]
     ObuTooLarge,
+    /// Also reported when the trimming or extension fields run past obu_size (IAMF v1.1.0 index.bs:548).
     #[error("OBU payload is shorter than obu_size claims")]
     TruncatedObu,
     #[error("payload is not byte-aligned after the size fields")]
@@ -246,8 +247,10 @@ impl Error {
     /// Translate an error raised by a bounded payload reader into the parent
     /// input's coordinate space.
     ///
-    /// Header errors already originate on the parent cursor and must not pass
-    /// through this helper. Sequence dispatch applies it only inside the
+    /// Byte 0 and `obu_size` errors originate on the parent cursor and must not
+    /// pass through this helper. The after-size fields, however, are read
+    /// through an `obu_size`-bounded window, and `read_obu_header_parts`
+    /// rebases their errors with it. Sequence dispatch applies it inside the
     /// payload callback handed to the central OBU reader.
     pub(crate) fn with_input_base(mut self, base: u64) -> Self {
         if let Location::InputOffset(relative) = self.at {

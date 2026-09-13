@@ -20,7 +20,7 @@
 
 use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
-use iamf::error::ErrorKind;
+use iamf::error::{ErrorKind, Location};
 use iamf::obu::{ObuHeader, ObuType, Trimming, TypeSpecific};
 
 /// `write_obu` into a fresh writer, returning the finished bytes.
@@ -201,6 +201,10 @@ fn a_trimmed_audio_frame_reads_its_trim_values_back_in_the_same_order() {
         }))
     );
     assert!(header.trimming_status_flag());
+    // The control for the `min()` clamp on the after-size window: obu_size 514
+    // with the payload absent from the input must stay readable header-only,
+    // and the cursor stops on the first (missing) payload byte.
+    assert_eq!(r.byte_position(), 5);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,20 +333,175 @@ fn the_extension_header_is_written_after_both_trim_fields() {
 }
 
 /// T-01-19: `extension_header_size` is attacker-controlled and drives an
-/// allocation, so it is capped against the remaining input before anything is
-/// reserved.
+/// allocation, so it is capped against `obu_size` and the remaining input,
+/// whichever is smaller, before anything is reserved.
 #[test]
 fn an_extension_length_past_the_end_of_the_input_is_refused_without_allocating() {
-    // Claims a 200-byte extension inside a five-byte buffer.
+    // Claims a 200-byte extension inside a five-byte buffer. `f9` = type 31,
+    // extension flag; obu_size 9 is past the input, so the input is the bound
+    // and the extension bytes (from offset 4) run off its end.
     let bytes = hex!("f9 09 c8 01 00");
     let mut r = BitCursor::new(&bytes);
 
-    let err = iamf::obu::read_obu_header(&mut r)
-        .expect_err("the length is past the end of the input")
-        .kind()
-        .clone();
+    let err =
+        iamf::obu::read_obu_header(&mut r).expect_err("the length is past the end of the input");
 
-    assert_eq!(err, ErrorKind::UnexpectedEndOfInput);
+    assert_eq!(err.kind(), &ErrorKind::UnexpectedEndOfInput);
+    assert_eq!(err.at(), Location::InputOffset(4));
+}
+
+// ---------------------------------------------------------------------------
+// After-size fields are bounded by obu_size (review [HIGH], 2026-09-13)
+//
+// IAMF v1.1.0 index.bs:548: obu_size SHALL include the trimming and extension
+// fields. A field that runs past obu_size is a TruncatedObu at the OBU's first
+// byte, through both the header-only and the whole-OBU path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_trim_pair_outside_a_zero_obu_size_is_a_truncated_obu() {
+    // `32` = type 6 (Audio Frame Id0), trimming flag; obu_size 0; `40 07` outside.
+    let bytes = hex!("32 00 40 07");
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the trim pair is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+
+    let err = iamf::obu::read_obu_with(&mut BitCursor::new(&bytes), |_| Ok(()))
+        .expect_err("the trim pair is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+}
+
+#[test]
+fn a_second_trim_field_outside_obu_size_is_a_truncated_obu() {
+    // `32` = type 6, trimming flag; obu_size 1 holds `40` only, `07` is outside.
+    let bytes = hex!("32 01 40 07");
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the start trim is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+
+    let err = iamf::obu::read_obu_with(&mut BitCursor::new(&bytes), |_| Ok(()))
+        .expect_err("the start trim is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+}
+
+#[test]
+fn an_extension_size_outside_a_zero_obu_size_is_a_truncated_obu() {
+    // `01` = type 0 (Codec Config), extension flag; obu_size 0; `01 aa` outside.
+    let bytes = hex!("01 00 01 aa");
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the extension header is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+
+    let err = iamf::obu::read_obu_with(&mut BitCursor::new(&bytes), |_| Ok(()))
+        .expect_err("the extension header is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+}
+
+#[test]
+fn a_zero_extension_size_byte_outside_obu_size_is_still_a_truncated_obu() {
+    // `f9` = type 31, extension flag; obu_size 0; the `00` extension size is outside.
+    let bytes = hex!("f9 00 00");
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the extension size byte is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+
+    let err = iamf::obu::read_obu_with(&mut BitCursor::new(&bytes), |_| Ok(()))
+        .expect_err("the extension size byte is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+}
+
+#[test]
+fn extension_bytes_outside_obu_size_are_a_truncated_obu() {
+    // `f9` = type 31, extension flag; obu_size 1 holds the size `02`, `aa bb` outside.
+    let bytes = hex!("f9 01 02 aa bb");
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the extension bytes are outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+
+    let err = iamf::obu::read_obu_with(&mut BitCursor::new(&bytes), |_| Ok(()))
+        .expect_err("the extension bytes are outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+}
+
+#[test]
+fn an_extension_length_inside_the_input_but_past_obu_size_is_refused() {
+    // `f9` = type 31, extension flag; obu_size 2 holds only the first two bytes
+    // of the uleb128 `80 80 40` (1 MiB). The input does hold 1 MiB after it, so
+    // only obu_size can stop a 1 MiB copy for a two-byte OBU.
+    let mut bytes = hex!("f9 02 80 80 40").to_vec();
+    bytes.extend_from_slice(&vec![0; 1 << 20]);
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the extension length is past obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(0));
+}
+
+#[test]
+fn after_size_fields_that_exactly_fill_obu_size_read_back_and_round_trip() {
+    // `33` = type 6, trimming flag, extension flag; obu_size 4 = `40 07 01 aa`.
+    let bytes = hex!("33 04 40 07 01 aa");
+    let mut r = BitCursor::new(&bytes);
+
+    let (header, obu_size) = iamf::obu::read_obu_header(&mut r).expect("exact fit");
+
+    assert_eq!(
+        header.type_specific,
+        TypeSpecific::Trimming(Some(Trimming {
+            at_end: 64,
+            at_start: 7,
+        }))
+    );
+    assert_eq!(header.extension.as_deref(), Some(hex!("aa").as_slice()));
+    assert_eq!(obu_size, 4);
+    assert_eq!(r.byte_position(), 6);
+    assert_eq!(emit(&header, &[]).as_slice(), bytes.as_slice());
+
+    let obu = iamf::obu::read_obu_with(&mut BitCursor::new(&bytes), |payload| {
+        Ok(payload.bytes_remaining())
+    })
+    .expect("exact fit");
+    assert_eq!(obu.payload, 0);
+    assert!(obu.trailing.is_empty());
+}
+
+#[test]
+fn an_overlong_trim_field_inside_obu_size_reports_its_absolute_offset() {
+    // `32` = type 6, trimming flag; obu_size 6 holds `ff ff ff ff 7f 00`, and the
+    // end trim starting at offset 2 exceeds u32.
+    let bytes = hex!("32 06 ff ff ff ff 7f 00");
+
+    let err = iamf::obu::read_obu_header(&mut BitCursor::new(&bytes))
+        .expect_err("the end trim exceeds u32");
+    assert_eq!(err.kind(), &ErrorKind::Leb128ValueTooLarge);
+    assert_eq!(err.at(), Location::InputOffset(2));
+}
+
+#[test]
+fn a_truncated_after_size_field_in_a_later_obu_is_reported_at_that_obu_start() {
+    // A Temporal Delimiter (`20 00`), then `01 00 01 aa` at offset 2: a Codec
+    // Config with the extension flag and obu_size 0.
+    let bytes = hex!("20 00 01 00 01 aa");
+
+    let err = iamf::sequence::parse_sequence(&bytes)
+        .expect_err("the second OBU's extension is outside obu_size");
+    assert_eq!(err.kind(), &ErrorKind::TruncatedObu);
+    assert_eq!(err.at(), Location::InputOffset(2));
 }
 
 // ---------------------------------------------------------------------------
