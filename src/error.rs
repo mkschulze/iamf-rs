@@ -156,6 +156,11 @@ pub enum ErrorKind {
     // ref: IAMF v1.1.0 index.bs:1337-1341 (parsers SHALL ignore the Mix Presentation)
     #[error("headphones_rendering_mode is reserved")]
     ReservedHeadphonesRenderingMode,
+    /// A Mix Presentation references the same Audio Element more than once.
+    // ref: IAMF v1.1.0 index.bs:1280; iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:41-54 ValidateUniqueAudioElementIds
+    // DISAGREEMENT: libiamf@v1.1.0 has no check; spec and iamf-tools are stricter and win
+    #[error("a Mix Presentation references the same Audio Element more than once")]
+    DuplicateMixPresentationAudioElement,
     #[error("a mix-gain parameter_rate differs from the Codec Config output sample rate")]
     ParameterRateMismatch,
     #[error("a temporal unit references an unknown substream handle")]

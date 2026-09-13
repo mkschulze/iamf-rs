@@ -1114,7 +1114,42 @@ impl EncoderBuilder {
                     Location::Field("headphones_rendering_mode"),
                 ));
             }
-            validate_findings(declaration.presentation.validate())?;
+            // Checked on handles: template ids are placeholders until lowering.
+            // ref: IAMF v1.1.0 index.bs:1280 (no duplicate audio_element_id within one Mix Presentation)
+            // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:41-54 ValidateUniqueAudioElementIds (read :550, write :496)
+            if declaration
+                .audio_elements
+                .iter()
+                .enumerate()
+                .any(|(position, handle)| {
+                    declaration
+                        .audio_elements
+                        .iter()
+                        .take(position)
+                        .any(|other| other == handle)
+                })
+            {
+                return Err(Error::new(
+                    ErrorKind::DuplicateMixPresentationAudioElement,
+                    Location::Field("mix_presentation.audio_elements"),
+                ));
+            }
+            // Templates carry placeholder ids (tests/support/parallax_contract.rs
+            // uses 0 for every element), so presentation findings are checked on
+            // the ids build() will write. Distinct handles give distinct ids, so
+            // the duplicate-id finding cannot fire here and the dedicated kind
+            // above stays the only duplicate signal. The layout checks below
+            // keep reading the template.
+            let mut lowered = declaration.presentation.clone();
+            for (element, handle) in lowered
+                .sub_mixes
+                .iter_mut()
+                .flat_map(|sub_mix| sub_mix.elements.iter_mut())
+                .zip(&declaration.audio_elements)
+            {
+                element.audio_element_id = u32::try_from(handle.index).map_err(allocation_error)?;
+            }
+            validate_findings(lowered.validate())?;
             for sub_mix in &declaration.presentation.sub_mixes {
                 for layout in &sub_mix.layouts {
                     use crate::model::layout::SoundSystem;

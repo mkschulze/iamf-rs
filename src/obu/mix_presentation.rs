@@ -387,6 +387,32 @@ impl MixPresentation {
                 ),
             });
         }
+        // ref: IAMF v1.1.0 index.bs:1280
+        // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:41-54 ValidateUniqueAudioElementIds (read :550, write :496)
+        // DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_decoder.c:1284-1337 does not check; spec and iamf-tools are stricter and win
+        let references: Vec<u32> = self
+            .sub_mixes
+            .iter()
+            .flat_map(|sub_mix| &sub_mix.elements)
+            .map(|element| element.audio_element_id)
+            .collect();
+        for (position, id) in references.iter().enumerate() {
+            if references
+                .iter()
+                .take(position)
+                .any(|earlier| earlier == id)
+            {
+                findings.push(Finding {
+                    at: Location::Field("sub_mix.audio_element_id"),
+                    message: format!(
+                        "mix presentation {} references audio_element_id {id} more than once; \
+                         there SHALL be no duplicate audio_element_id within one Mix \
+                         Presentation (IAMF v1.1.0 index.bs:1280)",
+                        self.mix_presentation_id
+                    ),
+                });
+            }
+        }
         for sub_mix in &self.sub_mixes {
             findings.extend(sub_mix.validate());
             for element in &sub_mix.elements {

@@ -726,6 +726,109 @@ fn a_reserved_primary_profile_adds_no_profile_finding() {
     assert_eq!(profile_findings(set.validate()), vec![]);
 }
 
+/// Only the th8 Mix Presentation findings, in their returned order.
+fn th8_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .filter(|finding| {
+            matches!(
+                finding.at,
+                Location::Field(
+                    "num_sub_mixes" | "sub_mix.audio_element_id" | "headphones_rendering_mode"
+                )
+            )
+        })
+        .collect()
+}
+
+/// The duplicate `audio_element_id` finding.
+fn dup(mix_presentation_id: u32, audio_element_id: u32) -> Finding {
+    Finding {
+        at: Location::Field("sub_mix.audio_element_id"),
+        message: format!(
+            "mix presentation {mix_presentation_id} references audio_element_id \
+             {audio_element_id} more than once; there SHALL be no duplicate audio_element_id \
+             within one Mix Presentation (IAMF v1.1.0 index.bs:1280)"
+        ),
+    }
+}
+
+/// MP 42 whose first sub-mix references `ids`, in order.
+fn presentation_referencing(ids: &[u32]) -> Option<MixPresentation> {
+    let mut presentation = support::published_mix_presentation().payload;
+    let sub_mix = presentation.sub_mixes.first_mut()?;
+    sub_mix.elements = ids
+        .iter()
+        .map(|&id| reference_to(id))
+        .collect::<Option<Vec<_>>>()?;
+    Some(presentation)
+}
+
+#[test]
+fn mix_presentation_validate_reports_each_later_duplicate_audio_element_id() {
+    let mut pushed = support::published_mix_presentation().payload;
+    pushed
+        .sub_mixes
+        .first_mut()
+        .unwrap()
+        .elements
+        .push(reference_to(300).unwrap());
+    assert_eq!(th8_findings(pushed.validate()), vec![dup(42, 300)]);
+
+    let repeated = presentation_referencing(&[300, 301, 300, 300]).unwrap();
+    assert_eq!(
+        th8_findings(repeated.validate()),
+        vec![dup(42, 300), dup(42, 300)]
+    );
+
+    let distinct = presentation_referencing(&[300, 301]).unwrap();
+    assert_eq!(th8_findings(distinct.validate()), vec![]);
+}
+
+#[test]
+fn mix_presentation_duplicate_scope_spans_sub_mixes() {
+    // Presentation scope, as iamf-tools reads IAMF v1.1.0 index.bs:1280.
+    let mut presentation = support::published_mix_presentation().payload;
+    let extra = presentation.sub_mixes.first().unwrap().clone();
+    presentation.sub_mixes.push(extra);
+    let duplicates: Vec<Finding> = presentation
+        .validate()
+        .into_iter()
+        .filter(|finding| finding.at == Location::Field("sub_mix.audio_element_id"))
+        .collect();
+    assert_eq!(duplicates, vec![dup(42, 300)]);
+}
+
+#[test]
+fn both_validators_carry_the_duplicate_audio_element_finding() {
+    let mut set = published_descriptor_set();
+    set.mix_presentations
+        .first_mut()
+        .and_then(|presentation| presentation.sub_mixes.first_mut())
+        .unwrap()
+        .elements
+        .push(reference_to(300).unwrap());
+    assert_eq!(th8_findings(set.validate()), vec![dup(42, 300)]);
+
+    let mut presentation = support::published_mix_presentation();
+    presentation
+        .payload
+        .sub_mixes
+        .first_mut()
+        .unwrap()
+        .elements
+        .push(reference_to(300).unwrap());
+    let sequence = ParsedSequence {
+        obus: vec![
+            SequenceObu::IaSequenceHeader(support::published_sequence_header()),
+            SequenceObu::CodecConfig(support::published_codec_config()),
+            SequenceObu::AudioElement(support::published_audio_element()),
+            SequenceObu::MixPresentation(presentation),
+        ],
+    };
+    assert_eq!(th8_findings(sequence.validate()), vec![dup(42, 300)]);
+}
+
 fn published_parsed_sequence() -> Vec<SequenceObu> {
     vec![
         SequenceObu::IaSequenceHeader(support::published_sequence_header()),

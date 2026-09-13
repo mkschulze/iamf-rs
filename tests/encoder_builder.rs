@@ -260,6 +260,142 @@ fn build_accepts_binaural_headphones_rendering_mode() {
     assert_eq!(manifest.sequence_profile(), Profile::Simple);
 }
 
+// ref: IAMF v1.1.0 index.bs:1280 (no duplicate audio_element_id within one Mix Presentation)
+// ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:41-54 ValidateUniqueAudioElementIds
+#[test]
+fn build_rejects_the_same_audio_element_twice_in_one_presentation() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    builder.add_mix_presentation(
+        vec![element, element],
+        presentation_for_elements(&[99, 100], 100, 110),
+    );
+
+    let error = builder
+        .build()
+        .expect_err("iamf-tools rejects a duplicate audio_element_id on read and write");
+
+    assert_eq!(
+        error.kind(),
+        &ErrorKind::DuplicateMixPresentationAudioElement
+    );
+    assert_eq!(
+        error.at(),
+        Location::Field("mix_presentation.audio_elements")
+    );
+}
+
+#[test]
+fn build_rejects_the_same_audio_element_across_two_sub_mixes_as_sub_mix_count_first() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    let mut presentation = presentation_for_elements(&[99], 100, 110);
+    let mut second_sub_mix = presentation_for_elements(&[100], 200, 210)
+        .sub_mixes
+        .into_iter()
+        .next()
+        .expect("the helper presentation has one sub-mix");
+    second_sub_mix
+        .elements
+        .first_mut()
+        .expect("the helper sub-mix references one element")
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(2);
+    presentation.sub_mixes.push(second_sub_mix);
+    builder.add_mix_presentation(vec![element, element], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("two sub-mixes are rejected before any other presentation rule");
+
+    assert_eq!(error.kind(), &ErrorKind::SubMixCountNotOne);
+    assert_eq!(error.at(), Location::Field("num_sub_mixes"));
+}
+
+#[test]
+fn reserved_headphones_mode_wins_over_a_duplicate_handle() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    let mut presentation = presentation_for_elements(&[99, 100], 100, 110);
+    presentation
+        .sub_mixes
+        .first_mut()
+        .and_then(|sub_mix| sub_mix.elements.first_mut())
+        .expect("the helper presentation references two elements")
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(3);
+    builder.add_mix_presentation(vec![element, element], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("a reserved headphones mode is rejected before a duplicate handle");
+
+    assert_eq!(error.kind(), &ErrorKind::ReservedHeadphonesRenderingMode);
+    assert_eq!(error.at(), Location::Field("headphones_rendering_mode"));
+}
+
+#[test]
+fn a_duplicate_handle_wins_over_a_presentation_finding() {
+    let without_layouts = || {
+        let mut presentation = presentation_for_elements(&[99, 100], 100, 110);
+        presentation
+            .sub_mixes
+            .first_mut()
+            .expect("the helper presentation has one sub-mix")
+            .layouts
+            .clear();
+        presentation
+    };
+
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(&mut builder, codec, stereo_element());
+    builder.add_mix_presentation(vec![element, element], without_layouts());
+    let error = builder
+        .build()
+        .expect_err("the dedicated duplicate kind is reported before generic findings");
+    assert_eq!(
+        error.kind(),
+        &ErrorKind::DuplicateMixPresentationAudioElement
+    );
+    assert_eq!(
+        error.at(),
+        Location::Field("mix_presentation.audio_elements")
+    );
+
+    // Control: distinct handles reach the generic presentation finding.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, codec, stereo_element());
+    let second = add_fresh_element(&mut builder, codec, stereo_element());
+    builder.add_mix_presentation(vec![first, second], without_layouts());
+    let error = builder
+        .build()
+        .expect_err("a sub-mix without a stereo layout is a presentation finding");
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), Location::Field("descriptors"));
+}
+
+#[test]
+fn distinct_elements_with_equal_template_ids_build() {
+    // Templates carry placeholder ids; build() lowers them from the handles,
+    // so equal template ids on distinct handles are not duplicates.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let first = add_fresh_element(&mut builder, codec, stereo_element());
+    let second = add_fresh_element(&mut builder, codec, stereo_element());
+    builder.add_mix_presentation(
+        vec![first, second],
+        presentation_for_elements(&[0, 0], 100, 110),
+    );
+
+    let (_, manifest) = builder.build().unwrap();
+    assert_eq!(manifest.sequence_profile(), Profile::Base);
+}
+
 #[test]
 fn two_presentations_sum_channels_against_the_sequence_wide_base_enhanced_ceiling() {
     // Two 16-channel TOA elements, one per Presentation, total 32 channels
