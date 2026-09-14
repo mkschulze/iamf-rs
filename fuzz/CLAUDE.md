@@ -10,7 +10,8 @@ that `libfuzzer-sys` is absent from the root lock.
 
 ## Targets
 
-- `parse_sequence`: raw bytes → `iamf::sequence::parse_sequence`. Any panic counts as a failure.
+- `parse_sequence`: raw bytes → both `iamf::sequence::parse_sequence` and `iamf::sequence::SequenceReader`.
+  Any panic, or any disagreement between the two, counts as a failure.
   Seeds are 4 positive `iamf-tools@v2.1.0` files whose SHA-256 is pinned in `CORPUS.md`.
 - `obu_roundtrip` (needs `--features roundtrip-model`, which enables `iamf/fuzzing`):
   `Unstructured` → a bounded model from `src/fuzzing.rs` → bytes → parse, then checks the model
