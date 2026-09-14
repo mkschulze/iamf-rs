@@ -267,8 +267,11 @@ Trust this section over any summary, and verify anything not listed here against
    for now"*; ambisonics is mono mode only, projection stubbed. **A conformant file is a single-layer
    element.** The BCG/DCG ladder, demixing weights and recon gain are a later quality feature, not an
    entry fee.
-3. **Three codecs shipped, not four:** LPCM, FLAC, Opus. **No AAC-LC**, though the spec lists it. A
-   decoder needs all four; an encoder evidently does not.
+3. **Three codecs shipped, not four (as of the 2026-09-07 reference read):** LPCM, FLAC, Opus. **No
+   AAC-LC**, though the spec lists it. A decoder needs all four; an encoder evidently did not, at the
+   time. *Updated 2026-09-14:* this crate now frames a fourth codec, AAC-LC, matching the same
+   framing-only boundary already established for FLAC/Opus — it accepts caller-supplied pre-encoded
+   `raw_data_block()` access units, it never encodes or decodes AAC-LC.
 4. **Profiles:** Simple = 1 element / 16 channels · Base = 2 / 18 · Base-Enhanced = 28 / 28.
 5. **Layouts** (from the reference's own enumeration): standard 0–12 are Mono, Stereo, 5.1, 5.1.2,
    5.1.4, 7.1, 7.1.2, 7.1.4, 3.1.2, Binaural, **and HOA orders 1–3 as element layouts**. Expanded
@@ -303,7 +306,7 @@ trimming metadata). The ISO-BMFF path is what a YouTube-bound `.mp4` uses.
 - Profile selection, including picking the minimum profile a project fits
 - Loudness metadata carried into the Mix Presentation (the *values* come from the caller)
 - Standalone `.iamf` first; ISO-BMFF later, **written by us** — `gpac` is LGPL and unusable
-- Codec framing for LPCM, FLAC, Opus
+- Codec framing for LPCM, FLAC, Opus, AAC-LC
 
 **Out**
 
@@ -311,8 +314,9 @@ trimming metadata). The ISO-BMFF path is what a YouTube-bound `.mp4` uses.
 - **Loudness measurement.** Parallax has a BS.1770 meter that shares its code with export
   normalisation (`MON-05`); this crate carries the numbers, it does not compute them
 - **UI of any kind**
-- **AAC-LC codec implementation** — belongs to `iamf-decode-rs`; only required wire syntax may be
-  added here when that consumer needs it
+- **AAC-LC codec encode/decode** — belongs to `iamf-decode-rs`. *Updated 2026-09-14:* the wire
+  framing syntax (typed decoder config, accepting pre-encoded `raw_data_block()` access units) is
+  now implemented here, matching FLAC/Opus; only actual encode/decode remains out of scope
 - **High-level scalable-layer authoring** — low-level wire structures already exist, but the safe
   builder defers them until a caller and conformance oracle are specified
 

@@ -53,10 +53,14 @@ but not sufficient for conformance.** The real exit criterion is a byte-diff aga
 - **Loudness measurement** — Parallax has a BS.1770 meter sharing code with export normalisation
   (`MON-05`). This crate carries the numbers; it does not compute them.
 - **UI of any kind** — this is a library.
-- **AAC-LC codec implementation** — belongs to `iamf-decode-rs`, not this wire crate. Its decoder
-  configuration syntax may be added here when that consumer requires it. *Correction 2026-09-08:* `iamf-tools` `main`
-  now ships an AAC-LC encoder, so the handoff's "three codecs shipped, not four" describes the v1.x
-  tree, not HEAD. Still out of scope for v1 here; revisit if a decoder needs it.
+- **AAC-LC codec encode/decode** — belongs to `iamf-decode-rs`, not this wire crate. *Updated
+  2026-09-14:* AAC-LC Audio Frame *framing* now ships in this crate — the typed decoder-config wire
+  syntax and accepting caller-supplied pre-encoded `raw_data_block()` access units — exactly
+  mirroring the framing-only boundary already carved out for FLAC/Opus (this crate frames, it never
+  encodes or decodes). AAC-LC *decode* remains out of scope for v1 here; that is still
+  `iamf-decode-rs`'s job. *Correction 2026-09-08:* `iamf-tools` `main` now ships an AAC-LC encoder,
+  so the handoff's original "three codecs shipped, not four" described the v1.x tree, not HEAD; this
+  crate's own codec count is now four (LPCM, FLAC, Opus, AAC-LC), all framing-only.
 - **High-level scalable-layer authoring** (BCG/DCG ladder, demixing weights, recon gain) — the
   low-level wire model already represents these structures, but the safe Phase 4 builder does not
   construct them until a caller and conformance oracle are specified. *Correction 2026-09-08:*
