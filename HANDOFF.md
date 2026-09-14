@@ -92,7 +92,15 @@ round trips where already modelled.
   `SequenceObu::UngovernedParameterBlock` (raw bytes, reported by `validate()`).
 - The low-level `iamf::obu` writers refuse model states whose bytes would not re-read as the same
   model, with the appended error kinds `ReservedAliasesDefinedValue` and `GatedFieldMismatch`.
-- `EncoderBuilder` output and its error kinds are unchanged.
+- `EncoderBuilder` output and its error kinds are unchanged (quick 260914-5c5).
+- An Audio Element with more than 256 params still parses, writes and round-trips (IAMF v1.1.0
+  requires parsers to accept any `num_parameters`). `AudioElement::validate`,
+  `DescriptorSet::validate` and `ParsedSequence::validate` report a `Finding` at
+  `Location::Field("num_parameters")`, because `iamf-tools@v2.1.0` refuses such an Audio Element
+  (`kMaxNumParameters = 256`). `EncoderBuilder::build` already refused every Audio Element param. For
+  more than 256 the element finding is checked first, so the error is `InvalidDescriptorReference` at
+  `Field("descriptors")` rather than `UnsupportedParameterData` at `Field("audio_element_params")`. No
+  `ErrorKind` was added or changed (quick 260914-kfs; decision in `CONFORMANCE-GATE.md`).
 
 ### Parse-side memory
 

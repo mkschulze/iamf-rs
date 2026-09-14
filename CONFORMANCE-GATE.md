@@ -643,6 +643,52 @@ plan 01-10; any source, test, fixture, workflow, toolchain or dependency change 
 this candidate invalidates this evidence and requires a new matrix run.
 
 
+## Reference limits diagnosed, not enforced
+
+A pinned reference can impose a resource limit that is stricter than the spec. Each such limit is
+recorded here with its disposition. An entry here is not a waiver, because no CONF clause is
+downgraded, and it is not a `DIFF-LEDGER.md` entry, because no byte differs.
+
+### `kMaxNumParameters = 256` — reported by `validate()`, not refused (user decision, 2026-09-14, quick 260914-kfs)
+
+- **Spec.** IAMF v1.1.0 `index.bs:751-754`: "Parsers SHALL support any value of
+  [=audio_element_obu/num_parameters=]." (`:754`).
+- **iamf-tools@v2.1.0 (`848c6ff`).** `iamf/obu/audio_element.h:282-287`: the class comment says it
+  "has stricter limits than the specification", with `static constexpr uint32_t kMaxNumParameters =
+  256;` ("Artificial limit on the maximum number of parameters."). `iamf/obu/audio_element.cc:97-113`
+  `ValidateNumParameters` cites the spec's "SHALL support any value", gives the rationale "To reduce
+  the risk of allocating massive amounts of memory, we limit the number of parameters.", and returns
+  `absl::UnimplementedError` "Number of parameters exceeds the maximum supported by the decoder" when
+  `num_parameters > kMaxNumParameters`. It is called on write (`:759`, `ValidateAndWritePayload`) and on
+  read (`:811`, `ReadAndValidatePayloadDerived`, before `reserve`). The limit came in with commit
+  `feb873de` (2025-11-03), "`AudioElementObu`: Limit number of parameters, to fix cases of excessive
+  fuzzer memory."
+- **libiamf@v1.1.0 (`f06e919`).** `code/src/iamf_dec/IAMF_OBU.c:455-480` `iamf_element_new` has no
+  limit. It does `IAMF_MALLOCZ(ParameterBase *, val)` for the read count and skips unknown parameter
+  types with `bs_skipABytes`.
+- **Decision.** (1) No refusal on read. (2) `AudioElement::validate` pushes a `Finding` at
+  `Location::Field("num_parameters")` for more than 256 params, and that finding also reaches
+  `DescriptorSet::validate` and `ParsedSequence::validate`. (3) Cited comments sit at the read site,
+  the write site and the finding in `src/obu/audio_element.rs`. (4) The writer does not refuse either,
+  so parse-then-write stays byte-exact (PARSE-04), as with the `param_definition_type` 0 precedent.
+- **Why "keep the stricter rule" does not apply here.** The policy carried over from 260914-1mq is to
+  satisfy both the spec and the pinned references. This limit is an artificial resource limit, not a
+  format rule. Refusing would reject spec-legal files that libiamf reads. This crate's memory is
+  already bounded without it: `read_counted` checks `bytes_remaining()`, `bounded_vec` caps
+  preallocation at 64 KiB, OBUs are capped at 2 MiB, and `SequenceReader` streams. The user decided
+  the question on 2026-09-14.
+- **Consequence for consumers.** A file with such an Audio Element parses and writes here and in
+  libiamf, but iamf-tools (the CONF-06 oracle) refuses it. The finding is the signal. `EncoderBuilder`
+  never authors Audio Element params, so this crate's encoder cannot emit one.
+- **What asserts it.** `tests/sequence_parse.rs`
+  `audio_element_with_257_params_parses_and_every_validate_reports_the_iamf_tools_limit` and
+  `audio_element_with_256_params_has_no_num_parameters_finding`; `tests/encoder_builder.rs`
+  `build_rejects_257_audio_element_params_through_the_element_finding`.
+- **Revisit when.** The iamf-tools pin moves and the limit changes or disappears (update the constant,
+  the message and the tests), or a consumer needs a hard refusal (an opt-in, caller-owned policy, per
+  the `HANDOFF.md` parse-side memory contract).
+
+
 ## Waivers
 
 ### W-1 — CONF-05 for the 24-bit **big-endian** sample format (opened 2026-09-08, plan 01-08)
