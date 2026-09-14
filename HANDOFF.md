@@ -94,6 +94,32 @@ round trips where already modelled.
   model, with the appended error kinds `ReservedAliasesDefinedValue` and `GatedFieldMismatch`.
 - `EncoderBuilder` output and its error kinds are unchanged.
 
+### Parse-side memory
+
+- The additive API is `iamf::sequence::SequenceReader`: `new`, `byte_position`, and
+  `Iterator<Item = Result<SequenceObu>>`, fused after the first error (`byte_position()` then reports
+  the start of the failing OBU). `parse_sequence` is unchanged in signature, results, error kinds and
+  offsets; it is now the reader collected. No `ErrorKind` was added or changed.
+- Measured factors (quick 260914-hoa):
+  - `parse_sequence` retains one 192-byte `SequenceObu` per OBU on the 64-bit targets probed, plus
+    payload copies.
+  - Committed fixtures measure 2.45× input in aggregate (1.2-4.0× for files of at least 2 KB).
+  - Hostile 2-byte OBU streams (`20 00`, `30 00`, `c0 00`) retain 96× input, 3.27-3.66 GB max RSS for
+    32 MiB.
+  - Through `SequenceReader` with items dropped, the same 32 MiB of `20 00` measured 34.3 MB max RSS
+    (34,299,904 B, input buffer included; `parse_sequence` measured 3.25 GB on the same run, macOS
+    x86_64).
+  - One item is at most about 55× of an OBU of up to 2 MiB (about 110 MB, `read_strings`).
+  - The parameter-definition registry still grows with every published definition, including redundant
+    descriptor copies.
+- Consumers reading untrusted or large files (`iamf-decode-rs`, `iamf-isobmff-rs`, a Parallax import)
+  should use `SequenceReader` and keep only what they need. The caller owns resource policy, for example
+  stopping on an OBU count or on `byte_position()`, just as the pinned `iamf-tools` and `libiamf`
+  decoders have no library-side budget. `ParsedSequence::validate()` and `temporal_unit_ranges()` still
+  need the whole collected model.
+- Portfolio change control does not apply: the addition is local, moves no ownership and adds no
+  cross-library object.
+
 ### Public-example audit
 
 The public documentation contains one Rust snippet, in `README.md`, and it names only
