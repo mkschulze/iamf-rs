@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-14T18:20:38.829Z",
+  "phase": "none",
+  "phase_name": "post-v1 conformance hardening (quick tasks) + AAC-LC merge + release tag",
+  "phase_dir": ".planning/quick",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "260914-5c5", "name": "tolerate opaque extension param definitions; refuse non-round-tripping writer states", "status": "done", "commits": ["b164021", "f4a4414", "10c0077", "f24a095"]},
+    {"id": "260914-hoa", "name": "streaming SequenceReader; parse-side memory contract instead of a whole-file budget", "status": "done", "commits": ["c1fb3fa", "0c34ed4", "5fa7718", "2b4c058"]},
+    {"id": "260914-kfs", "name": "kMaxNumParameters decision; validate() finding for Audio Elements with >256 params", "status": "done", "commits": ["98c80fe", "36b4289", "b70b35c"]},
+    {"id": "260914-m62", "name": "BCP-47 (RFC 5646 §2.1) well-formedness check of annotations_language", "status": "done", "commits": ["269b4f9", "40f71a4", "d23a223", "44221fe"]},
+    {"id": "260914-pyd", "name": "merge feature/aac-lc-framing into main (AAC-LC as fourth framing-only codec)", "status": "done", "commits": ["474004a", "2ba6b33", "d12590e", "1d9c463"]},
+    {"id": "release", "name": "tag v0.1.0-beta.2, pushed; Parallax portfolio maturity row updated", "status": "done", "commits": ["iamf-rs tag v0.1.0-beta.2", "Parallax 8fb7482e (local, not pushed)"]}
+  ],
+  "remaining_tasks": [
+    {"id": 1, "name": "libiamf vector harness + test-scaffolding consolidation (.planning/todos/pending/2026-09-14-libiamf-vector-harness-and-test-consolidation.md) — user said 'ja gerne einbauen' (go ahead)", "status": "not_started"},
+    {"id": 2, "name": "review the delivery-validator WIP preserved on origin/wip/delivery-validator-conformance (commit 79dafb1) — untested, found uncommitted in a stale worktree; pair with docs/superpowers/plans/2026-09-12-delivery-conformance-profile-matrix.md and docs/IAMF-V1.1-COMPLETENESS-AUDIT.md (both untracked, same 2026-09-12 origin) before deciding whether/how to build on it", "status": "not_started"},
+    {"id": 3, "name": "MixPresentationTags presence rule — needs a model change first (tags are raw trailing bytes today)", "status": "not_started"},
+    {"id": 4, "name": "older deferred items across 5c5/hoa/kfs/m62/pyd deferred-items.md files — see Required Reading", "status": "not_started"}
+  ],
+  "blockers": [],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {"action": "decide push order/target for Parallax commit 8fb7482e (docs: update iamf-rs maturity to v0.1.0-beta.2) on gsd/v1.0-milestone, currently local-only, 2 commits ahead of origin before it plus this one = 3 ahead", "context": "user said 'ok' to committing but pushing was never asked or done", "blocking": false},
+    {"action": "choose next item: libiamf vector harness (already approved), delivery-validator WIP review, or something else", "context": "three items queued, no explicit order chosen yet", "blocking": true}
+  ],
+  "decisions": [
+    {"decision": "sequential execution on main all day (isolation=none), no worktree isolation for quick-task executors", "rationale": "local main stayed ahead of origin/main for stretches, degrading harness-worktree to sequential anyway; user previously approved this pattern", "phase": "none"},
+    {"decision": "feature/aac-lc-framing merged via git merge --no-ff (merge commit, not rebase/squash)", "rationale": "user: 'ja mergen würde ich sagen, ist doch ein normales feature'; preserves branch history", "phase": "260914-pyd"},
+    {"decision": "delivery-validator WIP split onto its own branch (wip/delivery-validator-conformance) and explicitly excluded from the AAC-LC merge", "rationale": "found uncommitted, untested, in a stale worktree during pyd's merge reconnaissance; user chose 'separately review' over merging-together or discarding", "phase": "none"},
+    {"decision": "REQUIREMENTS.md DECO-03/API-06/API-09 updated for AAC-LC (user: 'ja, jetzt kurz nachziehen')", "rationale": "was flagged as out of pyd's locked doc scope (PROJECT.md+HANDOFF.md only); user approved closing the gap immediately rather than deferring", "phase": "260914-pyd"},
+    {"decision": "kMaxNumParameters (iamf-tools' 256-param artificial limit) NOT adopted on read/write; validate() finding added instead, citing iamf-tools refusing >256 while the spec requires parsers to support any count", "rationale": "the limit is iamf-tools' own resource-safety choice (commit feb873de, 'to fix cases of excessive fuzzer memory'), not a spec/interop requirement — this crate's memory amplification for that path is already bounded (bounded_vec, 2 MiB OBU cap, streaming SequenceReader)", "phase": "260914-kfs"},
+    {"decision": "annotations_language duplicate detection stays ASCII-case-insensitive (not exact-byte parity with iamf-tools, not full RFC 5646 canonicalization)", "rationale": "RFC 5646 §2.1.1 requires case-insensitive comparison; the spec is stricter than iamf-tools here and the conformance rule says the spec wins", "phase": "260914-m62"},
+    {"decision": "new git tag v0.1.0-beta.2 created (annotated) and pushed", "rationale": "user: 'tag mal ein neues release'; 83 commits since v0.1.0-beta.1, all release gates (CI + reference) green on the tagged commit 1d9c463", "phase": "none"}
+  ],
+  "uncommitted_files": [
+    "?? .DS_Store",
+    "?? docs/.DS_Store",
+    "?? docs/IAMF-V1.1-COMPLETENESS-AUDIT.md",
+    "?? docs/eclipsa-audio-plugin/",
+    "?? docs/iamf-tests/",
+    "?? docs/iamf-tools/",
+    "?? docs/iamf/",
+    "?? docs/oar/",
+    "?? docs/superpowers/plans/2026-09-12-delivery-conformance-profile-matrix.md",
+    "?? iamf-rs.code-workspace"
+  ],
+  "next_action": "Ask the user which of remaining_tasks 1-3 to start (libiamf vector harness already approved as 'go ahead' but not yet scheduled this session); if libiamf vector harness, route through /gsd-quick --research given file overlap risk with tools/build-reference.sh and tests/conformance.rs touched by today's AAC-LC merge",
+  "context_notes": "iamf-rs working tree is clean except user-owned docs/ clones, .DS_Store, iamf-rs.code-workspace, and one new untracked planning doc (docs/superpowers/plans/2026-09-12-delivery-conformance-profile-matrix.md) that pairs with the preserved delivery-validator WIP branch — none of these are staged/committed by design. Parallax working tree (separate repo, /Volumes/lab/talea/Parallax) has unrelated pre-existing uncommitted changes not touched this session (.claude/skills/parallax-stack/SKILL.md, .gsd/dispatch-isolation-sentinel.json, .planning/LICENCES.md, .planning/STATE.md/state.json, CLAUDE.md, docs/CLAUDE.md) plus this session's own commit 8fb7482e (portfolio maturity update), all on branch gsd/v1.0-milestone, 3 ahead of origin, none pushed. User communicates in German; present results in German with technical identifiers in English. Explanatory output style active: include short ★ Insight blocks."
+}
