@@ -179,5 +179,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-14
-Stopped at: Completed quick tasks 260914-0sp and 260914-1mq, pushed as 375fcaf; CI run 34790724346 and reference run 34790729874 green (FLAC/Opus CONF-05 0 differing samples); open decision: per-parse memory budget (260914-1mq deferred item 1)
+Stopped at: Completed quick task 260914-38r (float census 6 → 9 guard proofs), pushed as d629570; CI run 34793732084 green. Next: extension param definition aborts parse (quick, TDD) or per-parse memory budget (--discuss)
 Resume file: .planning/.continue-here.md
