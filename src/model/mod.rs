@@ -16,6 +16,7 @@
 //! process, so any hashed container whose order can reach the output silently
 //! breaks the four-target byte-identity guarantee.
 
+pub(crate) mod language_tag;
 pub mod layout;
 pub mod loudness;
 pub mod profile;

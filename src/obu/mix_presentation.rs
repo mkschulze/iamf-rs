@@ -22,6 +22,7 @@
 
 use crate::bits::{BitCursor, BitWriter, bounded_vec};
 use crate::error::{Error, ErrorKind, Finding, Location, Result};
+use crate::model::language_tag::is_well_formed_language_tag;
 use crate::model::layout::SoundSystem;
 use crate::model::loudness::Q7_8;
 use crate::obu::param_definition::{
@@ -408,6 +409,22 @@ impl MixPresentation {
                     message: format!(
                         "mix presentation {} lists annotations_language {:?} more than once; the \
                          same language SHALL NOT be duplicated (IAMF v1.1.0 index.bs:1273)",
+                        self.mix_presentation_id,
+                        String::from_utf8_lossy(language)
+                    ),
+                });
+            }
+        }
+        // ref: IAMF v1.1.0 index.bs:1273 ("It SHALL conform to [[!BCP-47]].")
+        // Every malformed entry is reported, after the duplicate findings; parse and write stay tolerant (quick 260914-m62)
+        for language in &self.annotations_language {
+            if !is_well_formed_language_tag(language) {
+                findings.push(Finding {
+                    at: Location::Field("annotations_language"),
+                    message: format!(
+                        "mix presentation {} lists annotations_language {:?}, which is not a \
+                         well-formed BCP-47 language tag (RFC 5646 section 2.1); it SHALL conform \
+                         to BCP-47 (IAMF v1.1.0 index.bs:1273)",
                         self.mix_presentation_id,
                         String::from_utf8_lossy(language)
                     ),

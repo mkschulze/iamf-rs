@@ -1277,6 +1277,161 @@ fn both_validators_carry_the_language_and_anchor_findings() {
     assert_eq!(wlv_findings(sequence.validate()), expected);
 }
 
+/// The malformed BCP-47 `annotations_language` finding.
+fn malformed_language(mix_presentation_id: u32, language: &str) -> Finding {
+    Finding {
+        at: Location::Field("annotations_language"),
+        message: format!(
+            "mix presentation {mix_presentation_id} lists annotations_language {language:?}, \
+             which is not a well-formed BCP-47 language tag (RFC 5646 section 2.1); it SHALL \
+             conform to BCP-47 (IAMF v1.1.0 index.bs:1273)"
+        ),
+    }
+}
+
+/// Only the `annotations_language` findings, in their returned order.
+fn language_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .filter(|finding| finding.at == Location::Field("annotations_language"))
+        .collect()
+}
+
+// User decision (quick 260914-m62): every tag that is not RFC 5646 section 2.1 well-formed is
+// reported; IAMF v1.1.0 index.bs:1273 "It SHALL conform to [[!BCP-47]]."
+#[test]
+fn mix_presentation_validate_reports_each_annotations_language_that_is_not_well_formed_bcp47() {
+    let rejected: &[&[u8]] = &[
+        b"",
+        b"-",
+        b"en_US",
+        b"-en",
+        b"en-",
+        b"en--US",
+        b"e",
+        b"12",
+        b"abcdefghi",
+        b"en-abcdefghi",
+        b"x",
+        b"x-",
+        b"en-a",
+        b"en-US-a",
+        b"en-x",
+        b"en-a-x-b",
+        b"en-x-abcdefghi",
+        b"en-US-US",
+        b"en-419-DE",
+        b"en-Latn-yue",
+        b"abcd-bbb",
+        b"aaa-bbb-ccc-ddd-eee",
+        b"i-notreal",
+        b"en US",
+        "en\u{e9}".as_bytes(),
+        &[0x65, 0x6e, 0xff],
+        b"e\0n",
+    ];
+    for tag in rejected {
+        let presentation = presentation_with(&[tag], None);
+        assert_eq!(
+            language_findings(presentation.validate()),
+            vec![malformed_language(42, &String::from_utf8_lossy(tag))],
+            "tag {:?}",
+            String::from_utf8_lossy(tag)
+        );
+    }
+}
+
+// User decision (quick 260914-m62): well-formedness only, so grandfathered, private-use and
+// unregistered-but-well-formed tags are accepted (IAMF v1.1.0 index.bs:1273).
+#[test]
+fn mix_presentation_validate_accepts_well_formed_bcp47_annotations_languages() {
+    let accepted: &[&[u8]] = &[
+        b"en",
+        b"en-us",
+        b"es-mx",
+        b"en-US",
+        b"EN-us",
+        b"zh-Hant-TW",
+        b"zh-yue-HK",
+        b"zh-min-nan",
+        b"aaa-bbb-ccc-ddd",
+        b"sr-Latn-RS",
+        b"en-Latn-zh",
+        b"es-419",
+        b"de-CH-1901",
+        b"en-0abc",
+        b"sl-rozaj-biske",
+        b"hy-Latn-IT-arevela",
+        b"abcdefgh",
+        b"en-a-bbb-x-ccc",
+        b"en-1-ab-b-ccc-dd",
+        b"x-private",
+        b"X-Priv-1",
+        b"en-x-a",
+        b"i-klingon",
+        b"I-KLINGON",
+        b"en-GB-oed",
+        b"sgn-BE-FR",
+        b"art-lojban",
+        b"qaa",
+    ];
+    for tag in accepted {
+        let presentation = presentation_with(&[tag], None);
+        assert_eq!(
+            language_findings(presentation.validate()),
+            vec![],
+            "tag {:?}",
+            String::from_utf8_lossy(tag)
+        );
+    }
+}
+
+// User decision (quick 260914-m62): the parser stays tolerant and byte-exact (PARSE-04), while
+// every validate() surface reports the malformed tags (IAMF v1.1.0 index.bs:1273).
+#[test]
+fn malformed_annotations_language_parses_round_trips_and_every_validate_reports_it() {
+    let languages: [&[u8]; 3] = [b"en_US", b"en", &[0x65, 0x6e, 0xff]];
+    let mut set = published_descriptor_set();
+    set.mix_presentations = vec![presentation_with(&languages, None)];
+    let expected = vec![
+        malformed_language(42, "en_US"),
+        malformed_language(42, "en\u{fffd}"),
+    ];
+
+    assert_eq!(language_findings(set.validate()), expected);
+
+    let bytes = support::descriptor_bytes(&set);
+    let parsed = parse_sequence(&bytes).expect("a malformed annotations_language still parses");
+    let parsed_languages: Vec<Vec<Vec<u8>>> = parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::MixPresentation(obu) => Some(obu.payload.annotations_language.clone()),
+            _ => None,
+        })
+        .collect();
+    let original: Vec<Vec<u8>> = languages.iter().map(|language| language.to_vec()).collect();
+    assert_eq!(parsed_languages, vec![original]);
+    assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+
+    assert_eq!(language_findings(parsed.validate()), expected);
+}
+
+// User decision (quick 260914-m62): duplicate findings come first, then one malformed finding per
+// entry (IAMF v1.1.0 index.bs:1273).
+#[test]
+fn duplicate_language_findings_precede_malformed_language_findings() {
+    let presentation = presentation_with(&[b"en_US", b"EN_us", b"en"], None);
+    assert_eq!(
+        language_findings(presentation.validate()),
+        vec![
+            lang(42, "EN_us"),
+            malformed_language(42, "en_US"),
+            malformed_language(42, "EN_us"),
+        ]
+    );
+}
+
 /// The single-scalable-channel-element `num_layouts` finding.
 fn scalable(
     mix_presentation_id: u32,
