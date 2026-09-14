@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-14 - Completed quick task 260914-m62: BCP-47 conformance of annotations_language
+Last activity: 2026-09-14 - Completed quick task 260914-pyd: merged feature/aac-lc-framing into main (AAC-LC framing, fourth codec)
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -166,6 +166,7 @@ Recent decisions affecting current work:
 | 260914-hoa | streaming SequenceReader (parse_sequence = collect over it; 32 MiB of minimal OBUs: 3.25 GB → 34 MB max RSS) and documented parse-side memory contract instead of a whole-file budget | 2026-09-14 | c1fb3fa | [260914-hoa-per-parse-memory-budget-for-parse-sequen](./quick/260914-hoa-per-parse-memory-budget-for-parse-sequen/) |
 | 260914-kfs | record the kMaxNumParameters decision (no read/write cap, spec §3.6) and add a validate() finding for Audio Elements with more than 256 params | 2026-09-14 | 98c80fe | [260914-kfs-record-the-kmaxnumparameters-decision-an](./quick/260914-kfs-record-the-kmaxnumparameters-decision-an/) |
 | 260914-m62 | BCP-47 (RFC 5646 §2.1 well-formedness) check of annotations_language: validate() finding + build() AnnotationsLanguageNotWellFormed; parse stays tolerant; ASCII-case-insensitive duplicates kept | 2026-09-14 | 269b4f9 | [260914-m62-bcp-47-conformance-of-annotations-langua](./quick/260914-m62-bcp-47-conformance-of-annotations-langua/) |
+| 260914-pyd | merge feature/aac-lc-framing into main | 2026-09-14 | 474004a | [260914-pyd-merge-feature-aac-lc-framing-into-main](./quick/260914-pyd-merge-feature-aac-lc-framing-into-main/) |
 
 ### Resolved
 
@@ -183,5 +184,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-14
-Stopped at: Completed quick task 260914-m62 (269b4f9, 40f71a4, d23a223; not pushed). 260914-kfs pushed as b70b35c, CI 34850779994 + reference 34850779605 green. Next: push m62 + CI; MixPresentationTags presence rule (model change first); deferred-items of 5c5/hoa/kfs/m62
+Stopped at: Completed quick task 260914-pyd (merge commit `474004a`, docs commit `2ba6b33`; not pushed). AAC-LC Audio Frame framing merged from origin/feature/aac-lc-framing as a fourth pre-encoded codec (LPCM/FLAC/Opus/AAC-LC), framing-only. 260914-m62 also completed this session (269b4f9, 40f71a4, d23a223; not pushed). 260914-kfs pushed as b70b35c, CI 34850779994 + reference 34850779605 green. Next: push m62 + pyd + CI; MixPresentationTags presence rule (model change first); deferred-items of 5c5/hoa/kfs/m62/pyd; REQUIREMENTS.md DECO-03/API-06/API-09 wording still describes AAC-LC as out of scope — see 260914-pyd-deferred-items.md
 Resume file: .planning/.continue-here.md (pre-5c5 handoff; HANDOFF.json consumed)
