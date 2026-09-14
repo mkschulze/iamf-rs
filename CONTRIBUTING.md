@@ -34,13 +34,13 @@ question for review, not a blocker — an untouched checklist is a blocker.
       licenses and sources all ok. New licences go through `deny.toml`'s
       allow-list, never through a `deny` key — see the header comment in that
       file before editing it.
-- [ ] **Guardrails still bite.** `bash tools/prove-guards.sh` reports six PASS
+- [ ] **Guardrails still bite.** `bash tools/prove-guards.sh` reports nine PASS
       lines. If I changed `clippy.toml` or `deny.toml`, I added or updated the
       matching proof case.
 - [ ] **Determinism.** No `HashMap`/`HashSet` anywhere output byte order can
       see them, and no `f32`/`f64` outside PROF-03's single documented
-      exception. `rg 'allow.*disallowed_types' src/` returns at most that one
-      entry.
+      exception. `bash tools/check-float-escape-census.sh` reports exactly that
+      one entry (zero means PROF-03's escape was lost).
 - [ ] **The gates pass locally.** `cargo build --locked --all-targets`,
       `cargo clippy --all-targets -- -D warnings` and `cargo test --locked` are
       all green.

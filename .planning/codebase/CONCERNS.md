@@ -63,8 +63,8 @@ Context: v1 (Phases 01-04) is recorded complete in `.planning/STATE.md`. The par
 
 **Single sanctioned float escape:**
 - Risk: `src/model/loudness.rs:94` `#[allow(clippy::disallowed_types)]` on `lufs_to_q7_8`. This is the only `#[allow]` in `src/`, and it is justified as IEEE-exact (`* 256.0` plus `round_ties_even`).
-- Current mitigation: The `clippy.toml` census rule and `tools/prove-guards.sh`.
-- Recommendations: Keep the census check (`rg 'allow.*disallowed_types' src/` must return exactly one hit) in CI. Any second `#[allow]` should be treated as a scope breach. `tools/check-codec-dev-deps.sh:79` also emits `#[allow(dead_code)]` into generated preflight code; this is harmless but falls outside the census.
+- Current mitigation: The `clippy.toml` census rule, `tools/check-float-escape-census.sh` (exactly one hit, multi-line aware, also sees `expect`, `cfg_attr` and the `clippy::all` / `clippy::style` groups) and `tools/prove-guards.sh` cases (g)-(i), which CI runs in the `guardrails` job.
+- Recommendations: Quick task 260914-38r repaired a census that had silently returned zero hits because rustfmt split the attribute over two lines; keep the documented command pointed at the script. Any second `#[allow]` should be treated as a scope breach. `tools/check-codec-dev-deps.sh:79` also emits `#[allow(dead_code)]` into generated preflight code; this is harmless but falls outside the census.
 
 ## Performance Bottlenecks
 

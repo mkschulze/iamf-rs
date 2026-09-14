@@ -167,7 +167,7 @@ but not sufficient for conformance.** The real exit criterion is a byte-diff aga
 - Do not index with `[]`. Use `.get(..)` and turn `None` into a typed error with `.ok_or_else(...)`.
 - Do not use bare `+ - * <<`. Use `checked_*`, `saturating_*` or `checked_shl(..).unwrap_or(0)`. For casts use `u8::try_from(x)` or `u64::from(x)`.
 - For ordered collections use `Vec` in bitstream order plus a `by_id()` lookup. Do not use `BTreeMap` for anything whose order can reach the bitstream.
-- No floats. The one allowed exception is in `src/model/loudness.rs:94` (`lufs_to_q7_8`), marked `#[allow(clippy::disallowed_types, reason = "...")]`. `rg 'allow.*disallowed_types' src/` must return exactly that one hit.
+- No floats. The one allowed exception is in `src/model/loudness.rs:94` (`lufs_to_q7_8`), marked `#[allow(clippy::disallowed_types, reason = "...")]`. `bash tools/check-float-escape-census.sh` must report exactly that one hit.
 - Any `#[allow]` in `src/` needs a `reason = "..."`. Keep them to a minimum, because the escape census counts them.
 
 ## Import Organization

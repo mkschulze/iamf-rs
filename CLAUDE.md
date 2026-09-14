@@ -41,7 +41,8 @@ cargo test --locked --test packing five_one_packs_as_two_coupled_pairs_then_two_
 cargo test --locked --features fuzzing --test fuzz_regression  # replay the committed fuzz corpus
 
 cargo deny --all-features check                          # licence/advisory gate
-bash tools/prove-guards.sh                               # proves each lint/licence guard actually fires (expects 6 PASS)
+bash tools/prove-guards.sh                               # proves each lint/licence guard actually fires (expects 9 PASS)
+bash tools/check-float-escape-census.sh                  # D-21: exactly one disallowed_types escape, multi-line aware
 bash tools/check-codec-dependency-boundary.sh            # no codec crate may reach the root crate
 cargo tree -e normal,no-proc-macro                        # must list only iamf + thiserror (plain `-e normal` gives a false positive)
 ```
@@ -104,8 +105,10 @@ libFuzzer targets and the stable replay test.
   `panic`, `HashMap`/`HashSet`, `f32`/`f64` and the transcendental float methods, crate-wide
   (`Cargo.toml` `[lints]` + `clippy.toml`). Tests are exempt through `clippy.toml`, not through
   `#[allow]`. Use `checked_*` and `.get()`, and return a typed `Error`.
-- **Float escape census**: `rg 'allow.*disallowed_types' src/` must return exactly one hit,
-  `model/loudness.rs::lufs_to_q7_8`. Don't add another.
+- **Float escape census**: `bash tools/check-float-escape-census.sh` must report exactly one hit,
+  `src/model/loudness.rs` `lufs_to_q7_8`. It catches the attribute whether rustfmt put it on one line
+  or several, and whether it is `allow` or `expect`, sits inside `cfg_attr`, or uses the `clippy::all`
+  / `clippy::style` group. `tools/prove-guards.sh` cases (g)-(i) prove it fires. Don't add another.
 - **Citations**: every `fn read_*` / `fn write_*` in `src/` needs a `// ref: <project>@<tag> <file>
   <symbol>` comment directly above it. `tests/citations.rs` fails the build without one. If a
   reference comment contradicts the reference code, add a `// NOTE:` saying the code is authoritative.
