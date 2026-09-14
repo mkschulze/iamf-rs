@@ -34,6 +34,7 @@ The th8 files were not edited.
 
 ## 1. BCP-47 conformance of `annotations_language`
 
+- **RESOLVED by quick 260914-m62 (user decision 2026-09-14).** RFC 5646 section 2.1 well-formedness is reported by `MixPresentation::validate` at `Field("annotations_language")` and refused by `EncoderBuilder::build` with `AnnotationsLanguageNotWellFormed`; registry validity and canonical equivalence (`en` vs `en-US`, grandfathered or redundant mappings) are deliberately not checked; parse and write are unchanged; no reference hash changed.
 - **Source:** th8 item 2; IAMF v1.1.0 `index.bs:1273` (`annotations_language` SHALL conform to BCP-47).
 - **Current state:** not checked; the tag is carried as bytes. Duplicate detection folds ASCII case only
   (RFC 5646 2.1.1). Canonical equivalence beyond ASCII case (`en` vs `en-US`, grandfathered or
@@ -58,6 +59,7 @@ The th8 files were not edited.
 
 ## 4. Assumption A1 parity: language equality
 
+- **RESOLVED by quick 260914-m62 (user decision 2026-09-14).** ASCII-case-insensitive equality is kept (RFC 5646 section 2.1.1), exact-byte iamf-tools parity is rejected, and there is no canonicalization.
 - **Source:** research assumption A1; iamf-tools@v2.1.0 `ValidateUnique` compares exact bytes.
 - **Current state:** language equality is ASCII-case-insensitive, stricter than iamf-tools. Switching to
   exact-byte parity means changing `eq_ignore_ascii_case` to `==` in `src/encoder.rs` and

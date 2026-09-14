@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-14 - Completed quick task 260914-kfs: kMaxNumParameters decision and num_parameters finding
+Last activity: 2026-09-14 - Completed quick task 260914-m62: BCP-47 conformance of annotations_language
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -165,6 +165,7 @@ Recent decisions affecting current work:
 | 260914-5c5 | tolerate opaque extension param definitions (never registered) and refuse non-round-tripping writer states (ReservedAliasesDefinedValue, GatedFieldMismatch) | 2026-09-14 | b164021 | [260914-5c5-tolerate-opaque-extension-param-definiti](./quick/260914-5c5-tolerate-opaque-extension-param-definiti/) |
 | 260914-hoa | streaming SequenceReader (parse_sequence = collect over it; 32 MiB of minimal OBUs: 3.25 GB → 34 MB max RSS) and documented parse-side memory contract instead of a whole-file budget | 2026-09-14 | c1fb3fa | [260914-hoa-per-parse-memory-budget-for-parse-sequen](./quick/260914-hoa-per-parse-memory-budget-for-parse-sequen/) |
 | 260914-kfs | record the kMaxNumParameters decision (no read/write cap, spec §3.6) and add a validate() finding for Audio Elements with more than 256 params | 2026-09-14 | 98c80fe | [260914-kfs-record-the-kmaxnumparameters-decision-an](./quick/260914-kfs-record-the-kmaxnumparameters-decision-an/) |
+| 260914-m62 | BCP-47 (RFC 5646 §2.1 well-formedness) check of annotations_language: validate() finding + build() AnnotationsLanguageNotWellFormed; parse stays tolerant; ASCII-case-insensitive duplicates kept | 2026-09-14 | 269b4f9 | [260914-m62-bcp-47-conformance-of-annotations-langua](./quick/260914-m62-bcp-47-conformance-of-annotations-langua/) |
 
 ### Resolved
 
@@ -182,5 +183,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-14
-Stopped at: Completed quick task 260914-kfs (98c80fe, 36b4289; not pushed). 260914-hoa pushed as 2b4c058, CI 34843164817 + reference 34843169041 green. Next: push kfs + CI; BCP-47 annotations_language (--discuss); MixPresentationTags; deferred-items of 5c5/hoa/kfs
+Stopped at: Completed quick task 260914-m62 (269b4f9, 40f71a4, d23a223; not pushed). 260914-kfs pushed as b70b35c, CI 34850779994 + reference 34850779605 green. Next: push m62 + CI; MixPresentationTags presence rule (model change first); deferred-items of 5c5/hoa/kfs/m62
 Resume file: .planning/.continue-here.md (pre-5c5 handoff; HANDOFF.json consumed)
