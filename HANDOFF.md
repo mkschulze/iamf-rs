@@ -40,8 +40,10 @@ state, source position, terminal, or lineage enters `iamf-rs`.
    Presentation whose `num_sub_mixes != 1`, whose rendering config carries a reserved headphones
    mode, that lists the same Audio Element handle more than once
    (`DuplicateMixPresentationAudioElement`), that repeats an `annotations_language` (compared
-   ASCII-case-insensitively, `DuplicateAnnotationsLanguage`), or that repeats an `anchor_element`
-   within one loudness info (`DuplicateAnchorElement`).
+   ASCII-case-insensitively, `DuplicateAnnotationsLanguage`), whose `annotations_language` is not a
+   well-formed BCP-47 tag (RFC 5646 section 2.1 syntax only, with no registry lookup, so an
+   unregistered but well-formed tag such as `qaa` is accepted; `AnnotationsLanguageNotWellFormed`),
+   or that repeats an `anchor_element` within one loudness info (`DuplicateAnchorElement`).
 3. Call `start` with a plain `W: Write` sink. The frozen descriptor prologue is written immediately.
 4. Submit one complete `TemporalUnitInput` at a time. Its frame order and coverage, codec kind,
    LPCM byte/sample count, trimming, and parameter identity/duration are preflighted before the unit
@@ -101,6 +103,19 @@ round trips where already modelled.
   more than 256 the element finding is checked first, so the error is `InvalidDescriptorReference` at
   `Field("descriptors")` rather than `UnsupportedParameterData` at `Field("audio_element_params")`. No
   `ErrorKind` was added or changed (quick 260914-kfs; decision in `CONFORMANCE-GATE.md`).
+- An `annotations_language` that is not a well-formed BCP-47 tag still parses, writes and
+  round-trips byte-exactly. `MixPresentation::validate`, `DescriptorSet::validate` and
+  `ParsedSequence::validate` report one `Finding` per malformed entry at
+  `Location::Field("annotations_language")`, after any duplicate-language findings.
+  `EncoderBuilder::build` returns the appended kind `AnnotationsLanguageNotWellFormed` at the same
+  field. It is checked after `DuplicateAnnotationsLanguage` and before `DuplicateAnchorElement`, the
+  generic `InvalidDescriptorReference` findings and descriptor serialisation, so a malformed tag that
+  also has an interior NUL or exceeds 127 bytes reports the new kind rather than
+  `StringHasInteriorNul` / `StringTooLong`. The check is RFC 5646 section 2.1 syntax only, with no
+  registry lookup. Duplicate detection is unchanged: ASCII-case-insensitive, no canonicalization, and
+  `en` and `en-US` are distinct. IAMF v1.1.0 `index.bs:1273` requires the check; neither pinned
+  reference performs it (quick 260914-m62). Portfolio change control does not apply: no ownership
+  moves and no cross-library object is added; the only public addition is the variant.
 
 ### Parse-side memory
 
