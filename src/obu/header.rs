@@ -292,8 +292,24 @@ fn write_fields_after_obu_size(w: &mut BitWriter, header: &ObuHeader) -> Result<
 /// `libiamf@v1.1.0`'s `IAMF_OBU_split` reads the two trim fields for any type
 /// whose bit 6 is set, so a trimming flag on a descriptor shifts that
 /// descriptor's payload by two bytes with no error and no crash on either side.
+///
+/// - An `ObuType::Reserved(v)` whose `v` is a defined type (`0..=23`) or the
+///   Sequence Header (`31`) is refused with `ReservedAliasesDefinedValue`
+///   before either rule, because its byte 0 would re-read as that defined type
+///   (quick 260914-5c5). `v >= 32` stays the documented `ValueExceedsWidth`.
 // ref: iamf-tools@v2.1.0 iamf/obu/obu_header.cc ObuHeader::Validate
 fn validate_header(header: &ObuHeader) -> Result<()> {
+    // NOTE: iamf-tools@v2.1.0 iamf/obu/obu_header.cc Validate cannot see this
+    // alias because its obu_type is the enum itself; `from_value` yields
+    // `Reserved` only for 24..=30, so no parsed header reaches this rule.
+    if let ObuType::Reserved(value) = header.obu_type {
+        if value <= 23 || value == 31 {
+            return Err(Error::new(
+                ErrorKind::ReservedAliasesDefinedValue,
+                Location::Field("obu_type"),
+            ));
+        }
+    }
     if header.trimming_status_flag() && !header.obu_type.is_audio_frame() {
         return Err(Error::new(
             ErrorKind::TrimmingFlagNotAllowed,
@@ -367,6 +383,9 @@ pub(crate) fn validate_obu_size(
 /// writer, that writer is measured, and the payload length is added to it. No
 /// slot is reserved and backfilled, so the size can never disagree with what
 /// follows it.
+///
+/// An `ObuType::Reserved` carrying a defined value (`0..=23` or `31`) is
+/// refused with `ReservedAliasesDefinedValue` at `obu_type`.
 pub fn write_obu(w: &mut BitWriter, header: &ObuHeader, payload: &[u8]) -> Result<()> {
     if !w.is_byte_aligned() {
         // BITS-05: the format has no padding mechanism, so an OBU that starts

@@ -615,7 +615,11 @@ pub fn read_mix_presentation(r: &mut BitCursor<'_>) -> Result<MixPresentation> {
 /// Write a Mix Presentation payload, `trailing` last.
 ///
 /// Faithful, not validating (D-07): a sub-mix without a stereo layout is
-/// written, and `validate()` is where its absence is reported.
+/// written, and `validate()` is where its absence is reported. States whose
+/// bytes would re-read as a different model are refused: `Layout::Reserved(2 |
+/// 3)` with `ReservedAliasesDefinedValue` at `layout_type`, and loudness
+/// extension bits with no `0xFC` bit or any `0x03` bit with
+/// `GatedFieldMismatch` at `info_type`.
 pub fn write_mix_presentation(w: &mut BitWriter, v: &MixPresentation) -> Result<()> {
     validate_annotation_counts(v)?;
 
@@ -856,6 +860,17 @@ fn read_layout_with_loudness(r: &mut BitCursor<'_>) -> Result<LayoutWithLoudness
 // ref: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc ValidateAndWriteLayout
 /// Write the layout and its loudness.
 fn write_layout_with_loudness(w: &mut BitWriter, v: &LayoutWithLoudness) -> Result<()> {
+    // NOTE: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc ValidateAndWriteLayout
+    // writes `Layout::LayoutType`, an enum, so a reserved value aliasing
+    // Sound System (2) or Binaural (3) is unrepresentable there. Here it would
+    // re-read as the defined layout, so it is refused (quick 260914-5c5); 4+
+    // stays `ValueExceedsWidth`.
+    if matches!(v.layout, Layout::Reserved(2 | 3)) {
+        return Err(Error::new(
+            ErrorKind::ReservedAliasesDefinedValue,
+            Location::Field("layout_type"),
+        ));
+    }
     w.write_unsigned(u64::from(v.layout.layout_type()), 2)?;
     match v.layout.sound_system() {
         Some(sound_system) => {
@@ -929,6 +944,20 @@ fn read_loudness(r: &mut BitCursor<'_>) -> Result<Loudness> {
 /// Write `info_type` — **computed** from the members it gates — then those
 /// members.
 fn write_loudness(w: &mut BitWriter, v: &Loudness) -> Result<()> {
+    // `info_type` is derived and masks the stored extension bits with 0xFC, so
+    // bits with no 0xFC member drop the extension on re-read and 0x03 bits are
+    // silently lost. This is the same predicate `EncoderBuilder::build` already
+    // applies to `loudness.extension.info_type_bits`. iamf-tools@v2.1.0
+    // ValidateAndWriteLayout writes the stored info_type and gates
+    // `layout_extension` on `kAnyLayoutExtension` (quick 260914-5c5).
+    if let Some(extension) = v.extension.as_ref() {
+        if extension.info_type_bits & 0xfc == 0 || extension.info_type_bits & 0x03 != 0 {
+            return Err(Error::new(
+                ErrorKind::GatedFieldMismatch,
+                Location::Field("info_type"),
+            ));
+        }
+    }
     w.write_unsigned(u64::from(v.info_type()), 8)?;
     w.write_signed(i64::from(v.integrated), 16)?;
     w.write_signed(i64::from(v.digital_peak), 16)?;

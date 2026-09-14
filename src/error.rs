@@ -222,6 +222,14 @@ pub enum ErrorKind {
     // DISAGREEMENT: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:1103-1129 iamf_parameter_new allocates nb_segments unchecked
     #[error("a Demixing or Recon Gain Parameter Block does not have exactly one subblock")]
     SubblockCountNotOne,
+    /// A reserved model variant carries a value this spec version defines, so its bytes would re-read as the defined variant.
+    // NOTE: iamf-tools@v2.1.0 models obu_type, audio_element_type, layout_type, ambisonics_mode and param_definition_type as enums or variants whose value is the wire value, so the alias is unrepresentable there; this crate's Reserved(raw) variants can alias and are refused on write (quick 260914-5c5).
+    #[error("a reserved variant carries a value this spec version defines")]
+    ReservedAliasesDefinedValue,
+    /// A stored gate or length disagrees with the data it gates, so the written bytes would not re-read as the same model.
+    // ref: iamf-tools@v2.1.0 iamf/common/utils/validation_utils.h ValidateContainerSizeEqual
+    #[error("a stored gate or length disagrees with the data it gates")]
+    GatedFieldMismatch,
 }
 
 /// An error, with the position it happened at attached exactly once.

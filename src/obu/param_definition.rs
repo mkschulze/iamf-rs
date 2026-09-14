@@ -331,7 +331,21 @@ pub fn read_param_definition(r: &mut BitCursor<'_>) -> Result<ParamDefinition> {
 ///
 /// `param_definition_mode` is emitted from `duration_fields.is_none()` rather
 /// than from the stored bit, so the two can never disagree (Pattern 2).
+///
+/// `subblock_durations` is written only when `constant_subblock_duration` is
+/// 0, so a non-zero constant beside a non-empty list is refused with
+/// `GatedFieldMismatch` at `subblock_durations` before any bit is emitted: it
+/// would re-read without the list (quick 260914-5c5).
 pub fn write_param_definition(w: &mut BitWriter, v: &ParamDefinition) -> Result<()> {
+    // ref: iamf-tools@v2.1.0 iamf/obu/param_definitions.cc ParamDefinition::ValidateAndWrite (writes subblock_durations only when constant_subblock_duration == 0)
+    if let Some(fields) = v.duration_fields.as_ref() {
+        if fields.constant_subblock_duration != 0 && !fields.subblock_durations.is_empty() {
+            return Err(Error::new(
+                ErrorKind::GatedFieldMismatch,
+                Location::Field("subblock_durations"),
+            ));
+        }
+    }
     w.write_uleb128_minimal(v.parameter_id)?;
     w.write_uleb128_minimal(v.parameter_rate)?;
     w.write_bool(v.param_definition_mode())?;

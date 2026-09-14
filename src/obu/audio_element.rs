@@ -510,7 +510,26 @@ pub fn read_audio_element(r: &mut BitCursor<'_>) -> Result<AudioElement> {
 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AudioElementObu::ValidateAndWritePayload
 /// Write an Audio Element payload, `trailing` last.
+///
+/// States whose bytes would re-read as a different model are refused:
+/// `AudioElementType::Reserved { value: 0 | 1 }`, extension params of type 1
+/// or 2 and `AmbisonicsConfig::Reserved { mode: 0 | 1 }` with
+/// `ReservedAliasesDefinedValue`, and ambisonics `channel_mapping` /
+/// `demixing_matrix` lengths that disagree with their counts with
+/// `GatedFieldMismatch`.
 pub fn write_audio_element(w: &mut BitWriter, v: &AudioElement) -> Result<()> {
+    // `from_value` yields `Reserved` only for 2..=7: a stored 0 or 1 would
+    // re-read as the defined channel- or scene-based type (quick 260914-5c5).
+    // 8+ stays `ValueExceedsWidth`.
+    if matches!(
+        v.audio_element_type,
+        AudioElementType::Reserved { value: 0 | 1, .. }
+    ) {
+        return Err(Error::new(
+            ErrorKind::ReservedAliasesDefinedValue,
+            Location::Field("audio_element_type"),
+        ));
+    }
     w.write_uleb128_minimal(v.audio_element_id)?;
     w.write_unsigned(u64::from(v.audio_element_type.value()), 3)?;
     w.write_unsigned(u64::from(v.reserved), 5)?;
@@ -613,6 +632,27 @@ fn read_audio_element_param(r: &mut BitCursor<'_>) -> Result<AudioElementParam> 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AudioElementParam::Write
 /// Write one `audio_element_params` entry.
 fn write_audio_element_param(w: &mut BitWriter, v: &AudioElementParam) -> Result<()> {
+    // Types 1 and 2 re-read as the typed Demixing / Recon Gain arms, so an
+    // Extension carrying them is refused (quick 260914-5c5).
+    // NOTE: type 0 stays writable although spec and references disagree.
+    // IAMF v1.1.0 index.bs:680-689 gives an Audio Element param of type 0 no
+    // size field; iamf-tools@v2.1.0 iamf/obu/audio_element.cc rejects the Mix
+    // Gain type on read and in ValidateAndWriteAudioElementParam; libiamf@v1.1.0
+    // and this reader read size plus bytes. The stricter rule is diagnosed by
+    // `validate()`, not refused, so parse-then-write stays byte-exact (Phase 02
+    // decision; 260914-5c5 deferred item 2).
+    if matches!(
+        v,
+        AudioElementParam::Extension {
+            param_definition_type: 1 | 2,
+            ..
+        }
+    ) {
+        return Err(Error::new(
+            ErrorKind::ReservedAliasesDefinedValue,
+            Location::Field("param_definition_type"),
+        ));
+    }
     w.write_uleb128_minimal(v.param_definition_type())?;
     match v {
         AudioElementParam::Demixing {
@@ -805,7 +845,41 @@ fn read_ambisonics_config(r: &mut BitCursor<'_>) -> Result<AmbisonicsConfig> {
 
 // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AmbisonicsConfig::Write
 /// Write `ambisonics_mode` and the config it selects.
+// ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AmbisonicsMonoConfig::Validate (ValidateContainerSizeEqual channel_mapping)
+// ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc AmbisonicsProjectionConfig::Validate (ValidateContainerSizeEqual demixing_matrix)
+// NOTE: the other iamf-tools Validate rules (output_channel_count validity and
+// substream counts) are not round-trip rules and are not enforced here.
 fn write_ambisonics_config(w: &mut BitWriter, v: &AmbisonicsConfig) -> Result<()> {
+    match v {
+        // Modes 0 and 1 would re-read as Mono / Projection (quick 260914-5c5).
+        AmbisonicsConfig::Reserved { mode: 0 | 1 } => {
+            return Err(Error::new(
+                ErrorKind::ReservedAliasesDefinedValue,
+                Location::Field("ambisonics_mode"),
+            ));
+        }
+        AmbisonicsConfig::Mono(config)
+            if config.channel_mapping.len() != usize::from(config.output_channel_count) =>
+        {
+            return Err(Error::new(
+                ErrorKind::GatedFieldMismatch,
+                Location::Field("channel_mapping"),
+            ));
+        }
+        AmbisonicsConfig::Projection(config) => {
+            // An overflow cannot match any stored length, so it is a mismatch.
+            let expected = usize::from(config.substream_count)
+                .checked_add(usize::from(config.coupled_substream_count))
+                .and_then(|rows| rows.checked_mul(usize::from(config.output_channel_count)));
+            if expected != Some(config.demixing_matrix.len()) {
+                return Err(Error::new(
+                    ErrorKind::GatedFieldMismatch,
+                    Location::Field("demixing_matrix"),
+                ));
+            }
+        }
+        _ => {}
+    }
     w.write_uleb128_minimal(v.mode())?;
     match v {
         AmbisonicsConfig::Mono(config) => {
