@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-14 - Completed quick task 260914-38r: make the float escape census see multi-line attributes and prove it fires
+Last activity: 2026-09-14 - Completed quick task 260914-5c5: tolerate opaque extension param definitions and reject non-round-tripping writer states
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -162,6 +162,7 @@ Recent decisions affecting current work:
 | 260914-0sp | bound OBU header after-size fields (trim, extension) by obu_size | 2026-09-14 | 1b76415 | [260914-0sp-bound-obu-header-after-size-fields-by-ob](./quick/260914-0sp-bound-obu-header-after-size-fields-by-ob/) |
 | 260914-1mq | require exactly one Demixing / Recon Gain Parameter Block subblock (closes zero-byte subblock memory amplification) | 2026-09-14 | 16eca4a | [260914-1mq-bound-parameter-block-subblock-memory-am](./quick/260914-1mq-bound-parameter-block-subblock-memory-am/) |
 | 260914-38r | make the float escape census see multi-line attributes (tools/check-float-escape-census.sh) and prove it fires (prove-guards 6 → 9) | 2026-09-14 | 35cd1ea | [260914-38r-float-ausnahmen-suche-mehrzeilig-reparie](./quick/260914-38r-float-ausnahmen-suche-mehrzeilig-reparie/) |
+| 260914-5c5 | tolerate opaque extension param definitions (never registered) and refuse non-round-tripping writer states (ReservedAliasesDefinedValue, GatedFieldMismatch) | 2026-09-14 | b164021 | [260914-5c5-tolerate-opaque-extension-param-definiti](./quick/260914-5c5-tolerate-opaque-extension-param-definiti/) |
 
 ### Resolved
 
@@ -179,5 +180,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-09-14
-Stopped at: Completed quick task 260914-38r (float census 6 → 9 guard proofs), pushed as d629570; CI run 34793732084 green. Next: extension param definition aborts parse (quick, TDD) or per-parse memory budget (--discuss)
-Resume file: .planning/.continue-here.md
+Stopped at: Completed quick task 260914-5c5 (commits b164021, f4a4414, 10c0077; not pushed). Next: push + watch CI, then per-parse memory budget (--discuss) or 260914-5c5-deferred-items.md
+Resume file: .planning/.continue-here.md (pre-5c5 handoff; HANDOFF.json consumed)
