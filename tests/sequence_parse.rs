@@ -1408,3 +1408,90 @@ fn an_unresolved_scalable_element_reference_has_no_scalable_finding() {
     assert!(unresolved(&sequence_findings));
     assert_eq!(wlv_findings(sequence_findings), vec![]);
 }
+
+fn published_set_with_extension_params(count: usize) -> DescriptorSet {
+    let mut set = published_descriptor_set();
+    if let Some(element) = set.audio_elements.first_mut() {
+        element.params = core::iter::repeat_with(|| AudioElementParam::Extension {
+            param_definition_type: 3,
+            bytes: Vec::new(),
+        })
+        .take(count)
+        .collect();
+    }
+    set
+}
+
+fn num_parameters_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .filter(|finding| finding.at == Location::Field("num_parameters"))
+        .collect()
+}
+
+fn audio_element_payloads(parsed: &ParsedSequence) -> Vec<&AudioElement> {
+    parsed
+        .obus
+        .iter()
+        .filter_map(|obu| match obu {
+            SequenceObu::AudioElement(obu) => Some(&obu.payload),
+            _ => None,
+        })
+        .collect()
+}
+
+// User decision 2026-09-14 (quick 260914-kfs): read and write stay unrestricted,
+// validate() reports the iamf-tools@v2.1.0 kMaxNumParameters refusal.
+// Hand decode: num_parameters 257 is uleb128 `81 02`; each param is `03 00`
+// (param_definition_type 3, param_definition_size 0).
+#[test]
+fn audio_element_with_257_params_parses_and_every_validate_reports_the_iamf_tools_limit() {
+    let expected = Finding {
+        at: Location::Field("num_parameters"),
+        message: "audio element 300 has 257 parameters; iamf-tools@v2.1.0 refuses an Audio \
+                  Element with more than 256 (kMaxNumParameters) on read and write, although \
+                  IAMF v1.1.0 requires parsers to support any num_parameters"
+            .to_owned(),
+    };
+    let set = published_set_with_extension_params(257);
+
+    let element = set.audio_elements.first().unwrap();
+    assert_eq!(
+        num_parameters_findings(element.validate()),
+        vec![expected.clone()]
+    );
+
+    let set_findings = set.validate();
+    assert_eq!(
+        set_findings.len(),
+        published_descriptor_set().validate().len() + 1
+    );
+    assert_eq!(
+        num_parameters_findings(set_findings),
+        vec![expected.clone()]
+    );
+
+    let bytes = support::descriptor_bytes(&set);
+    let parsed = parse_sequence(&bytes).expect("any num_parameters parses (decision 1)");
+    let elements = audio_element_payloads(&parsed);
+    assert_eq!(elements.len(), 1);
+    assert_eq!(elements.first().unwrap().params.len(), 257);
+    assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+
+    assert_eq!(num_parameters_findings(parsed.validate()), vec![expected]);
+}
+
+// User decision 2026-09-14 (quick 260914-kfs): the boundary is iamf-tools'
+// `num_parameters > kMaxNumParameters`, so exactly 256 carries no finding.
+#[test]
+fn audio_element_with_256_params_has_no_num_parameters_finding() {
+    let set = published_set_with_extension_params(256);
+    assert_eq!(set.validate(), published_descriptor_set().validate());
+
+    let bytes = support::descriptor_bytes(&set);
+    let parsed = parse_sequence(&bytes).expect("256 params parse");
+    let elements = audio_element_payloads(&parsed);
+    assert_eq!(elements.len(), 1);
+    assert_eq!(elements.first().unwrap().params.len(), 256);
+    assert_eq!(num_parameters_findings(parsed.validate()), vec![]);
+}

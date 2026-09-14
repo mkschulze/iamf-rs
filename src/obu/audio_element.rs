@@ -356,6 +356,9 @@ impl AudioElement {
     }
 
     /// Findings this element can carry, reported and never raised (D-07/D-09).
+    ///
+    /// More than 256 params is reported at `num_parameters`, because
+    /// `iamf-tools@v2.1.0` refuses such an Audio Element (quick 260914-kfs).
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
@@ -448,9 +451,30 @@ impl AudioElement {
                 });
             }
         }
+        // ref: IAMF v1.1.0 index.bs:754 ("Parsers SHALL support any value of num_parameters")
+        // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc ValidateNumParameters (UnimplementedError when num_parameters > kMaxNumParameters; called on write :759 and read :811)
+        // The finding warns a consumer that iamf-tools refuses this Audio Element, while this crate follows the spec and keeps reading and writing it (quick 260914-kfs).
+        if self.params.len() > IAMF_TOOLS_MAX_NUM_PARAMETERS {
+            findings.push(Finding {
+                at: Location::Field("num_parameters"),
+                message: format!(
+                    "audio element {} has {} parameters; iamf-tools@v2.1.0 refuses an Audio \
+                     Element with more than 256 (kMaxNumParameters) on read and write, although \
+                     IAMF v1.1.0 requires parsers to support any num_parameters",
+                    self.audio_element_id,
+                    self.params.len()
+                ),
+            });
+        }
         findings
     }
 }
+
+// ref: iamf-tools@v2.1.0 iamf/obu/audio_element.h AudioElementObu::kMaxNumParameters
+// NOTE: diagnosed by AudioElement::validate, never enforced on read or write (user decision 2026-09-14, quick 260914-kfs; CONFORMANCE-GATE.md).
+/// iamf-tools' `AudioElementObu::kMaxNumParameters`: an artificial limit on the
+/// number of Audio Element params, stricter than the spec.
+const IAMF_TOOLS_MAX_NUM_PARAMETERS: usize = 256;
 
 fn push_reserved_finding(findings: &mut Vec<Finding>, value: u8, field: &'static str, width: u8) {
     if value != 0 {
@@ -475,6 +499,11 @@ pub fn read_audio_element(r: &mut BitCursor<'_>) -> Result<AudioElement> {
     let codec_config_id = r.read_uleb128()?;
 
     let audio_substream_ids = read_counted(r, |r| r.read_uleb128())?;
+    // No num_parameters cap on read (user decision 2026-09-14, quick 260914-kfs).
+    // ref: IAMF v1.1.0 index.bs:754 ("Parsers SHALL support any value of num_parameters")
+    // ref: iamf-tools@v2.1.0 iamf/obu/audio_element.cc ValidateNumParameters (refuses > kMaxNumParameters = 256 before reserve, :811)
+    // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c iamf_element_new (no cap; IAMF_MALLOCZ for the read count)
+    // Memory is bounded by read_counted's bytes_remaining check and bounded_vec's 64 KiB preallocation cap inside a 2 MiB OBU; AudioElement::validate reports the iamf-tools refusal instead.
     let params = read_counted(r, read_audio_element_param)?;
 
     let audio_element_type = match type_value {
@@ -539,6 +568,10 @@ pub fn write_audio_element(w: &mut BitWriter, v: &AudioElement) -> Result<()> {
     for id in &v.audio_substream_ids {
         w.write_uleb128_minimal(*id)?;
     }
+    // NOTE: iamf-tools@v2.1.0 ValidateAndWritePayload also refuses more than 256 params on write
+    // (audio_element.cc:759). This writer does not, so parse-then-write stays byte-exact for a
+    // spec-legal file (PARSE-04), matching the param_definition_type 0 precedent. The condition is
+    // diagnosed by AudioElement::validate (quick 260914-kfs).
     write_count(w, v.params.len(), "num_parameters")?;
     for param in &v.params {
         write_audio_element_param(w, param)?;

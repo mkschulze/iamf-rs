@@ -162,6 +162,31 @@ fn build_rejects_audio_element_params_even_when_an_extension_definition_is_opaqu
 }
 
 #[test]
+fn build_rejects_257_audio_element_params_through_the_element_finding() {
+    // build() never accepts Audio Element params, but the element's own
+    // num_parameters finding (quick 260914-kfs) runs first at
+    // `validate_findings(declaration.element.validate())`, the same precedence
+    // as the existing param_definition_type 0 finding.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let mut element = stereo_element();
+    element.params = core::iter::repeat_with(|| AudioElementParam::Extension {
+        param_definition_type: 3,
+        bytes: Vec::new(),
+    })
+    .take(257)
+    .collect();
+    let _element = builder.add_audio_element(codec, element);
+
+    let error = builder
+        .build()
+        .expect_err("the builder rejects more than 256 Audio Element params");
+
+    assert_eq!(error.kind(), &ErrorKind::InvalidDescriptorReference);
+    assert_eq!(error.at(), Location::Field("descriptors"));
+}
+
+#[test]
 fn build_rejects_duplicate_authored_parameter_definition_ids() {
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
