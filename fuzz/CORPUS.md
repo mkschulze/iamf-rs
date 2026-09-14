@@ -24,8 +24,9 @@ fixture is a semantic validation negative, so neither is copied here.
 ## `obu_roundtrip`
 
 These inputs drive the exact shared `Unstructured` grammar in `iamf::fuzzing`. Rich models always
-contain two audio substreams, all parameter contexts (demixing, recon gain, raw extension data,
-element mix gain, and output mix gain), reserved values, known trailing bytes, and bounded payloads.
+contain two audio substreams, all parameter contexts (demixing, recon gain, an ungoverned raw
+Parameter Block whose id appears only inside an opaque extension definition, element mix gain, and
+output mix gain), reserved values, known trailing bytes, and bounded payloads.
 
 | Seed | Shape selected |
 |---|---|
@@ -39,7 +40,7 @@ element mix gain, and output mix gain), reserved values, known trailing bytes, a
 | `unknown-before` | Unknown OBU before the canonical sequence |
 | `unknown-between` | Unknown OBU between known OBUs |
 | `unknown-after` | Unknown OBU after the canonical sequence |
-| `bounded-raw-parameter-data` | Maximum 32-byte generated frame payload split across raw subblocks |
+| `bounded-raw-parameter-data` | Maximum 32-byte generated frame payload, whose split lands in the ungoverned raw Parameter Block's bytes |
 
 ## Promoting a failure
 

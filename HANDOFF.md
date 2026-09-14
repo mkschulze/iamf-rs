@@ -87,6 +87,13 @@ native decoding; ISO-BMFF/carrier support; high-level scalable-channel, demixing
 Ambisonics-projection authoring. Existing low-level wire forms remain available for parsing and exact
 round trips where already modelled.
 
+- An Audio Element parameter definition with `param_definition_type` > 2 is kept as opaque bytes and
+  never governs a Parameter Block. A block whose `parameter_id` has no recognised definition parses as
+  `SequenceObu::UngovernedParameterBlock` (raw bytes, reported by `validate()`).
+- The low-level `iamf::obu` writers refuse model states whose bytes would not re-read as the same
+  model, with the appended error kinds `ReservedAliasesDefinedValue` and `GatedFieldMismatch`.
+- `EncoderBuilder` output and its error kinds are unchanged.
+
 ### Public-example audit
 
 The public documentation contains one Rust snippet, in `README.md`, and it names only
