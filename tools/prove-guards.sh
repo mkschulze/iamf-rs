@@ -12,7 +12,7 @@
 # single most likely way this project's hardening quietly stops existing —
 # turns the matrix red and names which guardrail stopped working.
 #
-# Six cases:
+# Seven cases:
 #   (a) GUARD-01  an LGPL-licensed dependency        -> cargo deny check licenses
 #   (b) GUARD-02  std::collections::HashMap          -> clippy::disallowed_types
 #   (c) GUARD-02  the same type behind an alias      -> clippy::disallowed_types
@@ -21,6 +21,15 @@
 #                                                       clippy::unwrap_used
 #   (f) GUARD-11  an f64 local and a call to `sin`   -> clippy::disallowed_types
 #                                                       clippy::disallowed_methods
+#   (g) GUARD-11  a second float escape in rustfmt's -> tools/check-float-escape-census.sh
+#                 multi-line attribute shape
+#
+# Case (g) proves the D-21 census rather than a clippy lint: clippy cannot
+# police its own `allow` attributes, so the census is what keeps the crate at
+# exactly one sanctioned float escape. The census needs its own positive
+# control: every census case first runs it on the pristine copy and requires
+# exit 0 with exactly the src/model/loudness.rs hit. A census that always
+# failed would otherwise pass every negative case vacuously.
 #
 # Case (c) exists on its own because the ban must be on the fully-qualified
 # definition path, not on the spelling at the use site. A `disallowed-types`
@@ -42,6 +51,7 @@ PROOF_DIR="${REPO_ROOT}/target/guard-proof"
 
 PASS_COUNT=0
 FAIL_COUNT=0
+EXPECTED_PASS=7
 SUMMARY=()
 
 # ---------------------------------------------------------------------------
@@ -110,6 +120,63 @@ expect_clippy_fires() {
     done
 
     record PASS "${case_id}" "${description} — clippy rejected it and named: $*"
+}
+
+# ---------------------------------------------------------------------------
+# expect_census_fires <case-id> <description> <expected-injected-hits> <source>
+#
+# Proves the D-21 float escape census (tools/check-float-escape-census.sh).
+# First a positive control: on the pristine copy the census must exit 0 and
+# report exactly one hit, in src/model/loudness.rs — otherwise it rejects the
+# committed tree and any proof against it would be vacuous. Then <source> is
+# written to src/violation.rs in the copy and the census must exit exactly 1
+# (0 = it did not fire, 2 = the census itself broke), report exactly
+# <expected-injected-hits> lines in src/violation.rs, and still report the
+# loudness.rs hit. The file is not registered in lib.rs on purpose: the census
+# is textual and counts unregistered files by design. Everything happens under
+# ${PROOF_DIR}; ${REPO_ROOT}/src is never touched.
+# ---------------------------------------------------------------------------
+expect_census_fires() {
+    local case_id="$1" description="$2" expected="$3" source="$4"
+    local census="${REPO_ROOT}/tools/check-float-escape-census.sh"
+
+    reset_crate
+
+    local output status hits loudness injected
+    set +e
+    output="$(bash "${census}" --root "${PROOF_DIR}" 2>&1)"
+    status=$?
+    set -e
+    hits="$(printf '%s\n' "${output}" | grep -cE '^src/.+\.rs:[0-9]+$' || true)"
+    loudness="$(printf '%s\n' "${output}" | grep -cE '^src/model/loudness\.rs:[0-9]+$' || true)"
+    if [ "${status}" -ne 0 ] || [ "${hits}" -ne 1 ] || [ "${loudness}" -ne 1 ]; then
+        record FAIL "${case_id}" "${description} — census rejects the committed tree (exit ${status}, ${hits} hit(s), ${loudness} in loudness.rs); any proof against it would be vacuous"
+        return
+    fi
+
+    printf '%s\n' "${source}" > "${PROOF_DIR}/src/violation.rs"
+
+    set +e
+    output="$(bash "${census}" --root "${PROOF_DIR}" 2>&1)"
+    status=$?
+    set -e
+    injected="$(printf '%s\n' "${output}" | grep -cE '^src/violation\.rs:[0-9]+$' || true)"
+    loudness="$(printf '%s\n' "${output}" | grep -cE '^src/model/loudness\.rs:[0-9]+$' || true)"
+
+    if [ "${status}" -eq 0 ]; then
+        record FAIL "${case_id}" "${description} — census EXITED 0; the guardrail is not firing"
+        return
+    fi
+    if [ "${status}" -ne 1 ]; then
+        record FAIL "${case_id}" "${description} — census exited ${status}; the census itself is broken"
+        return
+    fi
+    if [ "${injected}" -ne "${expected}" ] || [ "${loudness}" -ne 1 ]; then
+        record FAIL "${case_id}" "${description} — census found ${injected} injected hit(s) (expected ${expected}) and ${loudness} loudness.rs hit(s) (expected 1)"
+        return
+    fi
+
+    record PASS "${case_id}" "${description} — census exited 1 and named ${injected} injected hit(s)"
 }
 
 # ---------------------------------------------------------------------------
@@ -209,15 +276,26 @@ expect_clippy_fires f \
 }' \
     disallowed_types disallowed_methods
 
+expect_census_fires g \
+    "GUARD-11 / D-21 float escape census — a second escape in rustfmt's multi-line attribute shape" \
+    1 \
+'#[allow(
+    clippy::disallowed_types,
+    reason = "Deliberate tools/prove-guards.sh violation: a second float escape."
+)]
+pub fn violation() -> f64 {
+    1.0
+}'
+
 echo
 echo "-------------------------------------------------------------------"
 printf '%s\n' "${SUMMARY[@]}"
 echo "-------------------------------------------------------------------"
-printf 'guardrail proof: %d passed, %d failed (6 expected)\n' "${PASS_COUNT}" "${FAIL_COUNT}"
+printf 'guardrail proof: %d passed, %d failed (%d expected)\n' "${PASS_COUNT}" "${FAIL_COUNT}" "${EXPECTED_PASS}"
 
-if [ "${FAIL_COUNT}" -ne 0 ] || [ "${PASS_COUNT}" -ne 6 ]; then
+if [ "${FAIL_COUNT}" -ne 0 ] || [ "${PASS_COUNT}" -ne 7 ]; then
     echo "GUARDRAIL PROOF FAILED — at least one guardrail is no longer biting." >&2
     exit 1
 fi
 
-echo "all six guardrails fired."
+echo "all ${PASS_COUNT} guardrails fired."
