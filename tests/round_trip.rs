@@ -7,11 +7,12 @@ use hex_literal::hex;
 use iamf::bits::{BitCursor, BitWriter};
 use iamf::error::ErrorKind;
 use iamf::obu::{
-    AudioElementParam, Obu, ObuHeader, ObuType, ParameterData, find_obu_boundaries,
-    read_codec_config, read_obu_with, write_codec_config, write_obu, write_obu_with,
+    AudioElementParam, Obu, ObuHeader, ObuType, find_obu_boundaries, read_codec_config,
+    read_obu_with, write_codec_config, write_obu, write_obu_with,
 };
 use iamf::sequence::{
-    ParsedSequence, SequenceObu, UnknownObu, parse_sequence, write_parsed_sequence, write_sequence,
+    ParsedSequence, SequenceObu, UngovernedParameterBlock, UnknownObu, parse_sequence,
+    write_parsed_sequence, write_sequence,
 };
 use proptest::prelude::*;
 use sequence_cases::{
@@ -182,6 +183,7 @@ fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
     let case = sequence_cases::rich_case(1, false, vec![0x44, 0x55], -7);
     let mut expected = ParsedSequence::from_parts(&case.descriptors, &case.units)
         .expect("the explicit sentinel is canonical");
+    sequence_cases::insert_ungoverned_raw_blocks(&mut expected, &case.frame_payload);
     expected.obus.insert(
         9,
         SequenceObu::Unknown(UnknownObu {
@@ -215,7 +217,7 @@ fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
     ));
     assert!(matches!(
         parsed.obus.get(6),
-        Some(SequenceObu::ParameterBlock(_))
+        Some(SequenceObu::UngovernedParameterBlock(_))
     ));
     assert!(matches!(parsed.obus.get(9), Some(SequenceObu::Unknown(_))));
     assert!(matches!(
@@ -249,25 +251,17 @@ fn unknown_obu_and_raw_parameter_data_keep_exact_positions_and_offsets() {
     assert_eq!(*param_definition_type, 7);
     assert_eq!(definition_bytes, &[0x0c, 0x80, 0xf7, 0x02, 0xc5]);
 
-    let Some(SequenceObu::ParameterBlock(raw_block)) = parsed.obus.get(6) else {
-        panic!("index 6 is the raw Parameter Block sentinel");
-    };
-    assert_eq!(raw_block.payload.subblocks.len(), 2);
+    // The extension definition is opaque, so block 12 is ungoverned. Its bytes
+    // are unchanged: id 12 (0c), duration 2 (02), constant_subblock_duration 1
+    // (01), subblock size 2 (02) then 44 55, subblock size 0 (00).
     assert_eq!(
-        raw_block
-            .payload
-            .subblocks
-            .first()
-            .map(|subblock| &subblock.data),
-        Some(&ParameterData::Raw(vec![0x44, 0x55]))
-    );
-    assert_eq!(
-        raw_block
-            .payload
-            .subblocks
-            .get(1)
-            .map(|subblock| &subblock.data),
-        Some(&ParameterData::Raw(Vec::new()))
+        parsed.obus.get(6),
+        Some(&SequenceObu::UngovernedParameterBlock(
+            UngovernedParameterBlock {
+                header: ObuHeader::new(ObuType::ParameterBlock),
+                payload: vec![0x0c, 0x02, 0x01, 0x02, 0x44, 0x55, 0x00],
+            }
+        ))
     );
     let Some(SequenceObu::ParameterBlock(known_trailing)) = parsed.obus.get(4) else {
         panic!("index 4 is the known trailing-byte sentinel");

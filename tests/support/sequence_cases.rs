@@ -8,17 +8,22 @@ use iamf::obu::{
     CodecConfig, DemixingInfoParameterData, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness,
     LoudnessExtension, LpcmDecoderConfig, MixGainParamDefinition, MixGainParameterData,
     MixPresentation, Obu, ObuHeader, ObuType, OutputGain, ParamDefinition, ParameterBlock,
-    ParameterData, ParameterSubblock, ReconGainElement, ReconGainInfoParameterData,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
-    TemporalDelimiter, write_param_definition,
+    ParameterData, ParameterDataContext, ParameterSubblock, ReconGainElement,
+    ReconGainInfoParameterData, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig,
+    SubMix, SubMixAudioElement, TemporalDelimiter, write_param_definition, write_parameter_block,
 };
-use iamf::sequence::{ParsedSequence, SequenceObu, TemporalUnit, UnknownObu};
+use iamf::sequence::{
+    ParsedSequence, SequenceObu, TemporalUnit, UngovernedParameterBlock, UnknownObu,
+};
 use proptest::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct CanonicalCase {
     pub descriptors: DescriptorSet,
     pub units: Vec<TemporalUnit>,
+    /// The frame payload whose split also fills the ungoverned raw Parameter
+    /// Block that `insert_ungoverned_raw_blocks` restores.
+    pub frame_payload: Vec<u8>,
 }
 
 pub fn canonical_case_strategy() -> impl Strategy<Value = CanonicalCase> {
@@ -46,6 +51,7 @@ pub fn canonical_parsed_strategy() -> impl Strategy<Value = ParsedSequence> {
             _ => {
                 let mut parsed =
                     ParsedSequence::from_parts(&case.descriptors, &case.units).unwrap_or_default();
+                insert_ungoverned_raw_blocks(&mut parsed, &case.frame_payload);
                 if shape >= 3 {
                     insert_redundant_descriptor(&mut parsed);
                 }
@@ -199,7 +205,11 @@ pub fn rich_case(
     let units = (0..unit_count)
         .map(|index| rich_unit(index, delimiters, &frame_payload, gain))
         .collect();
-    CanonicalCase { descriptors, units }
+    CanonicalCase {
+        descriptors,
+        units,
+        frame_payload,
+    }
 }
 
 fn definition_bytes(definition: &ParamDefinition) -> Vec<u8> {
@@ -212,12 +222,6 @@ fn rich_unit(index: usize, delimiters: bool, frame_payload: &[u8], gain: i16) ->
     let mut recon_gains = [0_u8; 12];
     recon_gains[0] = 1;
     recon_gains[11] = 0xfe;
-    let raw_a = frame_payload
-        .get(..frame_payload.len().min(32))
-        .unwrap_or_default();
-    let raw_b = frame_payload
-        .get(frame_payload.len().min(32)..)
-        .unwrap_or_default();
     let mut blocks = vec![
         block(
             10,
@@ -235,14 +239,6 @@ fn rich_unit(index: usize, delimiters: bool, frame_payload: &[u8], gain: i16) ->
                 })],
             }),
         ),
-        ParameterBlock {
-            parameter_id: 12,
-            duration_fields: Some(BlockDurationFields {
-                duration: 2,
-                constant_subblock_duration: 1,
-            }),
-            subblocks: vec![raw_subblock(raw_a), raw_subblock(raw_b)],
-        },
         ParameterBlock {
             parameter_id: 13,
             duration_fields: Some(BlockDurationFields {
@@ -311,6 +307,63 @@ fn block(parameter_id: u32, data: ParameterData) -> ParameterBlock {
             data,
         }],
     }
+}
+
+/// Restore the raw Parameter Block 12 immediately after every Parameter Block
+/// 11, as an `UngovernedParameterBlock`.
+///
+/// Its id appears only inside the opaque extension definition, which never
+/// governs a block (quick 260914-5c5), so the flat model is the only place it
+/// can live. Call this right after `ParsedSequence::from_parts` so every later
+/// insertion position is unchanged.
+pub fn insert_ungoverned_raw_blocks(sequence: &mut ParsedSequence, frame_payload: &[u8]) {
+    let ungoverned = SequenceObu::UngovernedParameterBlock(UngovernedParameterBlock {
+        header: ObuHeader::new(ObuType::ParameterBlock),
+        payload: ungoverned_raw_block_payload(frame_payload),
+    });
+    let obus = core::mem::take(&mut sequence.obus);
+    for obu in obus {
+        let follows =
+            matches!(&obu, SequenceObu::ParameterBlock(block) if block.payload.parameter_id == 11);
+        sequence.obus.push(obu);
+        if follows {
+            sequence.obus.push(ungoverned.clone());
+        }
+    }
+}
+
+/// The payload of the former typed raw block 12.
+///
+/// This uses the public Raw writer path with a caller-registered
+/// `ParameterDataContext::Reserved` context, so the bytes equal the old typed
+/// block by construction.
+fn ungoverned_raw_block_payload(frame_payload: &[u8]) -> Vec<u8> {
+    let raw_a = frame_payload
+        .get(..frame_payload.len().min(32))
+        .unwrap_or_default();
+    let raw_b = frame_payload
+        .get(frame_payload.len().min(32)..)
+        .unwrap_or_default();
+    let block = ParameterBlock {
+        parameter_id: 12,
+        duration_fields: Some(BlockDurationFields {
+            duration: 2,
+            constant_subblock_duration: 1,
+        }),
+        subblocks: vec![raw_subblock(raw_a), raw_subblock(raw_b)],
+    };
+    let mut writer = BitWriter::new();
+    if write_parameter_block(
+        &mut writer,
+        &ParamDefinition::mode_1(12, 48_000),
+        &ParameterDataContext::Reserved(7),
+        &block,
+    )
+    .is_err()
+    {
+        return Vec::new();
+    }
+    writer.finish().unwrap_or_default()
 }
 
 fn raw_subblock(bytes: &[u8]) -> ParameterSubblock {

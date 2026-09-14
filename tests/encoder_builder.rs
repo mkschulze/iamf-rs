@@ -141,7 +141,9 @@ fn build_rejects_an_audio_handle_from_another_builder_with_the_same_index() {
 }
 
 #[test]
-fn build_rejects_a_malformed_extension_definition_before_accepting_the_encoder() {
+fn build_rejects_audio_element_params_even_when_an_extension_definition_is_opaque() {
+    // Opaque extension definitions are no longer decoded (quick 260914-5c5),
+    // so the params gate is what rejects them.
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
     let mut element = stereo_element();
@@ -153,10 +155,10 @@ fn build_rejects_a_malformed_extension_definition_before_accepting_the_encoder()
 
     let error = builder
         .build()
-        .expect_err("a malformed extension definition must fail the static gate");
+        .expect_err("the builder rejects Audio Element params");
 
-    assert_eq!(error.kind(), &ErrorKind::UnexpectedEndOfInput);
-    assert_eq!(error.at(), Location::InputOffset(0));
+    assert_eq!(error.kind(), &ErrorKind::UnsupportedParameterData);
+    assert_eq!(error.at(), Location::Field("audio_element_params"));
 }
 
 #[test]

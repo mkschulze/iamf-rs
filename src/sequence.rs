@@ -116,8 +116,9 @@ impl ParsedSequence {
     ///
     /// # Errors
     ///
-    /// Returns an error when an extension parameter definition cannot supply
-    /// the parse context needed by later Parameter Blocks.
+    /// Currently never returns an error: extension parameter definitions are
+    /// opaque and not decoded, so the descriptor context can always be built.
+    /// The `Result` is retained for signature compatibility.
     pub fn from_parts(descriptors: &DescriptorSet, units: &[TemporalUnit]) -> Result<Self> {
         // Establish that the same descriptor context used by both writers can
         // be built. This inspects ordering/context only and emits no bytes.

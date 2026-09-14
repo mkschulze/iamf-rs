@@ -10,11 +10,13 @@ use crate::obu::{
     CodecConfig, DemixingInfoParameterData, IaSequenceHeader, Layout, LayoutWithLoudness, Loudness,
     LoudnessExtension, LpcmDecoderConfig, MixGainParamDefinition, MixGainParameterData,
     MixPresentation, Obu, ObuHeader, ObuType, OutputGain, ParamDefinition, ParameterBlock,
-    ParameterData, ParameterSubblock, ReconGainElement, ReconGainInfoParameterData,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
-    TemporalDelimiter, write_param_definition,
+    ParameterData, ParameterDataContext, ParameterSubblock, ReconGainElement,
+    ReconGainInfoParameterData, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig,
+    SubMix, SubMixAudioElement, TemporalDelimiter, write_param_definition, write_parameter_block,
 };
-use crate::sequence::{ParsedSequence, SequenceObu, TemporalUnit, UnknownObu};
+use crate::sequence::{
+    ParsedSequence, SequenceObu, TemporalUnit, UngovernedParameterBlock, UnknownObu,
+};
 
 const MAX_FRAME_PAYLOAD: usize = 32;
 const MAX_TEMPORAL_UNITS: usize = 3;
@@ -49,6 +51,7 @@ pub fn sequence_from_fuzz_bytes(input: &mut Unstructured<'_>) -> ArbitraryResult
     let (descriptors, units) = rich_case(unit_count, delimiters, &frame_payload, gain)?;
     let mut sequence = ParsedSequence::from_parts(&descriptors, &units)
         .map_err(|_| ArbitraryError::IncorrectFormat)?;
+    insert_ungoverned_raw_blocks(&mut sequence, &frame_payload)?;
 
     if matches!(shape, 4 | 7) {
         insert_redundant_descriptor(&mut sequence);
@@ -200,9 +203,6 @@ fn rich_unit(index: usize, delimiters: bool, frame_payload: &[u8], gain: i16) ->
     if let Some(last) = recon_gains.last_mut() {
         *last = 0xfe;
     }
-    let split = frame_payload.len().min(MAX_FRAME_PAYLOAD / 2);
-    let raw_a = frame_payload.get(..split).unwrap_or_default();
-    let raw_b = frame_payload.get(split..).unwrap_or_default();
     let mut blocks = vec![
         block(
             10,
@@ -220,14 +220,6 @@ fn rich_unit(index: usize, delimiters: bool, frame_payload: &[u8], gain: i16) ->
                 })],
             }),
         ),
-        ParameterBlock {
-            parameter_id: 12,
-            duration_fields: Some(BlockDurationFields {
-                duration: 2,
-                constant_subblock_duration: 1,
-            }),
-            subblocks: vec![raw_subblock(raw_a), raw_subblock(raw_b)],
-        },
         ParameterBlock {
             parameter_id: 13,
             duration_fields: Some(BlockDurationFields {
@@ -296,6 +288,62 @@ fn block(parameter_id: u32, data: ParameterData) -> ParameterBlock {
             data,
         }],
     }
+}
+
+/// Restore the raw Parameter Block 12 immediately after every Parameter Block
+/// 11, as an [`UngovernedParameterBlock`].
+///
+/// Its id appears only inside the opaque extension definition, which never
+/// governs a block (quick 260914-5c5), so the flat model is the only place it
+/// can live. It runs right after `from_parts`, before any shape-dependent
+/// insertion, and consumes no `Unstructured` bytes, so corpus seeds keep
+/// selecting the same shapes and positions.
+fn insert_ungoverned_raw_blocks(
+    sequence: &mut ParsedSequence,
+    frame_payload: &[u8],
+) -> ArbitraryResult<()> {
+    let ungoverned = SequenceObu::UngovernedParameterBlock(UngovernedParameterBlock {
+        header: ObuHeader::new(ObuType::ParameterBlock),
+        payload: ungoverned_raw_block_payload(frame_payload)?,
+    });
+    let obus = core::mem::take(&mut sequence.obus);
+    for obu in obus {
+        let follows = matches!(
+            &obu,
+            SequenceObu::ParameterBlock(block) if block.payload.parameter_id == 11
+        );
+        sequence.obus.push(obu);
+        if follows {
+            sequence.obus.push(ungoverned.clone());
+        }
+    }
+    Ok(())
+}
+
+/// The payload of the former typed raw block 12, written through the public
+/// Raw writer path with a caller-registered `Reserved` context, so its bytes
+/// equal the old typed block by construction.
+fn ungoverned_raw_block_payload(frame_payload: &[u8]) -> ArbitraryResult<Vec<u8>> {
+    let split = frame_payload.len().min(MAX_FRAME_PAYLOAD / 2);
+    let raw_a = frame_payload.get(..split).unwrap_or_default();
+    let raw_b = frame_payload.get(split..).unwrap_or_default();
+    let block = ParameterBlock {
+        parameter_id: 12,
+        duration_fields: Some(BlockDurationFields {
+            duration: 2,
+            constant_subblock_duration: 1,
+        }),
+        subblocks: vec![raw_subblock(raw_a), raw_subblock(raw_b)],
+    };
+    let mut writer = BitWriter::new();
+    write_parameter_block(
+        &mut writer,
+        &ParamDefinition::mode_1(12, 48_000),
+        &ParameterDataContext::Reserved(7),
+        &block,
+    )
+    .map_err(|_| ArbitraryError::IncorrectFormat)?;
+    writer.finish().map_err(|_| ArbitraryError::IncorrectFormat)
 }
 
 fn raw_subblock(bytes: &[u8]) -> ParameterSubblock {

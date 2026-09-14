@@ -37,6 +37,10 @@ pub enum ParameterDataContext {
         recon_gain_is_present: Vec<bool>,
     },
     /// Length-bounded extension data for an unknown definition type.
+    ///
+    /// Descriptor observation never registers this context; it exists for a
+    /// caller that registers an extension definition it understands and calls
+    /// `read_parameter_block` directly.
     Reserved(u32),
 }
 
@@ -91,9 +95,14 @@ impl ParamDefinitionRegistry {
 
     /// Observe every definition owned by an Audio Element.
     ///
-    /// Unknown definition types begin with the same shared prefix. Their
-    /// explicit byte length makes that prefix safe to decode here while
-    /// leaving the extension bytes themselves untouched in the model.
+    /// Definitions with `param_definition_type` > 2 are opaque: their bytes
+    /// are kept in the model but never decoded, so they are not registered and
+    /// never govern a Parameter Block.
+    ///
+    /// # Errors
+    ///
+    /// The `Result` is kept for signature compatibility; it is currently always
+    /// `Ok`.
     pub fn observe_audio_element(&mut self, element: &AudioElement) -> Result<()> {
         let recon_gain_is_present = match &element.audio_element_type {
             AudioElementType::ChannelBased(config) => config
@@ -116,17 +125,14 @@ impl ParamDefinitionRegistry {
                         recon_gain_is_present: recon_gain_is_present.clone(),
                     },
                 ),
-                AudioElementParam::Extension {
-                    param_definition_type,
-                    bytes,
-                } => {
-                    let mut reader = BitCursor::new(bytes);
-                    let definition = read_param_definition(&mut reader)?;
-                    self.register(
-                        definition,
-                        ParameterDataContext::Reserved(*param_definition_type),
-                    );
-                }
+                // ref: IAMF v1.1.0 index.bs:772 and :796 (param_definition_type > 2: parse the size, parsers SHOULD ignore the bytes)
+                // ref: iamf-tools@v2.1.0 iamf/obu/param_definitions.h ExtendedParamDefinition (reserved for future use; does not read ParamDefinition fields)
+                // ref: iamf-tools@v2.1.0 iamf/cli/cli_util.cc CollectAndValidateParamDefinitions (logs "Ignoring parameter definition of type=" and continues)
+                // ref: libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c iamf_element_new (bs_skipABytes then continue)
+                // A block whose id appears only in these bytes therefore parses
+                // as `UngovernedParameterBlock`. Decoding the bytes let an
+                // accidental decode shadow a real definition (quick 260914-5c5).
+                AudioElementParam::Extension { .. } => {}
             }
         }
         Ok(())

@@ -191,9 +191,11 @@ fn registry_lookup_follows_the_audio_element_order_emitted_by_the_writer() {
 }
 
 #[test]
-fn an_extension_definition_registers_its_shared_prefix_and_reserved_context() {
+fn a_parameter_block_whose_id_only_appears_inside_extension_bytes_is_ungoverned() {
     let mut descriptors = published_descriptor_set();
-    // ParamDefinition { id: 7, rate: 1, mode: 1 }, followed by extension data.
+    // Opaque bytes 07 01 80 aa would decode as ParamDefinition { id: 7,
+    // rate: 1, mode: 1 } + aa, but param_definition_type 9 is not recognised,
+    // so parsers ignore the bytes (index.bs:772, :796).
     descriptors
         .audio_elements
         .first_mut()
@@ -204,11 +206,138 @@ fn an_extension_definition_registers_its_shared_prefix_and_reserved_context() {
     }];
 
     let registry = ParamDefinitionRegistry::from_descriptors(&descriptors)
-        .expect("the shared ParamDefinition prefix is present");
-    let registered = registry.get(7).expect("extension parameter id 7");
+        .expect("opaque extension bytes are never decoded");
+    assert!(
+        registry.get(7).is_none(),
+        "an extension definition never governs a Parameter Block"
+    );
 
-    assert_eq!(registered.definition, ParamDefinition::mode_1(7, 1));
-    assert_eq!(registered.context, ParameterDataContext::Reserved(9));
+    let mut model =
+        ParsedSequence::from_parts(&descriptors, &[]).expect("descriptor set is orderable");
+    // id 7 (07), duration 1 (01), constant_subblock_duration 1 (01), then one
+    // opaque subblock: size 1 (01) and byte aa.
+    model.obus.push(SequenceObu::UngovernedParameterBlock(
+        UngovernedParameterBlock {
+            header: ObuHeader::new(ObuType::ParameterBlock),
+            payload: vec![0x07, 0x01, 0x01, 0x01, 0xaa],
+        },
+    ));
+
+    let bytes =
+        write_parsed_sequence(Vec::new(), &model).expect("an ungoverned block writes verbatim");
+    let parsed = parse_sequence(&bytes).expect("the written sequence parses");
+    assert_eq!(parsed, model);
+    assert!(matches!(
+        parsed.obus.last(),
+        Some(SequenceObu::UngovernedParameterBlock(_))
+    ));
+    assert_eq!(write_parsed_sequence(Vec::new(), &parsed), Ok(bytes));
+}
+
+#[test]
+fn opaque_extension_definitions_without_a_param_definition_prefix_round_trip() {
+    let mut descriptors = published_descriptor_set();
+    // Empty bytes, a lone continuation byte (80) and a truncated prefix
+    // (05 01: id 5, rate 1, no mode byte). None is a ParamDefinition prefix,
+    // and none has to be one.
+    descriptors
+        .audio_elements
+        .first_mut()
+        .expect("published fixture has one Audio Element")
+        .params = vec![
+        AudioElementParam::Extension {
+            param_definition_type: 7,
+            bytes: Vec::new(),
+        },
+        AudioElementParam::Extension {
+            param_definition_type: 3,
+            bytes: vec![0x80],
+        },
+        AudioElementParam::Extension {
+            param_definition_type: 9,
+            bytes: vec![0x05, 0x01],
+        },
+    ];
+
+    let model = ParsedSequence::from_parts(&descriptors, &[])
+        .expect("opaque extension definitions are not decoded");
+    let bytes = write_parsed_sequence(Vec::new(), &model).expect("opaque extensions write");
+    assert_eq!(parse_sequence(&bytes), Ok(model));
+}
+
+#[test]
+fn extension_bytes_that_decode_to_a_mix_gain_id_do_not_shadow_it() {
+    let mut descriptors = published_descriptor_set();
+    // 64 01 80 would decode as ParamDefinition { id: 100, rate: 1, mode: 1 },
+    // the id of both published Mix Gain definitions. It must not bind block 100.
+    descriptors
+        .audio_elements
+        .first_mut()
+        .expect("published fixture has one Audio Element")
+        .params = vec![AudioElementParam::Extension {
+        param_definition_type: 7,
+        bytes: vec![0x64, 0x01, 0x80],
+    }];
+
+    let mut model =
+        ParsedSequence::from_parts(&descriptors, &[]).expect("descriptor set is orderable");
+    model.obus.push(SequenceObu::ParameterBlock(Obu::new(
+        ObuHeader::new(ObuType::ParameterBlock),
+        ParameterBlock {
+            parameter_id: 100,
+            duration_fields: Some(BlockDurationFields {
+                duration: 1,
+                constant_subblock_duration: 1,
+            }),
+            subblocks: vec![ParameterSubblock {
+                subblock_duration: None,
+                data: ParameterData::MixGain(MixGainParameterData::Step {
+                    start_point_value: 256,
+                }),
+            }],
+        },
+    )));
+
+    let bytes =
+        write_parsed_sequence(Vec::new(), &model).expect("block 100 is governed by Mix Gain");
+    let parsed = parse_sequence(&bytes).expect("the written sequence parses");
+    assert_eq!(parsed, model);
+    let Some(SequenceObu::ParameterBlock(block)) = parsed.obus.last() else {
+        panic!("block 100 stays a governed Parameter Block");
+    };
+    assert!(matches!(
+        block
+            .payload
+            .subblocks
+            .first()
+            .map(|subblock| &subblock.data),
+        Some(ParameterData::MixGain(_))
+    ));
+}
+
+#[test]
+fn descriptor_validation_keeps_nested_duplicate_findings_beside_an_opaque_extension() {
+    let mut descriptors = published_descriptor_set();
+    descriptors
+        .audio_elements
+        .first_mut()
+        .expect("published fixture has one Audio Element")
+        .params = vec![AudioElementParam::Extension {
+        param_definition_type: 7,
+        bytes: Vec::new(),
+    }];
+
+    let findings = descriptors.validate();
+
+    assert!(
+        findings.iter().any(|finding| {
+            finding.at == Location::Field("parameter_id")
+                && finding
+                    .message
+                    .contains("parameter_id 100 appears at nested definition indices 0 and 1")
+        }),
+        "{findings:?}"
+    );
 }
 
 #[test]
