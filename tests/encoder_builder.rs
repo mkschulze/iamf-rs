@@ -543,6 +543,60 @@ fn a_duplicate_annotations_language_wins_over_a_duplicate_anchor_and_a_presentat
     assert_eq!(error.at(), Location::Field("annotations_language"));
 }
 
+// Quick 260914-m62: build() refuses a tag that is not RFC 5646 section 2.1 well-formed.
+#[test]
+fn build_rejects_annotations_languages_that_are_not_well_formed_bcp47() {
+    let languages: [&[u8]; 4] = [b"en_US", b"", b"en-", b"e\0n"];
+    for language in languages {
+        let error = build_single(presentation_with_languages(&[language]))
+            .expect_err("a malformed annotations_language is rejected");
+        assert_eq!(
+            error.kind(),
+            &ErrorKind::AnnotationsLanguageNotWellFormed,
+            "tag {:?}",
+            String::from_utf8_lossy(language)
+        );
+        assert_eq!(error.at(), Location::Field("annotations_language"));
+    }
+}
+
+// Quick 260914-m62: the malformed-tag kind precedes anchors and generic presentation findings.
+#[test]
+fn a_malformed_annotations_language_wins_over_a_duplicate_anchor_and_a_presentation_finding() {
+    let mut presentation = presentation_with_languages(&[b"en_US"]);
+    set_anchors(&mut presentation, &[1, 1]);
+    presentation.localized_presentation_annotations.pop();
+
+    let error = build_single(presentation)
+        .expect_err("a malformed language is reported before anchors and findings");
+    assert_eq!(error.kind(), &ErrorKind::AnnotationsLanguageNotWellFormed);
+    assert_eq!(error.at(), Location::Field("annotations_language"));
+}
+
+// Quick 260914-m62: the duplicate check runs first, so a repeated malformed tag stays a duplicate.
+#[test]
+fn a_duplicate_annotations_language_wins_over_a_malformed_one() {
+    let error = build_single(presentation_with_languages(&[b"en_US", b"en_US"]))
+        .expect_err("a repeated malformed language is rejected");
+    assert_eq!(error.kind(), &ErrorKind::DuplicateAnnotationsLanguage);
+    assert_eq!(error.at(), Location::Field("annotations_language"));
+}
+
+// Quick 260914-m62: grandfathered, private-use and three-digit-region tags build.
+#[test]
+fn well_formed_bcp47_annotations_languages_build() {
+    assert!(
+        build_single(presentation_with_languages(&[
+            b"en",
+            b"zh-Hant-TW",
+            b"x-private",
+            b"i-klingon",
+            b"es-419",
+        ]))
+        .is_ok()
+    );
+}
+
 #[test]
 fn a_duplicate_anchor_element_wins_over_a_presentation_finding() {
     let without_stereo = |anchors: &[u8]| {

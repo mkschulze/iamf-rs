@@ -378,8 +378,9 @@ impl MixPresentation {
     ///
     /// `EncoderBuilder::build()` checks `SubMixCountNotOne`,
     /// `ReservedHeadphonesRenderingMode`, duplicate handles,
-    /// `DuplicateAnnotationsLanguage` and `DuplicateAnchorElement` before
-    /// calling this, so these findings never pre-empt those dedicated kinds.
+    /// `DuplicateAnnotationsLanguage`, `AnnotationsLanguageNotWellFormed` and
+    /// `DuplicateAnchorElement` before calling this, so these findings never
+    /// pre-empt those dedicated kinds.
     #[must_use]
     pub fn validate(&self) -> Vec<Finding> {
         let mut findings = Vec::new();

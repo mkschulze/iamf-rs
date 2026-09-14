@@ -230,6 +230,12 @@ pub enum ErrorKind {
     // ref: iamf-tools@v2.1.0 iamf/common/utils/validation_utils.h ValidateContainerSizeEqual
     #[error("a stored gate or length disagrees with the data it gates")]
     GatedFieldMismatch,
+    /// A Mix Presentation `annotations_language` is not a well-formed BCP-47 language tag.
+    // ref: IAMF v1.1.0 index.bs:1273 (annotations_language SHALL conform to BCP-47)
+    // ref: RFC 5646 section 2.1 (well-formedness only; no registry, quick 260914-m62)
+    // DISAGREEMENT: iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:471-479, 523-530 and libiamf@v1.1.0 code/src/iamf_dec/IAMF_OBU.c:749 do not check; the spec is stricter and wins
+    #[error("a Mix Presentation annotations_language is not a well-formed BCP-47 language tag")]
+    AnnotationsLanguageNotWellFormed,
 }
 
 /// An error, with the position it happened at attached exactly once.

@@ -1220,6 +1220,19 @@ impl EncoderBuilder {
                     Location::Field("annotations_language"),
                 ));
             }
+            // ref: IAMF v1.1.0 index.bs:1273 (SHALL conform to BCP-47); RFC 5646 section 2.1
+            // Checked after the duplicate kind, so a repeated malformed tag stays DuplicateAnnotationsLanguage, and
+            // before descriptor serialisation, so a malformed tag with an interior NUL or over 127 bytes reports
+            // this kind (quick 260914-m62).
+            if !languages
+                .iter()
+                .all(|language| crate::model::language_tag::is_well_formed_language_tag(language))
+            {
+                return Err(Error::new(
+                    ErrorKind::AnnotationsLanguageNotWellFormed,
+                    Location::Field("annotations_language"),
+                ));
+            }
             // ref: IAMF v1.1.0 index.bs:1485; iamf-tools@v2.1.0 iamf/obu/mix_presentation.cc:135-136
             if declaration
                 .presentation
