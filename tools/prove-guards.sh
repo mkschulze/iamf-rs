@@ -12,7 +12,7 @@
 # single most likely way this project's hardening quietly stops existing —
 # turns the matrix red and names which guardrail stopped working.
 #
-# Seven cases:
+# Nine cases:
 #   (a) GUARD-01  an LGPL-licensed dependency        -> cargo deny check licenses
 #   (b) GUARD-02  std::collections::HashMap          -> clippy::disallowed_types
 #   (c) GUARD-02  the same type behind an alias      -> clippy::disallowed_types
@@ -23,8 +23,12 @@
 #                                                       clippy::disallowed_methods
 #   (g) GUARD-11  a second float escape in rustfmt's -> tools/check-float-escape-census.sh
 #                 multi-line attribute shape
+#   (h) GUARD-11  the same escape on one line        -> tools/check-float-escape-census.sh
+#   (i) GUARD-11  cfg_attr/expect and lint-group     -> tools/check-float-escape-census.sh
+#                 escapes, with comment and dead_code
+#                 decoys that must not be counted
 #
-# Case (g) proves the D-21 census rather than a clippy lint: clippy cannot
+# Cases (g)-(i) prove the D-21 census rather than a clippy lint: clippy cannot
 # police its own `allow` attributes, so the census is what keeps the crate at
 # exactly one sanctioned float escape. The census needs its own positive
 # control: every census case first runs it on the pristine copy and requires
@@ -51,7 +55,7 @@ PROOF_DIR="${REPO_ROOT}/target/guard-proof"
 
 PASS_COUNT=0
 FAIL_COUNT=0
-EXPECTED_PASS=7
+EXPECTED_PASS=9
 SUMMARY=()
 
 # ---------------------------------------------------------------------------
@@ -287,13 +291,47 @@ pub fn violation() -> f64 {
     1.0
 }'
 
+expect_census_fires h \
+    "GUARD-11 / D-21 float escape census — the same escape written on one line" \
+    1 \
+'#[allow(clippy::disallowed_types, reason = "Deliberate tools/prove-guards.sh violation: a second float escape.")]
+pub fn violation() -> f64 {
+    1.0
+}'
+
+# Case (i): the exact count of 3 proves both directions — no escape form is
+# missed, and neither the doc-comment text nor the unrelated dead_code allow is
+# counted. clippy 1.85 was observed to let `clippy::style`, `clippy::all` and a
+# cfg_attr-wrapped `expect(clippy::disallowed_types)` silence disallowed_types
+# (quick task 260914-38r), which is why all three are escapes.
+expect_census_fires i \
+    "GUARD-11 / D-21 float escape census — cfg_attr, expect and lint-group escapes, with decoys" \
+    3 \
+'#![allow(clippy::style)]
+
+/// Decoy: this doc comment names #[allow(clippy::disallowed_types)] and must not count.
+#[cfg_attr(test, expect(clippy::disallowed_types))]
+pub fn violation_expect() -> f64 {
+    1.0
+}
+
+#[allow(dead_code, clippy::all)]
+pub fn violation_group() -> f64 {
+    2.0
+}
+
+#[allow(dead_code)]
+pub fn decoy_unrelated_allow() -> u8 {
+    3
+}'
+
 echo
 echo "-------------------------------------------------------------------"
 printf '%s\n' "${SUMMARY[@]}"
 echo "-------------------------------------------------------------------"
 printf 'guardrail proof: %d passed, %d failed (%d expected)\n' "${PASS_COUNT}" "${FAIL_COUNT}" "${EXPECTED_PASS}"
 
-if [ "${FAIL_COUNT}" -ne 0 ] || [ "${PASS_COUNT}" -ne 7 ]; then
+if [ "${FAIL_COUNT}" -ne 0 ] || [ "${PASS_COUNT}" -ne 9 ]; then
     echo "GUARDRAIL PROOF FAILED — at least one guardrail is no longer biting." >&2
     exit 1
 fi

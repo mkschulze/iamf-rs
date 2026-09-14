@@ -4,7 +4,7 @@
 //! `expect_used` and `panic` **outside tests**. That carve-out is configured
 //! in `clippy.toml` (`allow-unwrap-in-tests` / `allow-expect-in-tests` /
 //! `allow-panic-in-tests`) rather than by `#[allow]` attributes here, so
-//! D-21's escape census — `rg 'allow.*disallowed_types' src/` must return
+//! D-21's escape census — `tools/check-float-escape-census.sh` must report
 //! exactly one entry, PROF-03's — stays meaningful. These tests happen not to
 //! need any of the three, but the carve-out is what makes `assert!` macros
 //! legal in this file at all.

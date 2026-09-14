@@ -244,8 +244,8 @@ jobs:
           fi
 
       # A guardrail that is configured and a guardrail that fires are different
-      # things. This step introduces six deliberate violations and asserts each
-      # gate rejects them by name, so a silently disabled lint turns the build
-      # red and says which one.
+      # things. This step introduces nine deliberate violations, including the
+      # float escape census cases, and asserts each gate rejects them by name,
+      # so a silently disabled lint turns the build red and says which one.
       - name: Prove every guardrail still bites
         run: bash tools/prove-guards.sh
