@@ -1,4 +1,5 @@
-//! The IA Sequence writer — SEQ-01, SEQ-02 and SEQ-03.
+//! The IA Sequence writer and reader — SEQ-01, SEQ-02, SEQ-03, PARSE-01 and
+//! PARSE-02.
 //!
 //! An IA Sequence is a descriptor prologue followed by temporal units, and
 //! that is exactly the shape of the primitive here:
@@ -28,6 +29,22 @@
 //!   `no_std`) — it would cost ergonomics to buy a guarantee nobody needs;
 //! - do not remove the streaming shape thinking it was only ever about
 //!   real-time safety — the memory ceiling is real and independent.
+//!
+//! # Reading: `SequenceReader`
+//!
+//! [`SequenceReader`] is the read-side primitive (PARSE-01, PARSE-02, quick
+//! 260914-hoa): it yields one [`SequenceObu`] at a time, carrying the
+//! parameter-definition registry across OBUs, and [`parse_sequence`] is that
+//! reader collected. It mirrors the streaming shape of SEQ-02 on read, for the
+//! same reason the writer streams: it is the memory ceiling. The flat
+//! [`ParsedSequence`] retains one 192-byte enum per OBU, so a hostile stream of
+//! 2-byte OBUs retains 96x its input; a caller that drops each item holds only
+//! the registry plus one OBU.
+//!
+//! The reader streams per OBU rather than per temporal unit because unit
+//! grouping needs whole-sequence lookahead:
+//! [`ParsedSequence::temporal_unit_ranges`] decides whether delimiters are in
+//! use by looking at every OBU. Grouping stays with the consumer.
 //!
 //! # No signal processing lives here, ever
 //!
@@ -510,19 +527,85 @@ fn observe_parameter_duplicates<F>(
     }
 }
 
-/// Parse all of `input`, returning no public prefix on failure.
+// ref: iamf-tools@v2.1.0 iamf/api/decoder/iamf_decoder.cc DecodeOneTemporalUnit
+// ref: libiamf@v1.1.0 code/include/IAMF_decoder.h IAMF_decoder_decode
+// NOTE: both references stream: they hold the descriptors plus the current
+// temporal unit and flush once it has been handed out. This reader streams per
+// OBU instead, because grouping into temporal units needs whole-sequence
+// lookahead (`ParsedSequence::temporal_unit_ranges` decides `uses_delimiters`
+// over every OBU).
+/// A streaming IA Sequence reader that yields one OBU at a time.
 ///
-/// Models written by this crate round-trip through derived [`PartialEq`], and
-/// bytes produced by either crate sequence writer re-emit byte-identically.
-/// Foreign IAMF may use a legal non-minimal ULEB128 width for `obu_size`;
-/// widths are syntax rather than model data, so re-emitting such input uses
-/// this crate's minimal canonical width and can change those bytes.
-pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
-    let mut reader = BitCursor::new(input);
-    let mut registry = ParamDefinitionRegistry::new();
-    let mut obus = Vec::new();
+/// Items come in exact wire order, with the same [`SequenceObu`] kinds and the
+/// same absolute [`Location::InputOffset`]s as [`parse_sequence`], which is
+/// exactly this reader collected. The reader is the primitive; the whole-file
+/// parse is the convenience.
+///
+/// The reader is fused after the first error: that `Err` is yielded once and
+/// every later call returns `None`. [`Self::byte_position`] then reports the
+/// start of the failing OBU, so `&input[..reader.byte_position()]` is the valid
+/// prefix whose OBUs were already yielded.
+///
+/// # Memory
+///
+/// The reader holds the borrowed input, a cursor and the parameter-definition
+/// registry. The registry grows with every definition an Audio Element or Mix
+/// Presentation publishes, including redundant descriptor copies. One yielded
+/// item is one OBU of at most 2 MiB `obu_size`; its model measured at most about
+/// 55x that size (about 110 MB, the `read_strings` worst case, quick
+/// 260914-hoa). Items the caller drops are freed immediately, so a caller that
+/// keeps nothing holds the registry plus one OBU.
+///
+/// # Examples
+///
+/// ```
+/// use iamf::sequence::{SequenceObu, SequenceReader};
+///
+/// let bytes = [0x20, 0x00, 0x20, 0x00];
+/// let mut delimiters = 0;
+/// for item in SequenceReader::new(&bytes) {
+///     if matches!(item?, SequenceObu::TemporalDelimiter(_)) {
+///         delimiters += 1;
+///     }
+/// }
+/// assert_eq!(delimiters, 2);
+/// # Ok::<(), iamf::Error>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct SequenceReader<'a> {
+    reader: BitCursor<'a>,
+    registry: ParamDefinitionRegistry,
+    finished: bool,
+}
 
-    while reader.bytes_remaining() > 0 {
+impl<'a> SequenceReader<'a> {
+    /// Start reading an IA Sequence at the first byte of `input`.
+    #[must_use]
+    pub const fn new(input: &'a [u8]) -> Self {
+        Self {
+            reader: BitCursor::new(input),
+            registry: ParamDefinitionRegistry::new(),
+            finished: false,
+        }
+    }
+
+    /// Absolute input offset of the next OBU to read.
+    ///
+    /// After an error this is the start of the failing OBU, not wherever the
+    /// failed read stopped.
+    #[must_use]
+    pub fn byte_position(&self) -> u64 {
+        self.reader.byte_position()
+    }
+
+    /// Read exactly one OBU from the current position.
+    ///
+    /// On error the cursor may have advanced; [`Iterator::next`] restores it.
+    fn next_obu(&mut self) -> Result<SequenceObu> {
+        let Self {
+            reader, registry, ..
+        } = self;
+
         // Inspection never advances the real cursor. It identifies the
         // dispatcher arm and the absolute start of the bounded payload; the
         // central OBU reader below remains the sole framing and drain path.
@@ -533,7 +616,7 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
 
         let parsed = match header.obu_type {
             ObuType::IaSequenceHeader => {
-                let mut obu = read_obu_with(&mut reader, |payload| {
+                let mut obu = read_obu_with(reader, |payload| {
                     read_ia_sequence_header(payload)
                         .map_err(|error| error.with_input_base(payload_base))
                 })?;
@@ -541,14 +624,14 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
                 SequenceObu::IaSequenceHeader(obu)
             }
             ObuType::CodecConfig => {
-                let mut obu = read_obu_with(&mut reader, |payload| {
+                let mut obu = read_obu_with(reader, |payload| {
                     read_codec_config(payload).map_err(|error| error.with_input_base(payload_base))
                 })?;
                 obu.trailing = core::mem::take(&mut obu.payload.trailing);
                 SequenceObu::CodecConfig(obu)
             }
             ObuType::AudioElement => {
-                let mut obu = read_obu_with(&mut reader, |payload| {
+                let mut obu = read_obu_with(reader, |payload| {
                     read_audio_element(payload).map_err(|error| error.with_input_base(payload_base))
                 })?;
                 obu.trailing = core::mem::take(&mut obu.payload.trailing);
@@ -558,7 +641,7 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
                 SequenceObu::AudioElement(obu)
             }
             ObuType::MixPresentation => {
-                let mut obu = read_obu_with(&mut reader, |payload| {
+                let mut obu = read_obu_with(reader, |payload| {
                     read_mix_presentation(payload)
                         .map_err(|error| error.with_input_base(payload_base))
                 })?;
@@ -574,12 +657,12 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
                         .map_err(|error| error.with_input_base(payload_base))
                 })?;
                 if registry.get(inspected.payload).is_some() {
-                    SequenceObu::ParameterBlock(read_obu_with(&mut reader, |payload| {
-                        read_parameter_block(payload, &registry)
+                    SequenceObu::ParameterBlock(read_obu_with(reader, |payload| {
+                        read_parameter_block(payload, registry)
                             .map_err(|error| error.with_input_base(payload_base))
                     })?)
                 } else {
-                    let raw = read_obu_with(&mut reader, |payload| {
+                    let raw = read_obu_with(reader, |payload| {
                         let remaining = payload.bytes_remaining();
                         payload
                             .read_uint8_span(remaining)
@@ -593,13 +676,13 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
                 }
             }
             ObuType::TemporalDelimiter => {
-                SequenceObu::TemporalDelimiter(read_obu_with(&mut reader, |payload| {
+                SequenceObu::TemporalDelimiter(read_obu_with(reader, |payload| {
                     read_temporal_delimiter(payload)
                         .map_err(|error| error.with_input_base(payload_base))
                 })?)
             }
             ObuType::Reserved(_) => {
-                let obu = read_obu_with(&mut reader, |payload| {
+                let obu = read_obu_with(reader, |payload| {
                     let remaining = payload.bytes_remaining();
                     payload
                         .read_uint8_span(remaining)
@@ -614,18 +697,66 @@ pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
             // Every remaining current variant is one of the Audio Frame types
             // 5..=23. Keeping them in one arm mirrors `is_audio_frame()` and
             // avoids duplicating the eighteen implicit-id spellings here.
-            _ => SequenceObu::AudioFrame(read_obu_with_header(
-                &mut reader,
-                |actual_header, payload| {
+            _ => {
+                SequenceObu::AudioFrame(read_obu_with_header(reader, |actual_header, payload| {
                     read_audio_frame(actual_header, payload)
                         .map_err(|error| error.with_input_base(payload_base))
-                },
-            )?),
+                })?)
+            }
         };
-        obus.push(parsed);
+        Ok(parsed)
     }
+}
 
-    Ok(ParsedSequence { obus })
+impl Iterator for SequenceReader<'_> {
+    type Item = Result<SequenceObu>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished || self.reader.bytes_remaining() == 0 {
+            return None;
+        }
+        let start = self.reader.clone();
+        match self.next_obu() {
+            Ok(obu) => Some(Ok(obu)),
+            Err(error) => {
+                self.reader = start;
+                self.finished = true;
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+impl core::iter::FusedIterator for SequenceReader<'_> {}
+
+/// Parse all of `input`, returning no public prefix on failure.
+///
+/// Models written by this crate round-trip through derived [`PartialEq`], and
+/// bytes produced by either crate sequence writer re-emit byte-identically.
+/// Foreign IAMF may use a legal non-minimal ULEB128 width for `obu_size`;
+/// widths are syntax rather than model data, so re-emitting such input uses
+/// this crate's minimal canonical width and can change those bytes.
+///
+/// # Memory
+///
+/// This retains every OBU. At the time of writing each [`SequenceObu`] is 192
+/// bytes inline on the 64-bit targets probed (the largest variant is
+/// `Obu<AudioElement>`), plus payload copies. That is a layout fact, not a
+/// guarantee, and no behaviour depends on it. The 40 committed `.iamf`
+/// fixtures measure 2.45x input in aggregate: 1.2-4.0x for files of at least
+/// 2 KB, and up to about 17x for files of 225 B or less. Hostile streams of
+/// 2-byte OBUs (`20 00`, `30 00`, `c0 00`) retain 96x input, measured at
+/// 3.27-3.66 GB max RSS for 32 MiB on macOS (quick 260914-hoa). For untrusted or
+/// large input, use [`SequenceReader`] and keep only what is needed.
+///
+/// # Errors
+///
+/// Returns the first error [`SequenceReader`] yields, with its absolute input
+/// offset. No partial model is returned.
+pub fn parse_sequence(input: &[u8]) -> Result<ParsedSequence> {
+    SequenceReader::new(input)
+        .collect::<Result<Vec<SequenceObu>>>()
+        .map(|obus| ParsedSequence { obus })
 }
 
 // ref: iamf-tools@v2.1.0 iamf/cli/obu_sequencer_base.cc ObuSequencerBase::PickAndPlace
