@@ -60,6 +60,10 @@ jobs:
       # here means the oracle is wrong, and no conformance verdict downstream
       # of it would mean anything.
       - name: Build the pinned reference decoder
+        env:
+          # libiamf ships a matching x86_64-Linux FDK-AAC archive.  Keep this
+          # opt-in so local non-Linux reference smoke runs remain LPCM-only.
+          IAMF_REFERENCE_ENABLE_AAC: "1"
         run: bash tools/build-reference.sh
 
       - name: Export IAMF_REF_DECODER

@@ -69,9 +69,9 @@ still carry the fields v2.0.0 deprecated (`count_label`, `num_substreams`,
 `param_definition_size`). Do not feed them to `encoder_main`; use the
 `iamf-tools/` copies.
 
-## Vendored — 77 files, 39 of them `.iamf`, 1,203,066 bytes total
+## Vendored — 78 files, 40 of them `.iamf`, 1,243,481 bytes total
 
-**`.iamf` files vendored: 39.** (`find tests/fixtures/reference -name '*.iamf' | wc -l`
+**`.iamf` files vendored: 40.** (`find tests/fixtures/reference -name '*.iamf' | wc -l`
 must print exactly that.)
 
 ### 1. The `test_000003` quartet — CONF-08's target and the smoke-test pair
@@ -164,7 +164,28 @@ nothing else in the file.
 | `reference/test_000503.iamf` | `libiamf` | 33 500 | yes | LPCM under the cap; stereo  simple profile |
 | `reference/test_000503.textproto` | `libiamf` | 4 139 | yes | configuration for test_000503.iamf |
 
-### 3. Structurally interesting — paths Phase 1 writes
+### 3. AAC-LC — pinned external-oracle vector
+
+| Path (under `tests/fixtures/`) | Source repo | Bytes | Vendored | Reason |
+|---|---|---:|:--:|---|
+| `reference/test_000076_aac_lc.iamf` | `libiamf` | 40,415 | yes | `test_000076.iamf` from the pinned tree, renamed only to make its codec explicit: stereo AAC-LC, 48 kHz, 1024 samples/frame, roll −1. `conformance` parses and byte-identically re-emits it, then the Linux reference job verifies the output with both libiamf and iamf-tools. |
+
+The source vector's rendered WAV is 98,348 bytes and therefore exceeds the
+64 KiB cap. It is intentionally not vendored: the reference gate instead
+requires the pinned decoder to render nonempty stereo 48 kHz PCM from the
+re-emitted bytes, while the byte-identical parse/write assertion preserves the
+independently produced AAC access units exactly.
+
+Pinned extraction command:
+
+```sh
+git -C .reference/libiamf show f06e919e2ad5502a2adc4bdd4e146f2e7e7ffb63:tests/test_000076.iamf \
+  > tests/fixtures/reference/test_000076_aac_lc.iamf
+```
+
+SHA-256: `34b8a68cfac575a8a001b6d18fa1539e5c53d4024a4e43e66d8f0a80b60ef02f`.
+
+### 4. Structurally interesting — paths Phase 1 writes
 
 | Path (under `tests/fixtures/`) | Source repo | Bytes | Vendored | Reason |
 |---|---|---:|:--:|---|
@@ -184,7 +205,7 @@ leb128 material that exists anywhere in the reference corpus — and no
 by `encoder_main` in the pinned container. It is named here now, while the fact
 is known, for Phase 2's PARSE-04.
 
-### 4. `iamf-tools` fixtures — the four valid ones
+### 5. `iamf-tools` fixtures — the four valid ones
 
 The four binaries have no paired configuration files upstream.  Their pinned
 byte-offset hand-decodes and raw-codec digests are committed in
@@ -198,7 +219,7 @@ short filename summaries below are inventory labels, not semantic oracles.
 | `reference/iamf-tools/noise_3s_stereo_opus.iamf` | `iamf-tools` | 2 319 | yes | valid iamf-tools-produced fixture: stereo Opus  num_samples_per_frame = 120 |
 | `reference/iamf-tools/tones_100ms_3OA_stereo_opus.iamf` | `iamf-tools` | 4 715 | yes | valid iamf-tools-produced fixture: third-order ambisonics + stereo  num_samples_per_frame = 960 |
 
-### 5. Negative fixtures — INVALID by construction, never goldens
+### 6. Negative fixtures — INVALID by construction, never goldens
 
 | Path (under `tests/fixtures/`) | Source repo | Bytes | Vendored | Reason |
 |---|---|---:|:--:|---|

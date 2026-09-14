@@ -99,6 +99,19 @@ fn reference_manifest_matches_pinned_shas() {
     };
     let references = read(&references_path).expect("REFERENCES.md must exist at the repo root");
 
+    let manifest_decoder = manifest.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("\"iamfdec_path\": \"")
+            .and_then(|value| value.strip_suffix("\","))
+    });
+    assert_eq!(
+        manifest_decoder,
+        Some(decoder.as_str()),
+        "IAMF_REF_DECODER ({decoder}) does not match the decoder path stamped in \\
+         .reference-manifest.json ({manifest_decoder:?}). Re-run tools/build-reference.sh and \\
+         export the path it prints; a manifest must never authorize a different binary."
+    );
+
     // Two projects, two SHAs, asserted independently so the failure message
     // says which pin drifted.
     for (project, manifest_key) in [("libiamf", "libiamf_sha"), ("iamf-tools", "iamf_tools_sha")] {
@@ -122,7 +135,12 @@ fn reference_manifest_matches_pinned_shas() {
     // The manifest must also record what was built, not merely which source was
     // checked out — a Phase 3 build with real opus/FLAC libraries produces a
     // different iamfdec from the same SHA (D-13).
-    for key in ["iamfdec_sha256", "host_triple", "dep_codecs_disabled"] {
+    for key in [
+        "iamfdec_sha256",
+        "host_triple",
+        "dep_codecs_disabled",
+        "aac_reference_enabled",
+    ] {
         assert!(
             manifest.contains(key),
             ".reference-manifest.json is missing the `{key}` field; \

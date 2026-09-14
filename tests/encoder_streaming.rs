@@ -95,6 +95,19 @@ fn wrong_codec_frame_writes_no_temporal_bytes() -> iamf::Result<()> {
         .unwrap_err();
     assert_eq!(error.kind(), &ErrorKind::FrameCodecMismatch);
     assert_eq!(writer.bytes_written(), before);
+
+    let (aac_encoder, (aac_substream, _)) = mono_builder(CodecConfig::aac_lc(0, 48_000)?)?;
+    let mut aac_writer = aac_encoder.start(Vec::new())?;
+    let aac_before = aac_writer.bytes_written();
+    let error = aac_writer
+        .push_temporal_unit(TemporalUnitInput {
+            frames: vec![(aac_substream, FrameInput::Opus(vec![0xf8]))],
+            parameter_blocks: Vec::new(),
+            trimming: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::FrameCodecMismatch);
+    assert_eq!(aac_writer.bytes_written(), aac_before);
     Ok(())
 }
 
@@ -141,7 +154,7 @@ fn overflowing_trim_sum_writes_no_temporal_bytes() -> iamf::Result<()> {
 }
 
 #[test]
-fn lpcm_flac_and_opus_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> {
+fn lpcm_flac_opus_and_aac_lc_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> {
     // ref: IAMF v1.1.0 index.bs:1819 (an Opus stream trims exactly pre_skip samples at its start)
     for (result, trimming) in [
         (
@@ -161,13 +174,15 @@ fn lpcm_flac_and_opus_inputs_follow_the_frozen_codec_kind() -> iamf::Result<()> 
             mono_builder(CodecConfig::opus(0, 960, 48_000, 312)?),
             Some(start_trim(312)),
         ),
+        (mono_builder(CodecConfig::aac_lc(0, 48_000)?), None),
     ] {
         let (encoder, frame) = result?;
         let mut writer = encoder.start(Vec::new())?;
         let expected_payload = match &frame.1 {
-            FrameInput::Lpcm(payload) | FrameInput::Flac(payload) | FrameInput::Opus(payload) => {
-                payload.clone()
-            }
+            FrameInput::Lpcm(payload)
+            | FrameInput::Flac(payload)
+            | FrameInput::Opus(payload)
+            | FrameInput::AacLc(payload) => payload.clone(),
         };
         writer.push_temporal_unit(TemporalUnitInput {
             frames: vec![(frame.0, frame.1)],
@@ -993,11 +1008,12 @@ fn mono_builder(
         ),
     );
     // The mix-gain parameter_rate must equal the codec output rate
-    // (ParameterRateMismatch): 16 kHz for these LPCM/FLAC configs, 48 kHz for Opus.
+    // (ParameterRateMismatch): 16 kHz for these LPCM/FLAC configs, 48 kHz for Opus/AAC-LC.
     let (input, rate) = match config.decoder_config {
         iamf::obu::DecoderConfig::Lpcm(_) => (FrameInput::Lpcm(vec![0; 256]), 16_000),
         iamf::obu::DecoderConfig::Flac(_) => (FrameInput::Flac(vec![0]), 16_000),
         iamf::obu::DecoderConfig::Opus(_) => (FrameInput::Opus(vec![0xf8]), 48_000),
+        iamf::obu::DecoderConfig::AacLc(_) => (FrameInput::AacLc(vec![0x21, 0x10, 0x04]), 48_000),
         iamf::obu::DecoderConfig::Raw { .. } | _ => unreachable!(),
     };
     let mut mono = presentation();

@@ -99,6 +99,8 @@ echo "  checked out $ACTUAL_SHA"
 # and fail at link time before the LPCM smoke test can run.
 CODEC_LIB_DIR="$SRC/code/dep_codecs/lib"
 CODEC_DISABLED_DIR="$SRC/code/dep_codecs/lib_disabled"
+ENABLE_AAC_REFERENCE="${IAMF_REFERENCE_ENABLE_AAC:-0}"
+AAC_REFERENCE_ENABLED=false
 mkdir -p "$CODEC_LIB_DIR" "$CODEC_DISABLED_DIR"
 
 if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
@@ -109,13 +111,22 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
     mv "$f" "$CODEC_LIB_DIR/"
     restored=$((restored + 1))
   done
-  # AAC is outside this project's reference scope. Leaving its archive absent
-  # avoids compiling an unused decoder and, more importantly, avoids an
-  # unnecessary static-link dependency in the standalone iamfdec tool.
-  for f in "$CODEC_LIB_DIR"/libfdk-aac.*; do
-    [ -e "$f" ] || continue
-    mv "$f" "$CODEC_DISABLED_DIR/"
-  done
+  if [ "$ENABLE_AAC_REFERENCE" = "1" ]; then
+    log "enabling bundled FDK-AAC archive (explicit AAC reference run)"
+    for f in "$CODEC_DISABLED_DIR"/libfdk-aac.*; do
+      [ -e "$f" ] || continue
+      mv "$f" "$CODEC_LIB_DIR/"
+      restored=$((restored + 1))
+    done
+    AAC_REFERENCE_ENABLED=true
+  else
+    # AAC remains opt-in: it is needed only for the dedicated AAC-LC oracle
+    # gate, not for a developer's ordinary local reference smoke run.
+    for f in "$CODEC_LIB_DIR"/libfdk-aac.*; do
+      [ -e "$f" ] || continue
+      mv "$f" "$CODEC_DISABLED_DIR/"
+    done
+  fi
   echo "  restored $restored archive(s) (0 on a clean checkout is expected)"
   DEP_CODECS_DISABLED=false
 else
@@ -150,26 +161,53 @@ if [ "$DEP_CODECS_DISABLED" = true ]; then
   grep -iE 'the (opus|fdk-aac|FLAC) library was not found' "$CONFIGURE_LOG" \
     || echo "  WARNING: the configure log did not carry the codec-not-found lines; see $CONFIGURE_LOG"
 else
-  log "codec-enable confirmation (FLAC and Opus must be configured)"
-  if grep -qiE 'the (opus|FLAC) library was not found' "$CONFIGURE_LOG"; then
-    echo "FATAL: the Linux reference build did not configure FLAC and Opus support" >&2
+  log "codec-enable confirmation (FLAC and Opus, plus opt-in AAC, must be configured)"
+  missing_codecs='opus|FLAC'
+  if [ "$ENABLE_AAC_REFERENCE" = "1" ]; then
+    missing_codecs="$missing_codecs|fdk-aac"
+  fi
+  if grep -qiE "the ($missing_codecs) library was not found" "$CONFIGURE_LOG"; then
+    echo "FATAL: the Linux reference build did not configure the requested codec support" >&2
     exit 1
   fi
 fi
 
 log "cmake configure + build (iamfdec)"
 # libiamf@v1.1.0 records codec libraries only on its shared target.  Its
-# static archive therefore leaves Opus and FLAC unresolved in the separate
+# static archive therefore leaves Opus, FLAC and (when explicitly enabled)
+# FDK-AAC unresolved in the separate
 # iamfdec CMake project, which otherwise links only `iamf m`.  Patch that
 # *tool-project* link line, never libiamf's decoder sources, and refuse to
 # build if the pinned upstream layout changes.
 IAMFDEC_CMAKE="$SRC/code/test/tools/iamfdec/CMakeLists.txt"
+# A previous run may have patched this generated checkout with absolute codec
+# archive paths. Restore only that known link directive before deciding this
+# run's codec set, so switching AAC on/off (or Linux/macOS) is reversible.
+if ! grep -Fq 'target_link_libraries (iamfdec iamf m)' "$IAMFDEC_CMAKE"; then
+  if ! grep -Fq 'target_link_libraries (iamfdec iamf m ' "$IAMFDEC_CMAKE"; then
+    echo "FATAL: pinned iamfdec CMake link line changed; refusing an unchecked patch" >&2
+    exit 1
+  fi
+  sed -i.bak -E \
+    's|target_link_libraries \(iamfdec iamf m [^)]*\)|target_link_libraries (iamfdec iamf m)|' \
+    "$IAMFDEC_CMAKE"
+  rm -f "$IAMFDEC_CMAKE.bak"
+fi
 if [ "$DEP_CODECS_DISABLED" = false ]; then
   OPUS_ARCHIVE="$CODEC_LIB_DIR/libopus.a"
   FLAC_ARCHIVE="$CODEC_LIB_DIR/libFLAC.a"
   if [ ! -f "$OPUS_ARCHIVE" ] || [ ! -f "$FLAC_ARCHIVE" ]; then
     echo "FATAL: expected bundled Opus and FLAC archives are unavailable" >&2
     exit 1
+  fi
+  CODEC_ARCHIVES="$OPUS_ARCHIVE $FLAC_ARCHIVE"
+  if [ "$ENABLE_AAC_REFERENCE" = "1" ]; then
+    FDK_AAC_ARCHIVE="$CODEC_LIB_DIR/libfdk-aac.a"
+    if [ ! -f "$FDK_AAC_ARCHIVE" ]; then
+      echo "FATAL: AAC reference run requested but bundled FDK-AAC archive is unavailable" >&2
+      exit 1
+    fi
+    CODEC_ARCHIVES="$CODEC_ARCHIVES $FDK_AAC_ARCHIVE"
   fi
   # v1.1.0 ships this CMake file with CRLF line endings, so do not make the
   # guard depend on a byte-for-byte line terminator. The link directive itself
@@ -179,7 +217,7 @@ if [ "$DEP_CODECS_DISABLED" = false ]; then
     exit 1
   fi
   sed -i.bak \
-    "s|target_link_libraries (iamfdec iamf m)|target_link_libraries (iamfdec iamf m $OPUS_ARCHIVE $FLAC_ARCHIVE)|" \
+    "s|target_link_libraries (iamfdec iamf m)|target_link_libraries (iamfdec iamf m $CODEC_ARCHIVES)|" \
     "$IAMFDEC_CMAKE"
   rm -f "$IAMFDEC_CMAKE.bak"
 fi
@@ -307,6 +345,7 @@ cat > "$MANIFEST" <<EOF
   "host_triple": "$HOST_TRIPLE",
   "cmake_version": "$CMAKE_VERSION",
   "dep_codecs_disabled": $DEP_CODECS_DISABLED,
+  "aac_reference_enabled": $AAC_REFERENCE_ENABLED,
   "smoke_frames": $SMOKE_EXPECT_FRAMES,
   "smoke_differing_samples": 0,
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

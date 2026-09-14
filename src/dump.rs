@@ -412,6 +412,44 @@ fn dump_codec_config(offset: usize, value: &CodecConfig) -> String {
             out.push_str(&field(offset, "  output_gain", opus.output_gain));
             out.push_str(&field(offset, "  mapping_family", opus.mapping_family));
         }
+        DecoderConfig::AacLc(aac_lc) => {
+            out.push_str(&field(
+                offset,
+                "  object_type_indication",
+                aac_lc.object_type_indication,
+            ));
+            out.push_str(&field(offset, "  stream_type", aac_lc.stream_type));
+            out.push_str(&field(offset, "  upstream", aac_lc.upstream));
+            out.push_str(&field(offset, "  buffer_size_db", aac_lc.buffer_size_db));
+            out.push_str(&field(offset, "  max_bitrate", aac_lc.max_bitrate));
+            out.push_str(&field(offset, "  avg_bitrate", aac_lc.avg_bitrate));
+            out.push_str(&field(
+                offset,
+                "  audio_object_type",
+                aac_lc.audio_object_type,
+            ));
+            out.push_str(&field(
+                offset,
+                "  sampling_frequency_index",
+                aac_lc.sampling_frequency_index,
+            ));
+            out.push_str(&field(
+                offset,
+                "  channel_configuration",
+                aac_lc.channel_configuration,
+            ));
+            out.push_str(&field(
+                offset,
+                "  frame_length_flag",
+                aac_lc.frame_length_flag,
+            ));
+            out.push_str(&field(
+                offset,
+                "  depends_on_core_coder",
+                aac_lc.depends_on_core_coder,
+            ));
+            out.push_str(&field(offset, "  extension_flag", aac_lc.extension_flag));
+        }
         DecoderConfig::Raw { codec_id, bytes } => {
             out.push_str(&field(
                 offset,

@@ -7,9 +7,10 @@ use crate::error::{Error, ErrorKind, Location, Result};
 use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
 use crate::model::{DescriptorSet, Profile};
 use crate::obu::{
-    AudioElement, AudioElementType, AudioFrame, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
-    CodecConfig, DecoderConfig, HeadphonesRenderingMode, IaSequenceHeader, MixGainParamDefinition,
-    MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry, ParameterBlock, Trimming,
+    AudioElement, AudioElementType, AudioFrame, CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM,
+    CODEC_ID_OPUS, CodecConfig, DecoderConfig, HeadphonesRenderingMode, IaSequenceHeader,
+    MixGainParamDefinition, MixPresentation, Obu, ObuHeader, ObuType, ParamDefinitionRegistry,
+    ParameterBlock, Trimming,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::io::Write;
@@ -170,8 +171,8 @@ impl Encoder {
 /// One caller-owned, pre-encoded Audio Frame payload.
 ///
 /// This type deliberately has no encoder, decoder, resampler, or PCM
-/// conversion operation. FLAC and Opus access units are handed through
-/// verbatim; LPCM bytes are only checked against the frozen frame plan.
+/// conversion operation. FLAC, Opus, and AAC-LC access units are handed
+/// through verbatim; LPCM bytes are only checked against the frozen frame plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameInput {
     /// IAMF-LPCM sample bytes in the codec configuration's declared format.
@@ -180,6 +181,8 @@ pub enum FrameInput {
     Flac(Vec<u8>),
     /// One already encoded Opus access unit.
     Opus(Vec<u8>),
+    /// One externally encoded AAC-LC raw_data_block access unit.
+    AacLc(Vec<u8>),
 }
 
 /// A Parameter Block submitted against its frozen caller-local definition.
@@ -626,13 +629,20 @@ impl<W: Write> EncodingWriter<W> {
                 Ok(())
             }
             (DecoderConfig::Flac(_), FrameInput::Flac(_))
-            | (DecoderConfig::Opus(_), FrameInput::Opus(_)) => Ok(()),
+            | (DecoderConfig::Opus(_), FrameInput::Opus(_))
+            | (DecoderConfig::AacLc(_), FrameInput::AacLc(_)) => Ok(()),
             (DecoderConfig::Lpcm(_), FrameInput::Flac(_))
             | (DecoderConfig::Lpcm(_), FrameInput::Opus(_))
+            | (DecoderConfig::Lpcm(_), FrameInput::AacLc(_))
             | (DecoderConfig::Flac(_), FrameInput::Lpcm(_))
             | (DecoderConfig::Flac(_), FrameInput::Opus(_))
+            | (DecoderConfig::Flac(_), FrameInput::AacLc(_))
             | (DecoderConfig::Opus(_), FrameInput::Lpcm(_))
             | (DecoderConfig::Opus(_), FrameInput::Flac(_))
+            | (DecoderConfig::Opus(_), FrameInput::AacLc(_))
+            | (DecoderConfig::AacLc(_), FrameInput::Lpcm(_))
+            | (DecoderConfig::AacLc(_), FrameInput::Flac(_))
+            | (DecoderConfig::AacLc(_), FrameInput::Opus(_))
             | (DecoderConfig::Raw { .. }, _) => {
                 Err(temporal_input(ErrorKind::FrameCodecMismatch, "frame.codec"))
             }
@@ -642,9 +652,10 @@ impl<W: Write> EncodingWriter<W> {
 
 fn frame_payload(frame: FrameInput) -> Vec<u8> {
     match frame {
-        FrameInput::Lpcm(payload) | FrameInput::Flac(payload) | FrameInput::Opus(payload) => {
-            payload
-        }
+        FrameInput::Lpcm(payload)
+        | FrameInput::Flac(payload)
+        | FrameInput::Opus(payload)
+        | FrameInput::AacLc(payload) => payload,
     }
 }
 
@@ -1037,6 +1048,7 @@ impl EncoderBuilder {
                 DecoderConfig::Lpcm(_) => CODEC_ID_LPCM,
                 DecoderConfig::Flac(_) => CODEC_ID_FLAC,
                 DecoderConfig::Opus(_) => CODEC_ID_OPUS,
+                DecoderConfig::AacLc(_) => CODEC_ID_AAC,
                 DecoderConfig::Raw { .. } => return Err(invalid("decoder_config")),
             };
             if config.codec_id != expected {
@@ -1467,12 +1479,17 @@ const OPUS_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 
 /// The rate audio samples are produced at after decoding this Codec Config.
 ///
-/// Opus always decodes at 48 kHz, so its `input_sample_rate` is deliberately not used.
-const fn output_sample_rate(config: &CodecConfig) -> Option<u32> {
+/// Opus always decodes at 48 kHz, so its `input_sample_rate` is deliberately not used. AAC-LC's
+/// rate is looked up from its `sampling_frequency_index`, since the field on the wire is an
+/// MPEG-4 table index, not a rate in Hz.
+fn output_sample_rate(config: &CodecConfig) -> Option<u32> {
     match &config.decoder_config {
         DecoderConfig::Lpcm(lpcm) => Some(lpcm.sample_rate),
         DecoderConfig::Flac(flac) => Some(flac.sample_rate),
         DecoderConfig::Opus(_) => Some(OPUS_OUTPUT_SAMPLE_RATE),
+        DecoderConfig::AacLc(aac_lc) => {
+            crate::obu::aac_lc_output_sample_rate(aac_lc.sampling_frequency_index)
+        }
         DecoderConfig::Raw { .. } => None,
     }
 }

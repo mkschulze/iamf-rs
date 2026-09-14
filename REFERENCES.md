@@ -176,6 +176,15 @@ failure mode is a developer debugging a byte diff who opens
 distributions use do not change the analysis either way, because the GPL's reach
 is over a combined work and there is no combined work here.
 
+The reference tier can also optionally link `libiamf`'s own bundled FDK-AAC
+archive, gated by `IAMF_REFERENCE_ENABLE_AAC=1` (`tools/build-reference.sh`),
+to run the AAC-LC conformance gate. This is the same "invoke, never read"
+pattern already used for `libiamf`'s bundled Opus and FLAC archives: the
+archive already ships inside the pinned `libiamf@v1.1.0` checkout, only the
+excluded Linux reference-tier build links it, and it adds no build dependency
+to this crate — `Cargo.toml`/`Cargo.lock` are untouched. It is not a project
+dependency and does not get a licence-table row.
+
 Attribution for the reference material this crate ports field layouts and
 constants from is in [`NOTICE`](NOTICE). The AOM Patent License 1.0 required at
 the repository root by §1.2.1(a) is in [`PATENTS`](PATENTS).

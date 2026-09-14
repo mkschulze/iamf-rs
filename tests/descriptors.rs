@@ -21,13 +21,13 @@ use iamf::error::{ErrorKind, Location};
 use iamf::model::by_id;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam, AudioElementType,
-    ChannelAudioLayerConfig, CodecConfig, DecoderConfig, FlacDecoderConfig, IaSequenceHeader,
-    Layout, LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig, Obu, ObuHeader,
-    ObuType, OpusDecoderConfig, OutputGain, SampleFormatFlags, ScalableChannelLayoutConfig,
-    read_audio_element, read_codec_config, read_ia_sequence_header, read_mix_presentation,
-    read_obu_with, write_audio_element, write_codec_config, write_ia_sequence_header,
-    write_mix_presentation, write_obu_with,
+    AacLcDecoderConfig, AnchorElement, AnchoredLoudness, AudioElement, AudioElementParam,
+    AudioElementType, ChannelAudioLayerConfig, CodecConfig, DecoderConfig, FlacDecoderConfig,
+    IaSequenceHeader, Layout, LayoutWithLoudness, Loudness, LoudnessExtension, LpcmDecoderConfig,
+    Obu, ObuHeader, ObuType, OpusDecoderConfig, OutputGain, SampleFormatFlags,
+    ScalableChannelLayoutConfig, read_audio_element, read_codec_config, read_ia_sequence_header,
+    read_mix_presentation, read_obu_with, required_audio_roll_distance, write_audio_element,
+    write_codec_config, write_ia_sequence_header, write_mix_presentation, write_obu_with,
 };
 
 /// The published `test_000003` configuration, shared with `tests/sequence.rs`.
@@ -166,6 +166,257 @@ fn codec_config_reproduces_offsets_0x08_through_0x19() {
         obu_bytes(&published_codec_config(), write_codec_config),
         hex!("00 10 c8 01 69 70 63 6d 80 01 00 00 01 10 00 00 3e 80"),
     );
+}
+
+#[test]
+fn canonical_aac_lc_config_is_the_v1_1_descriptor() -> iamf::Result<()> {
+    let config = CodecConfig::aac_lc(2, 48_000)?;
+    assert_eq!(config.codec_id, *b"mp4a");
+    assert_eq!(config.num_samples_per_frame, 1024);
+    assert_eq!(config.audio_roll_distance, -1);
+    assert_eq!(required_audio_roll_distance(&config.decoder_config), -1);
+    assert_eq!(
+        obu_bytes(
+            &Obu::new(ObuHeader::new(ObuType::CodecConfig), config.clone()),
+            write_codec_config,
+        ),
+        hex!(
+            "00 1c 02 6d 70 34 61 80 08 ff ff
+             04 11 40 15 00 00 00 00 00 00 00 00 00 00
+             00 05 02 11 90"
+        ),
+    );
+    assert_eq!(
+        config
+            .aac_lc_config()
+            .expect("typed AAC-LC")
+            .sampling_frequency_index,
+        3
+    );
+    assert!(config.validate().is_empty());
+    Ok(())
+}
+
+#[test]
+fn aac_lc_constructor_maps_only_non_reserved_mpeg4_sample_rates() {
+    for (sample_rate, expected_index) in [
+        (96_000, 0),
+        (88_200, 1),
+        (64_000, 2),
+        (48_000, 3),
+        (44_100, 4),
+        (32_000, 5),
+        (24_000, 6),
+        (22_050, 7),
+        (16_000, 8),
+        (12_000, 9),
+        (11_025, 10),
+        (8_000, 11),
+        (7_350, 12),
+    ] {
+        let config = CodecConfig::aac_lc(2, sample_rate)
+            .unwrap_or_else(|error| panic!("{sample_rate} Hz should be accepted: {error:?}"));
+        assert_eq!(
+            config
+                .aac_lc_config()
+                .expect("AAC-LC constructor returns typed config")
+                .sampling_frequency_index,
+            expected_index,
+        );
+    }
+
+    for (label, sample_rate) in [
+        ("unsupported 13 Hz rate", 13),
+        ("unsupported 14 Hz rate", 14),
+        ("unsupported 15 Hz rate", 15),
+        ("arbitrary unsupported rate", 47_999),
+    ] {
+        let error = CodecConfig::aac_lc(2, sample_rate)
+            .expect_err(&format!("{label} must not construct an AAC-LC descriptor"));
+        assert_eq!(
+            error.kind(),
+            &ErrorKind::SampleRateNotSupportedByCodec,
+            "{label}"
+        );
+        assert_eq!(error.at(), Location::Field("sample_rate"));
+    }
+}
+
+#[test]
+fn full_length_noncanonical_aac_envelope_stays_raw_and_byte_exact() -> iamf::Result<()> {
+    let config = CodecConfig::aac_lc(2, 48_000)?;
+    let mut bytes = obu_bytes(
+        &Obu::new(ObuHeader::new(ObuType::CodecConfig), config),
+        write_codec_config,
+    );
+    *bytes.get_mut(11).expect("descriptor tag is present") = 0x03;
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)?;
+    assert!(matches!(
+        parsed.payload.decoder_config,
+        DecoderConfig::Raw { .. }
+    ));
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+    Ok(())
+}
+
+#[test]
+fn typed_aac_lc_claims_only_its_descriptor_and_preserves_trailing() -> iamf::Result<()> {
+    let mut config = CodecConfig::aac_lc(2, 48_000)?;
+    config.trailing = vec![0xaa, 0xbb];
+    let bytes = obu_bytes(
+        &Obu::new(ObuHeader::new(ObuType::CodecConfig), config),
+        write_codec_config,
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)?;
+    assert!(matches!(
+        parsed.payload.decoder_config,
+        DecoderConfig::AacLc(_)
+    ));
+    assert_eq!(parsed.payload.trailing, [0xaa, 0xbb]);
+    assert!(parsed.trailing.is_empty());
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+    Ok(())
+}
+
+#[test]
+fn parsed_aac_lc_preserves_nonzero_descriptor_fields() -> iamf::Result<()> {
+    let mut config = CodecConfig::aac_lc(2, 48_000)?;
+    let DecoderConfig::AacLc(aac_lc) = &mut config.decoder_config else {
+        panic!("AAC constructor must create a typed descriptor");
+    };
+    aac_lc.buffer_size_db = 0x00ab_cdef;
+    aac_lc.max_bitrate = 0x1234_5678;
+    aac_lc.avg_bitrate = 0x8765_4321;
+    let bytes = obu_bytes(
+        &Obu::new(ObuHeader::new(ObuType::CodecConfig), config.clone()),
+        write_codec_config,
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config)?;
+    assert_eq!(parsed.payload, config);
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+    Ok(())
+}
+
+#[test]
+fn aac_lc_buffer_size_db_outside_24_bits_is_a_finding() -> iamf::Result<()> {
+    let mut config = CodecConfig::aac_lc(2, 48_000)?;
+    let DecoderConfig::AacLc(aac_lc) = &mut config.decoder_config else {
+        panic!("AAC constructor must create a typed descriptor");
+    };
+    aac_lc.buffer_size_db = 0x0100_0000;
+    assert!(
+        config
+            .validate()
+            .iter()
+            .any(|finding| finding.at == Location::Field("buffer_size_db"))
+    );
+    Ok(())
+}
+
+#[test]
+fn parsed_reserved_aac_sampling_frequency_indices_are_diagnosed() -> iamf::Result<()> {
+    for sampling_frequency_index in 13..=15 {
+        let mut config = CodecConfig::aac_lc(2, 48_000)?;
+        let DecoderConfig::AacLc(aac_lc) = &mut config.decoder_config else {
+            panic!("AAC constructor must create a typed descriptor");
+        };
+        aac_lc.sampling_frequency_index = sampling_frequency_index;
+        let bytes = obu_bytes(
+            &Obu::new(ObuHeader::new(ObuType::CodecConfig), config),
+            write_codec_config,
+        );
+        let mut reader = BitCursor::new(&bytes);
+        let parsed = read_obu_with(&mut reader, read_codec_config)?;
+        assert!(matches!(
+            parsed.payload.decoder_config,
+            DecoderConfig::AacLc(_)
+        ));
+        assert!(
+            parsed
+                .payload
+                .validate()
+                .iter()
+                .any(|finding| finding.at == Location::Field("sampling_frequency_index"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn short_aac_decoder_config_stays_raw_and_byte_exact() {
+    let bytes = hex!(
+        "00 1b 02 6d 70 34 61 80 08 ff ff
+         04 11 40 15 00 00 00 00 00 00 00 00 00 00
+         00 05 02 11"
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config).expect("short AAC parses");
+    assert!(matches!(
+        parsed.payload.decoder_config,
+        DecoderConfig::Raw { .. }
+    ));
+    assert_eq!(obu_bytes(&parsed, write_codec_config), bytes);
+}
+
+#[test]
+fn parsed_aac_lc_contradictions_are_preserved_and_diagnosed() {
+    let contradictory = CodecConfig {
+        codec_config_id: 2,
+        codec_id: *b"mp4a",
+        num_samples_per_frame: 960,
+        audio_roll_distance: 0,
+        decoder_config: DecoderConfig::AacLc(AacLcDecoderConfig {
+            object_type_indication: 0x41,
+            stream_type: 4,
+            upstream: true,
+            buffer_size_db: 0,
+            max_bitrate: 0,
+            avg_bitrate: 0,
+            audio_object_type: 3,
+            sampling_frequency_index: 3,
+            channel_configuration: 1,
+            frame_length_flag: true,
+            depends_on_core_coder: true,
+            extension_flag: true,
+        }),
+        trailing: Vec::new(),
+    };
+    let bytes = obu_bytes(
+        &Obu::new(ObuHeader::new(ObuType::CodecConfig), contradictory),
+        write_codec_config,
+    );
+    let mut reader = BitCursor::new(&bytes);
+    let parsed = read_obu_with(&mut reader, read_codec_config).expect("contradictory AAC parses");
+    assert!(matches!(
+        parsed.payload.decoder_config,
+        DecoderConfig::AacLc(_)
+    ));
+    let names: Vec<_> = parsed
+        .payload
+        .validate()
+        .iter()
+        .map(|finding| finding.at)
+        .collect();
+    for field in [
+        "object_type_indication",
+        "stream_type",
+        "upstream",
+        "audio_object_type",
+        "channel_configuration",
+        "frame_length_flag",
+        "depends_on_core_coder",
+        "extension_flag",
+        "num_samples_per_frame",
+        "audio_roll_distance",
+    ] {
+        assert!(
+            names.contains(&Location::Field(field)),
+            "missing finding: {field}"
+        );
+    }
 }
 
 #[test]

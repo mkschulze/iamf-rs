@@ -53,6 +53,10 @@ macro_rules! positive {
 
 pub const POSITIVE_EXPECTATIONS: &[PositiveExpectation] = &[
     positive!(
+        "test_000076_aac_lc.iamf",
+        "74a79cb7da31fd657d25e647a912d7bb184c4786f1d2d8122c533398bfd56a3e"
+    ),
+    positive!(
         "test_000000_3.iamf",
         "0c2ddc410d5b20b7e6226adaf52aba3adcbfe1b22b6f5b97461facf96fdf3c6a"
     ),
