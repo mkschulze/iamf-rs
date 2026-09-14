@@ -1,6 +1,5 @@
 //! Public streaming tests for the immutable high-level encoder.
 
-use iamf::ErrorKind;
 use iamf::encoder::{EncoderBuilder, FrameInput, SubmittedParameterBlock, TemporalUnitInput};
 use iamf::model::layout::{LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
@@ -10,6 +9,7 @@ use iamf::obu::{
     SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement, Trimming,
 };
 use iamf::sequence::{SequenceObu, parse_sequence};
+use iamf::{ErrorKind, Location};
 use std::io::{self, Write};
 
 #[test]
@@ -148,6 +148,50 @@ fn overflowing_trim_sum_writes_no_temporal_bytes() -> iamf::Result<()> {
         .expect_err("trim arithmetic must not wrap before comparison with the frame plan");
     assert_eq!(error.kind(), &ErrorKind::TemporalUnitTrimMismatch);
     assert_eq!(writer.bytes_written(), before);
+    Ok(())
+}
+
+#[test]
+fn delivery_timeline_rejects_start_trim_after_the_first_unit() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let first = stereo_temporal_unit(left, right);
+    let mut second = stereo_temporal_unit(left, right);
+    second.trimming = Some(Trimming {
+        at_end: 0,
+        at_start: 1,
+    });
+    let units = vec![first, second];
+
+    let error = encoder
+        .validate_delivery_timeline(&units)
+        .expect_err("start trimming is only valid on the first delivery unit");
+    assert_eq!(error.kind(), &ErrorKind::DeliveryStartTrimNotFirst);
+    assert_eq!(
+        error.at(),
+        Location::Field("temporal_units.trimming.at_start")
+    );
+    Ok(())
+}
+
+#[test]
+fn delivery_timeline_rejects_end_trim_before_the_final_unit() -> iamf::Result<()> {
+    let (encoder, left, right) = stereo_builder()?;
+    let mut first = stereo_temporal_unit(left, right);
+    first.trimming = Some(Trimming {
+        at_end: 1,
+        at_start: 0,
+    });
+    let second = stereo_temporal_unit(left, right);
+    let units = vec![first, second];
+
+    let error = encoder
+        .validate_delivery_timeline(&units)
+        .expect_err("end trimming is only valid on the final delivery unit");
+    assert_eq!(error.kind(), &ErrorKind::DeliveryEndTrimNotFinal);
+    assert_eq!(
+        error.at(),
+        Location::Field("temporal_units.trimming.at_end")
+    );
     Ok(())
 }
 

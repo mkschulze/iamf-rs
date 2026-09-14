@@ -6,9 +6,11 @@ mod contract;
 use iamf::encoder::{EncoderBuilder, FrameInput, TemporalUnitInput};
 use iamf::model::layout::{AmbisonicsMonoConfig, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, ChannelAudioLayerConfig, CodecConfig, Layout, LayoutWithLoudness, Loudness,
-    LpcmDecoderConfig, MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
-    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    AudioElement, BlockDurationFields, CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM, CODEC_ID_OPUS,
+    ChannelAudioLayerConfig, CodecConfig, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
+    MixGainParamDefinition, MixGainParameterData, MixPresentation, ParameterBlock, ParameterData,
+    ParameterSubblock, RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix,
+    SubMixAudioElement,
 };
 use iamf::sequence::{SequenceObu, parse_sequence};
 
@@ -139,8 +141,22 @@ fn filtered_delivery_is_deterministic_and_retains_only_public_contract_data() {
     let first = contract::build_delivery().expect("filtered public delivery builds");
     let second = contract::build_delivery().expect("equivalent filtered delivery builds");
     assert_eq!(
-        first.bytes, second.bytes,
+        first.deliveries, second.deliveries,
         "equivalent declarations are deterministic"
+    );
+    assert_eq!(
+        first
+            .deliveries
+            .iter()
+            .map(|delivery| delivery.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            b"Parallax primary".to_vec(),
+            b"Parallax archive".to_vec(),
+            b"Parallax stream".to_vec(),
+            b"Parallax AAC-LC".to_vec(),
+        ],
+        "each incompatible codec family is emitted as its own IA Sequence"
     );
     assert_eq!(
         first.retained_names,
@@ -148,6 +164,7 @@ fn filtered_delivery_is_deterministic_and_retains_only_public_contract_data() {
             b"program stereo".to_vec(),
             b"flac archive".to_vec(),
             b"opus stream".to_vec(),
+            b"aac-lc stream".to_vec(),
             b"ambisonics bed".to_vec(),
         ]
     );
@@ -155,82 +172,220 @@ fn filtered_delivery_is_deterministic_and_retains_only_public_contract_data() {
     for excluded in &first.excluded_names {
         assert!(
             !first
-                .bytes
-                .windows(excluded.len())
+                .deliveries
+                .iter()
+                .flat_map(|delivery| delivery.bytes.windows(excluded.len()))
                 .any(|window| window == excluded),
             "filtered candidate {:?} must never reach encoder input or bytes",
             String::from_utf8_lossy(excluded)
         );
     }
 
-    let parsed = parse_sequence(&first.bytes).expect("delivery bytes parse");
-    let codec_ids = parsed
-        .obus
+    let declarations = first
+        .deliveries
         .iter()
-        .filter_map(|obu| match obu {
-            SequenceObu::CodecConfig(config) => Some(config.payload.codec_config_id),
-            _ => None,
+        .map(|delivery| {
+            let parsed = parse_sequence(&delivery.bytes).expect("delivery bytes parse");
+            let frame_sizes = parsed
+                .obus
+                .iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::CodecConfig(config) => Some(config.payload.num_samples_per_frame),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let codec_ids = parsed
+                .obus
+                .iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::CodecConfig(config) => Some(config.payload.codec_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let element_ids = parsed
+                .obus
+                .iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::AudioElement(element) => Some(element.payload.audio_element_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let presentation_ids = parsed
+                .obus
+                .iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::MixPresentation(presentation) => {
+                        Some(presentation.payload.mix_presentation_id)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let presentation_elements = parsed
+                .obus
+                .iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::MixPresentation(presentation) => Some(
+                        presentation.payload.sub_mixes[0]
+                            .elements
+                            .iter()
+                            .map(|element| element.audio_element_id)
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (
+                codec_ids,
+                frame_sizes,
+                element_ids,
+                presentation_ids,
+                presentation_elements,
+            )
         })
         .collect::<Vec<_>>();
-    let element_ids = parsed
-        .obus
+    assert_eq!(
+        declarations,
+        vec![
+            (
+                vec![CODEC_ID_LPCM],
+                vec![128],
+                vec![0, 1],
+                vec![0],
+                vec![vec![0, 1]]
+            ),
+            (
+                vec![CODEC_ID_FLAC],
+                vec![128],
+                vec![0],
+                vec![0],
+                vec![vec![0]]
+            ),
+            (
+                vec![CODEC_ID_OPUS],
+                vec![960],
+                vec![0],
+                vec![0],
+                vec![vec![0]]
+            ),
+            (
+                vec![CODEC_ID_AAC],
+                vec![1024],
+                vec![0],
+                vec![0],
+                vec![vec![0]]
+            ),
+        ],
+        "each output carries one codec config and one compatible presentation"
+    );
+
+    let payloads = first
+        .deliveries
         .iter()
-        .filter_map(|obu| match obu {
-            SequenceObu::AudioElement(element) => Some(element.payload.audio_element_id),
-            _ => None,
+        .map(|delivery| {
+            parse_sequence(&delivery.bytes)
+                .expect("delivery bytes parse")
+                .obus
+                .into_iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::AudioFrame(frame) => Some(frame.payload.payload),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let presentation_ids = parsed
+    assert_eq!(
+        payloads[1],
+        vec![include_bytes!("fixtures/codecs/flac/packet-000.bin").to_vec()],
+        "archive retains the committed opaque FLAC packet"
+    );
+    assert_eq!(
+        payloads[2],
+        vec![include_bytes!("fixtures/codecs/opus/packet-000.bin").to_vec()],
+        "stream retains the committed opaque Opus packet"
+    );
+    let pinned_aac_payload =
+        parse_sequence(include_bytes!("fixtures/reference/test_000076_aac_lc.iamf"))
+            .expect("the pinned AAC-LC source vector parses")
+            .obus
+            .into_iter()
+            .find_map(|obu| match obu {
+                SequenceObu::AudioFrame(frame) => Some(frame.payload.payload),
+                _ => None,
+            })
+            .expect("the pinned AAC-LC source vector has an access unit");
+    assert_eq!(
+        payloads[3],
+        vec![pinned_aac_payload],
+        "AAC-LC retains the pinned external access unit"
+    );
+    let primary_frames = parse_sequence(&first.deliveries[0].bytes)
+        .expect("primary delivery bytes parse")
         .obus
-        .iter()
+        .into_iter()
         .filter_map(|obu| match obu {
-            SequenceObu::MixPresentation(presentation) => {
-                Some(presentation.payload.mix_presentation_id)
+            SequenceObu::AudioFrame(frame) => {
+                Some((frame.payload.substream_id, frame.payload.payload))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        codec_ids,
-        vec![0, 1, 2],
-        "LPCM, FLAC, Opus declaration order"
-    );
-    assert_eq!(
-        element_ids,
-        vec![0, 1, 2, 3],
-        "channel then scene descriptor order"
-    );
-    assert_eq!(
-        presentation_ids,
-        vec![0, 1],
-        "ordered primary and alternate presentations"
+        primary_frames,
+        vec![
+            (0, vec![0; 512]),
+            (1, vec![0; 256]),
+            (2, vec![0; 256]),
+            (3, vec![0; 256]),
+            (4, vec![0; 256]),
+        ],
+        "primary retains its stereo frame followed by all ambisonics substreams"
     );
 
-    let presentations = parsed
-        .obus
+    let parameter_blocks = first
+        .deliveries
         .iter()
-        .filter_map(|obu| match obu {
-            SequenceObu::MixPresentation(presentation) => Some(presentation),
-            _ => None,
+        .map(|delivery| {
+            parse_sequence(&delivery.bytes)
+                .expect("delivery bytes parse")
+                .obus
+                .into_iter()
+                .filter_map(|obu| match obu {
+                    SequenceObu::ParameterBlock(block) => Some(block.payload),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        presentations[0].payload.sub_mixes[0].elements[0].audio_element_id,
-        0
-    );
-    assert_eq!(
-        presentations[1].payload.sub_mixes[0].elements[0].audio_element_id,
-        0
-    );
-
-    let parameter_blocks = parsed
-        .obus
-        .iter()
-        .filter(|obu| matches!(obu, SequenceObu::ParameterBlock(_)))
-        .count();
-    assert_eq!(
-        parameter_blocks, 1,
-        "pre-decimated supplied parameter block persists"
+        parameter_blocks,
+        vec![
+            vec![ParameterBlock {
+                parameter_id: 0,
+                duration_fields: Some(BlockDurationFields {
+                    duration: 128,
+                    constant_subblock_duration: 0,
+                }),
+                subblocks: vec![
+                    ParameterSubblock {
+                        subblock_duration: Some(64),
+                        data: ParameterData::MixGain(MixGainParameterData::Linear {
+                            start_point_value: -256,
+                            end_point_value: 128,
+                        }),
+                    },
+                    ParameterSubblock {
+                        subblock_duration: Some(64),
+                        data: ParameterData::MixGain(MixGainParameterData::Step {
+                            start_point_value: 128,
+                        }),
+                    },
+                ],
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ],
+        "only primary carries its pre-decimated, governed gain block"
     );
 }
 

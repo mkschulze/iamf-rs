@@ -29,20 +29,28 @@ pub struct DeliveryCandidate {
     kind: CandidateKind,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CandidateKind {
     LpcmStereo,
     FlacStereo,
     OpusStereo,
+    AacLcStereo,
     AmbisonicsMono,
 }
 
 /// Bytes and stable observables produced by the filtered public authoring path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeliveryArtifact {
-    pub bytes: Vec<u8>,
+    pub deliveries: Vec<DeliveryFile>,
     pub retained_names: Vec<Vec<u8>>,
     pub excluded_names: Vec<Vec<u8>>,
+}
+
+/// One independently decodable IAMF delivery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryFile {
+    pub name: Vec<u8>,
+    pub bytes: Vec<u8>,
 }
 
 /// Construct the delivery from eligible candidates only.
@@ -65,6 +73,12 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
             included: true,
             draft: false,
             kind: CandidateKind::OpusStereo,
+        },
+        DeliveryCandidate {
+            name: b"aac-lc stream",
+            included: true,
+            draft: false,
+            kind: CandidateKind::AacLcStereo,
         },
         DeliveryCandidate {
             name: b"ambisonics bed",
@@ -95,6 +109,32 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
         .map(|candidate| candidate.name.to_vec())
         .collect();
 
+    let includes = |kind| retained.iter().any(|candidate| candidate.kind == kind);
+    let mut deliveries = Vec::new();
+    if includes(CandidateKind::LpcmStereo) && includes(CandidateKind::AmbisonicsMono) {
+        deliveries.push(primary_delivery()?);
+    }
+    if includes(CandidateKind::FlacStereo) {
+        deliveries.push(archive_delivery()?);
+    }
+    if includes(CandidateKind::OpusStereo) {
+        deliveries.push(stream_delivery()?);
+    }
+    if includes(CandidateKind::AacLcStereo) {
+        deliveries.push(aac_lc_delivery()?);
+    }
+
+    Ok(DeliveryArtifact {
+        deliveries,
+        retained_names: retained
+            .iter()
+            .map(|candidate| candidate.name.to_vec())
+            .collect(),
+        excluded_names,
+    })
+}
+
+fn primary_delivery() -> iamf::Result<DeliveryFile> {
     let mut builder = EncoderBuilder::new();
     let lpcm = builder.add_codec_config(CodecConfig::lpcm(
         88,
@@ -105,86 +145,36 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
             sample_rate: 48_000,
         },
     ));
-    let flac = builder.add_codec_config(CodecConfig::flac(89, 128, 48_000, 16)?);
-    let opus = builder.add_codec_config(CodecConfig::opus(90, 960, 48_000, 312)?);
-
-    let mut lpcm_element = None;
-    let mut flac_element = None;
-    let mut opus_element = None;
-    let mut ambisonics_element = None;
-    for candidate in retained.iter().copied() {
-        let element = match candidate.kind {
-            CandidateKind::LpcmStereo => builder.add_audio_element(lpcm, stereo_element(10)),
-            CandidateKind::FlacStereo => builder.add_audio_element(flac, stereo_element(20)),
-            CandidateKind::OpusStereo => builder.add_audio_element(opus, stereo_element(30)),
-            CandidateKind::AmbisonicsMono => {
-                let streams = (0..4).map(|_| builder.add_substream()).collect();
-                builder.add_ambisonics_mono(
-                    lpcm,
-                    streams,
-                    AmbisonicsMonoConfig {
-                        output_channel_count: 4,
-                        substream_count: 4,
-                        channel_mapping: vec![0, 1, 2, 3],
-                    },
-                )
-            }
-        };
-        match candidate.kind {
-            CandidateKind::LpcmStereo => lpcm_element = Some(element),
-            CandidateKind::FlacStereo => flac_element = Some(element),
-            CandidateKind::OpusStereo => opus_element = Some(element),
-            CandidateKind::AmbisonicsMono => ambisonics_element = Some(element),
-        }
-    }
-    let lpcm_element = lpcm_element.expect("included LPCM candidate");
-    let flac_element = flac_element.expect("included FLAC candidate");
-    let opus_element = opus_element.expect("included Opus candidate");
-    let ambisonics_element = ambisonics_element.expect("included Ambisonics candidate");
+    let lpcm_element = builder.add_audio_element(lpcm, stereo_element(10));
+    let streams = (0..4).map(|_| builder.add_substream()).collect();
+    let ambisonics_element = builder.add_ambisonics_mono(
+        lpcm,
+        streams,
+        AmbisonicsMonoConfig {
+            output_channel_count: 4,
+            substream_count: 4,
+            channel_mapping: vec![0, 1, 2, 3],
+        },
+    );
 
     let primary = builder.add_mix_presentation(
-        vec![lpcm_element, flac_element, opus_element, ambisonics_element],
-        presentation(
-            b"Parallax primary",
-            &[b"program", b"archive", b"stream", b"bed"],
-            10,
-        ),
-    );
-    let alternate = builder.add_mix_presentation(
-        vec![lpcm_element],
-        presentation(b"Parallax alternate", &[b"program"], 30),
+        vec![lpcm_element, ambisonics_element],
+        presentation(b"Parallax primary", &[b"program", b"bed"], 10),
     );
     let (encoder, manifest) = builder.build()?;
 
     let lpcm_stream = only_substream(&manifest, lpcm_element);
-    let flac_stream = only_substream(&manifest, flac_element);
-    let opus_stream = only_substream(&manifest, opus_element);
     let ambisonics_streams = manifest
         .substreams(ambisonics_element)
         .expect("ambisonics manifest entry")
         .to_vec();
-    let mut parameters = manifest
+    let parameters = manifest
         .parameters(primary)
-        .expect("primary presentation parameters")
-        .to_vec();
-    parameters.extend_from_slice(
-        manifest
-            .parameters(alternate)
-            .expect("alternate presentation parameters"),
-    );
+        .expect("primary presentation parameters");
     let parameter = parameters.first().copied().expect("supplied gain handle");
     let parameter_id = manifest.parameter_id(parameter).expect("supplied gain id");
 
-    // These are committed opaque access units. The fixture never encodes FLAC
-    // or Opus; it only submits their existing corpus packets through the
-    // public streaming boundary.
-    let flac_payload = include_bytes!("../fixtures/codecs/flac/packet-000.bin").to_vec();
-    let opus_payload = include_bytes!("../fixtures/codecs/opus/packet-000.bin").to_vec();
-    let mut frames = vec![
-        (lpcm_stream, FrameInput::Lpcm(vec![0; 512])),
-        (flac_stream, FrameInput::Flac(flac_payload)),
-        (opus_stream, FrameInput::Opus(opus_payload)),
-    ];
+    let mut frames = vec![(lpcm_stream, FrameInput::Lpcm(vec![0; 512]))];
     frames.extend(
         ambisonics_streams
             .into_iter()
@@ -200,14 +190,97 @@ pub fn build_delivery() -> iamf::Result<DeliveryArtifact> {
         trimming: None,
     })?;
 
-    Ok(DeliveryArtifact {
+    Ok(DeliveryFile {
+        name: b"Parallax primary".to_vec(),
         bytes: writer.finish()?,
-        retained_names: retained
-            .iter()
-            .map(|candidate| candidate.name.to_vec())
-            .collect(),
-        excluded_names,
     })
+}
+
+fn archive_delivery() -> iamf::Result<DeliveryFile> {
+    let mut builder = EncoderBuilder::new();
+    let flac = builder.add_codec_config(CodecConfig::flac(89, 128, 48_000, 16)?);
+    let element = builder.add_audio_element(flac, stereo_element(20));
+    builder.add_mix_presentation(
+        vec![element],
+        presentation(b"Parallax archive", &[b"archive"], 30),
+    );
+    let (encoder, manifest) = builder.build()?;
+    let stream = only_substream(&manifest, element);
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(TemporalUnitInput {
+        frames: vec![(
+            stream,
+            FrameInput::Flac(include_bytes!("../fixtures/codecs/flac/packet-000.bin").to_vec()),
+        )],
+        parameter_blocks: Vec::new(),
+        trimming: None,
+    })?;
+    Ok(DeliveryFile {
+        name: b"Parallax archive".to_vec(),
+        bytes: writer.finish()?,
+    })
+}
+
+fn stream_delivery() -> iamf::Result<DeliveryFile> {
+    let mut builder = EncoderBuilder::new();
+    let opus = builder.add_codec_config(CodecConfig::opus(90, 960, 48_000, 312)?);
+    let element = builder.add_audio_element(opus, stereo_element(30));
+    builder.add_mix_presentation(
+        vec![element],
+        presentation(b"Parallax stream", &[b"stream"], 40),
+    );
+    let (encoder, manifest) = builder.build()?;
+    let stream = only_substream(&manifest, element);
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(TemporalUnitInput {
+        frames: vec![(
+            stream,
+            FrameInput::Opus(include_bytes!("../fixtures/codecs/opus/packet-000.bin").to_vec()),
+        )],
+        parameter_blocks: Vec::new(),
+        trimming: None,
+    })?;
+    Ok(DeliveryFile {
+        name: b"Parallax stream".to_vec(),
+        bytes: writer.finish()?,
+    })
+}
+
+fn aac_lc_delivery() -> iamf::Result<DeliveryFile> {
+    let mut builder = EncoderBuilder::new();
+    let aac_lc = builder.add_codec_config(CodecConfig::aac_lc(91, 48_000)?);
+    let element = builder.add_audio_element(aac_lc, stereo_element(40));
+    builder.add_mix_presentation(
+        vec![element],
+        presentation(b"Parallax AAC-LC", &[b"aac-lc"], 50),
+    );
+    let (encoder, manifest) = builder.build()?;
+    let stream = only_substream(&manifest, element);
+    let mut writer = encoder.start(Vec::new())?;
+    writer.push_temporal_unit(TemporalUnitInput {
+        frames: vec![(stream, FrameInput::AacLc(pinned_aac_lc_access_unit()))],
+        parameter_blocks: Vec::new(),
+        trimming: None,
+    })?;
+    Ok(DeliveryFile {
+        name: b"Parallax AAC-LC".to_vec(),
+        bytes: writer.finish()?,
+    })
+}
+
+fn pinned_aac_lc_access_unit() -> Vec<u8> {
+    let sequence = iamf::sequence::parse_sequence(include_bytes!(
+        "../fixtures/reference/test_000076_aac_lc.iamf"
+    ))
+    .expect("the pinned AAC-LC source vector parses");
+    sequence
+        .obus
+        .into_iter()
+        .find_map(|obu| match obu {
+            iamf::sequence::SequenceObu::AudioFrame(frame) => Some(frame.payload.payload),
+            _ => None,
+        })
+        .expect("the pinned AAC-LC source vector contains an access unit")
 }
 
 fn only_substream(

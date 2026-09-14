@@ -159,6 +159,14 @@ pub enum ErrorKind {
     LpcmFrameByteAlignment,
     #[error("the LPCM frame payload does not carry the frozen sample count")]
     LpcmFrameSampleCountMismatch,
+    #[error("a complete delivery sequence requires at least one Mix Presentation")]
+    MissingDeliveryMixPresentation,
+    #[error("the frozen descriptors are not valid for a complete delivery sequence")]
+    InvalidDeliveryDescriptorSet,
+    #[error("start trimming is only allowed in the first delivery temporal unit")]
+    DeliveryStartTrimNotFirst,
+    #[error("end trimming is only allowed in the final delivery temporal unit")]
+    DeliveryEndTrimNotFinal,
 }
 
 /// An error, with the position it happened at attached exactly once.

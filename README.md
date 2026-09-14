@@ -45,6 +45,13 @@ For AAC-LC, each IAMF Audio Frame carries one pre-encoded `raw_data_block()`; th
 encodes nor decodes AAC. The caller also supplies loudness values and already-decimated IAMF
 parameter blocks; this crate carries and validates them but does not derive them.
 
+`start` deliberately also supports a frozen descriptor fragment for incremental integrations. Before
+treating finite output as a complete deliverable IA Sequence, call
+`Encoder::validate_delivery_conformance()` and
+`Encoder::validate_delivery_timeline(&units)` before selecting a sink. Those checks require a Mix
+Presentation and enforce delivery trim placement while preserving the streaming API; they do not
+decode, render, or encapsulate the sequence in ISO-BMFF.
+
 The production adapter belongs to the calling application, which filters its
 immutable delivery snapshot and owns delivery UI state, source identity,
 panning/HOA preparation, codec encoding, resampling, loudness measurement,

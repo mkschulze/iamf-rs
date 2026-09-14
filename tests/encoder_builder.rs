@@ -1,12 +1,18 @@
 //! Public-boundary tests for the immutable high-level encoder configuration.
+//!
+//! Profile cases below are the IAMF v1.1 matrix from
+//! iamf-tools@848c6ff4968ff8cc6f728259892ab4f90cb83256
+//! (iamf/obu/profile_filter.cc and its tests). Do not update their expected
+//! outcomes from an iamf-tools main checkout: main models later draft profiles.
 
 use iamf::encoder::EncoderBuilder;
 use iamf::model::Profile;
 use iamf::model::layout::{ExpandedLoudspeakerLayout, LoudspeakerLayout, SoundSystem};
 use iamf::obu::{
-    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, DecoderConfig, Layout,
-    LayoutWithLoudness, Loudness, LpcmDecoderConfig, MixGainParamDefinition, MixPresentation,
-    RenderingConfig, SampleFormatFlags, ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
+    AudioElement, AudioElementParam, ChannelAudioLayerConfig, CodecConfig, DecoderConfig,
+    HeadphonesRenderingMode, Layout, LayoutWithLoudness, Loudness, LpcmDecoderConfig,
+    MixGainParamDefinition, MixPresentation, RenderingConfig, SampleFormatFlags,
+    ScalableChannelLayoutConfig, SubMix, SubMixAudioElement,
 };
 use iamf::{ErrorKind, Location};
 
@@ -65,6 +71,31 @@ fn build_returns_opaque_handles_and_a_complete_deterministic_manifest() {
     assert_eq!(manifest.audio_element_id(bed), Some(0));
     assert_eq!(manifest.mix_presentation_id(mix), Some(0));
     assert_eq!(encoder.descriptors().mix_presentations.len(), 1);
+}
+
+#[test]
+fn delivery_validation_rejects_a_descriptor_fragment_without_a_mix_presentation() {
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    builder.add_audio_element(codec, stereo_element());
+    let (encoder, _) = builder
+        .build()
+        .expect("a frozen descriptor fragment is streamable");
+
+    let error = encoder
+        .validate_delivery_conformance()
+        .expect_err("a delivery sequence needs a Mix Presentation");
+    assert_eq!(error.kind(), &ErrorKind::MissingDeliveryMixPresentation);
+    assert_eq!(error.at(), Location::Field("mix_presentations"));
+}
+
+#[test]
+fn delivery_validation_accepts_a_complete_static_descriptor_set() {
+    let (encoder, _) = build_presentation(stereo_presentation())
+        .expect("the stereo fixture is a complete descriptor set");
+    encoder
+        .validate_delivery_conformance()
+        .expect("a complete static descriptor set is deliverable");
 }
 
 #[test]
@@ -248,6 +279,113 @@ fn largest_presentation_sets_the_sequence_profile() {
     assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
     assert_eq!(encoder.descriptors().sequence_header.primary_profile, 2);
     assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
+}
+
+#[test]
+fn expanded_layout_requires_base_enhanced_profile() {
+    // Removing Eclipsa's expanded-layout filter would incorrectly choose
+    // Simple here: the one-element, three-channel count alone fits it.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = add_fresh_element(
+        &mut builder,
+        codec,
+        element_with_layout(LoudspeakerLayout::Expanded(
+            ExpandedLoudspeakerLayout::Ch3_0,
+        )),
+    );
+    builder.add_mix_presentation(vec![element], stereo_presentation());
+
+    let (encoder, manifest) = builder.build().expect("expanded layout is supported");
+    assert_eq!(manifest.sequence_profile(), Profile::BaseEnhanced);
+    assert_eq!(encoder.descriptors().sequence_header.primary_profile, 2);
+    assert_eq!(encoder.descriptors().sequence_header.additional_profile, 2);
+}
+
+#[test]
+fn reserved_headphones_mode_has_no_supported_profile() {
+    // Removing the profile filter for reserved rendering modes would publish a
+    // Simple sequence that profile-compliant decoders must ignore.
+    let mut presentation = stereo_presentation();
+    presentation
+        .sub_mixes
+        .first_mut()
+        .expect("stereo fixture has one sub-mix")
+        .elements
+        .first_mut()
+        .expect("stereo fixture has one element")
+        .rendering_config
+        .headphones_rendering_mode = HeadphonesRenderingMode::Reserved(2);
+
+    let error = build_presentation(presentation)
+        .expect_err("reserved headphones rendering mode is not profile-supported");
+    assert_eq!(error.kind(), &ErrorKind::ProfileNotFound);
+}
+
+#[test]
+fn multiple_submixes_have_no_supported_profile() {
+    // Removing the sub-mix filter would choose Base from the two element
+    // references even though every v1.1 profile supports one sub-mix only.
+    let mut builder = EncoderBuilder::new();
+    let codec = builder.add_codec_config(lpcm_config());
+    let element = builder.add_audio_element(codec, stereo_element());
+    let mut presentation = stereo_presentation();
+    let mut second_submix = presentation
+        .sub_mixes
+        .first()
+        .expect("stereo fixture has one sub-mix")
+        .clone();
+    second_submix
+        .elements
+        .first_mut()
+        .expect("stereo fixture has one element")
+        .element_mix_gain
+        .definition
+        .parameter_id = 200;
+    second_submix.output_mix_gain.definition.parameter_id = 201;
+    presentation.sub_mixes.push(second_submix);
+    builder.add_mix_presentation(vec![element, element], presentation);
+
+    let error = builder
+        .build()
+        .expect_err("multiple sub-mixes are outside every v1.1 profile");
+    assert_eq!(error.kind(), &ErrorKind::ProfileNotFound);
+}
+
+#[test]
+fn no_submixes_remain_simple_profile_compatible() {
+    // Eclipsa only removes profiles for more than one sub-mix. Regressions
+    // that change the comparison to `!= 1` incorrectly reject this legal
+    // empty presentation.
+    let mut builder = EncoderBuilder::new();
+    builder.add_codec_config(lpcm_config());
+    builder.add_mix_presentation(
+        Vec::new(),
+        MixPresentation {
+            mix_presentation_id: 0,
+            annotations_language: Vec::new(),
+            localized_presentation_annotations: Vec::new(),
+            sub_mixes: Vec::new(),
+            trailing: Vec::new(),
+        },
+    );
+
+    let (_, manifest) = builder.build().expect("empty presentation is supported");
+    assert_eq!(manifest.sequence_profile(), Profile::Simple);
+}
+
+#[test]
+fn multiple_codec_configs_have_no_supported_profile() {
+    // Removing the sequence-wide codec-config gate would label this as Simple,
+    // although every v1.1 profile permits only one unique Codec Config OBU.
+    let mut builder = EncoderBuilder::new();
+    builder.add_codec_config(lpcm_config());
+    builder.add_codec_config(lpcm_config());
+
+    let error = builder
+        .build()
+        .expect_err("multiple codec configs are outside every v1.1 profile");
+    assert_eq!(error.kind(), &ErrorKind::ProfileNotFound);
 }
 
 fn lpcm_config() -> CodecConfig {
@@ -717,19 +855,25 @@ fn builder_authors_ambisonics_mono_through_opaque_substreams() {
 fn two_presentation_builder() -> EncoderBuilder {
     let mut builder = EncoderBuilder::new();
     let codec = builder.add_codec_config(lpcm_config());
-    let first = add_fresh_element(
-        &mut builder,
+    let first_streams: Vec<_> = (0..16).map(|_| builder.add_substream()).collect();
+    let first = builder.add_ambisonics_mono(
         codec,
-        element_with_layout(LoudspeakerLayout::Expanded(
-            ExpandedLoudspeakerLayout::Ch9_1_6,
-        )),
+        first_streams,
+        iamf::model::layout::AmbisonicsMonoConfig {
+            output_channel_count: 16,
+            substream_count: 16,
+            channel_mapping: (0..16).collect(),
+        },
     );
-    let second = add_fresh_element(
-        &mut builder,
+    let second_streams: Vec<_> = (0..16).map(|_| builder.add_substream()).collect();
+    let second = builder.add_ambisonics_mono(
         codec,
-        element_with_layout(LoudspeakerLayout::Expanded(
-            ExpandedLoudspeakerLayout::Ch9_1_6,
-        )),
+        second_streams,
+        iamf::model::layout::AmbisonicsMonoConfig {
+            output_channel_count: 16,
+            substream_count: 16,
+            channel_mapping: (0..16).collect(),
+        },
     );
     let _first_presentation =
         builder.add_mix_presentation(vec![first], presentation_for_elements(&[99], 100, 110));

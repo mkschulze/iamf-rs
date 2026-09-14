@@ -1904,18 +1904,49 @@ fn the_structure_only_fixture_passes_the_strict_parser() {
 fn parallax_delivery_fixture_uses_the_offline_safe_reference_gates() {
     let delivery =
         parallax_contract::build_delivery().expect("the filtered public delivery fixture builds");
-    let structure = assert_structure_is_observable(&delivery.bytes)
-        .expect("the public delivery satisfies CONF-04 structure");
-    assert!(structure.contains("4 Audio Element(s)"), "{structure}");
+    assert_eq!(delivery.deliveries.len(), 4, "one file per codec family");
+    let expected = [(2, 128), (1, 128), (1, 960), (1, 1024)];
+    for (file, (expected_elements, expected_frame_size)) in delivery.deliveries.iter().zip(expected)
+    {
+        let parsed = parse_sequence(&file.bytes).expect("a public delivery parses");
+        let frame_sizes = parsed
+            .obus
+            .iter()
+            .filter_map(|obu| match obu {
+                SequenceObu::CodecConfig(obu) => Some(obu.payload.num_samples_per_frame),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let element_count = parsed
+            .obus
+            .iter()
+            .filter(|obu| matches!(obu, SequenceObu::AudioElement(_)))
+            .count();
+        assert_eq!(frame_sizes, vec![expected_frame_size]);
+        assert_eq!(element_count, expected_elements);
+    }
+
+    let primary = delivery
+        .deliveries
+        .first()
+        .expect("the primary delivery is present");
+    let structure = assert_structure_is_observable(&primary.bytes)
+        .expect("the primary public delivery satisfies CONF-04 structure");
+    assert!(structure.contains("2 Audio Element(s)"), "{structure}");
 
     if !iamf_tools_available() {
         skip_no_container("parallax_delivery_fixture_uses_the_offline_safe_reference_gates");
         return;
     }
-    let dir = scratch_dir("parallax-contract-conf06");
-    match run_decoder_main(&delivery.bytes, &dir, 1) {
-        Ok(observed) => println!("[parallax delivery] CONF-06: {observed}"),
-        Err(message) => panic!("{message}"),
+    for file in &delivery.deliveries {
+        let dir = scratch_dir("parallax-contract-conf06");
+        match run_decoder_main(&file.bytes, &dir, 1) {
+            Ok(observed) => println!(
+                "[{}] CONF-06: {observed}",
+                String::from_utf8_lossy(&file.name)
+            ),
+            Err(message) => panic!("{message}"),
+        }
     }
 }
 

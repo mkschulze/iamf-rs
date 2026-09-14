@@ -4,7 +4,7 @@
 //! static validation has accepted the complete declaration set.
 
 use crate::error::{Error, ErrorKind, Location, Result};
-use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig};
+use crate::model::layout::{AmbisonicsConfig, AmbisonicsMonoConfig, LoudspeakerLayout};
 use crate::model::{DescriptorSet, Profile, select_minimum_profile};
 use crate::obu::{
     AudioElement, AudioElementType, AudioFrame, CODEC_ID_AAC, CODEC_ID_FLAC, CODEC_ID_LPCM,
@@ -163,6 +163,69 @@ impl Encoder {
             descriptors: self.descriptors,
             generation: self.generation,
         })
+    }
+
+    /// Validate that the frozen descriptors can describe a complete deliverable
+    /// IAMF sequence, rather than an intentionally streamable fragment.
+    pub fn validate_delivery_conformance(&self) -> Result<()> {
+        if self.descriptors.mix_presentations.is_empty() {
+            return Err(Error::new(
+                ErrorKind::MissingDeliveryMixPresentation,
+                Location::Field("mix_presentations"),
+            ));
+        }
+        if !self.descriptors.validate().is_empty() {
+            return Err(Error::new(
+                ErrorKind::InvalidDeliveryDescriptorSet,
+                Location::Field("descriptors"),
+            ));
+        }
+        let (primary, additional) = select_sequence_profile(
+            &self.descriptors.codec_configs,
+            &self.descriptors.mix_presentations,
+            &self.descriptors.audio_elements,
+        )?;
+        if self.descriptors.sequence_header.primary_profile != primary.to_wire()
+            || self.descriptors.sequence_header.additional_profile != additional.to_wire()
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidDeliveryDescriptorSet,
+                Location::Field("sequence_header.profiles"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate every finite delivery unit before selecting an output sink.
+    ///
+    /// This deliberately leaves [`Self::start`] incremental: callers that
+    /// need a complete deliverable validate their whole unit list first,
+    /// whereas streaming callers may continue to append fragments.
+    pub fn validate_delivery_timeline(&self, units: &[TemporalUnitInput]) -> Result<()> {
+        self.validate_delivery_conformance()?;
+        let last = units.len().saturating_sub(1);
+        for (index, unit) in units.iter().enumerate() {
+            if let Some(trimming) = unit.trimming {
+                if trimming.at_start != 0 && index != 0 {
+                    return Err(Error::new(
+                        ErrorKind::DeliveryStartTrimNotFirst,
+                        Location::Field("temporal_units.trimming.at_start"),
+                    ));
+                }
+                if trimming.at_end != 0 && index != last {
+                    return Err(Error::new(
+                        ErrorKind::DeliveryEndTrimNotFinal,
+                        Location::Field("temporal_units.trimming.at_end"),
+                    ));
+                }
+            }
+        }
+
+        let writer = self.clone().start(Vec::new())?;
+        for unit in units {
+            writer.preflight(unit.clone())?;
+        }
+        Ok(())
     }
 }
 
@@ -797,8 +860,11 @@ impl EncoderBuilder {
             descriptors.mix_presentations.push(presentation);
         }
 
-        let (primary_profile, additional_profile) =
-            select_sequence_profile(&descriptors.mix_presentations, &descriptors.audio_elements)?;
+        let (primary_profile, additional_profile) = select_sequence_profile(
+            &descriptors.codec_configs,
+            &descriptors.mix_presentations,
+            &descriptors.audio_elements,
+        )?;
         descriptors.sequence_header =
             IaSequenceHeader::new(primary_profile.to_wire(), additional_profile.to_wire());
         manifest.sequence_profile = primary_profile;
@@ -1041,20 +1107,36 @@ impl EncoderBuilder {
     }
 }
 
-/// Select a sequence profile from Presentation-local minima.
+/// Select the lowest profile which Eclipsa's profile filter accepts for every
+/// descriptor in the sequence.
 ///
-/// Audio Elements are resolved once for each sub-mix reference, so a shared
-/// declaration contributes to every Presentation that uses it. Presentations
-/// are never unioned: their concurrent-element and channel limits apply one
-/// Presentation at a time, and the IA Sequence Header receives the highest
-/// resulting pair.
+/// The candidate set starts at Simple, Base and Base-Enhanced and is narrowed
+/// by every Mix Presentation. Element and channel counts are local to one Mix
+/// Presentation; the candidate set itself is sequence-wide, so an unsupported
+/// layout or rendering mode in any presentation rules that profile out.
+///
+/// `iamf-tools@v2.1.0` uses this same filter model. Both header fields carry
+/// the selected profile: this is conservative, satisfies libiamf's
+/// `primary <= additional` check, and advertises a capability that covers all
+/// presentations.
 fn select_sequence_profile(
+    codec_configs: &[CodecConfig],
     presentations: &[MixPresentation],
     elements: &[AudioElement],
 ) -> Result<(Profile, Profile)> {
-    let mut selected = (Profile::Simple, Profile::Simple);
+    // IAMF v1.1 profiles permit one unique Codec Config OBU per IA Sequence.
+    if codec_configs.len() != 1 {
+        return Err(profile_not_found());
+    }
+    let mut candidates = [true; 3];
 
     for presentation in presentations {
+        // All v1.1 profiles only support one sub-mix.
+        if presentation.sub_mixes.len() > 1 {
+            candidates = [false; 3];
+            break;
+        }
+
         let presentation_elements: Result<Vec<&AudioElement>> = presentation
             .sub_mixes
             .iter()
@@ -1074,13 +1156,77 @@ fn select_sequence_profile(
                 })
             })
             .collect();
-        let candidate = select_minimum_profile(&presentation_elements?)?;
-        if candidate.0 > selected.0 {
-            selected = candidate;
+        let presentation_elements = presentation_elements?;
+
+        for element in &presentation_elements {
+            filter_profiles_for_audio_element(element, &mut candidates)?;
         }
+        for sub_mix in &presentation.sub_mixes {
+            for element in &sub_mix.elements {
+                if matches!(
+                    element.rendering_config.headphones_rendering_mode,
+                    crate::obu::HeadphonesRenderingMode::Reserved(_)
+                ) {
+                    candidates = [false; 3];
+                }
+            }
+        }
+
+        let (minimum, _) = select_minimum_profile(&presentation_elements)?;
+        disable_profiles_below(minimum, &mut candidates);
     }
 
-    Ok(selected)
+    let profile = candidates
+        .iter()
+        .position(|allowed| *allowed)
+        .map(|index| match index {
+            0 => Profile::Simple,
+            1 => Profile::Base,
+            2 => Profile::BaseEnhanced,
+            _ => unreachable!("profile candidate array has exactly three entries"),
+        })
+        .ok_or_else(profile_not_found)?;
+    Ok((profile, profile))
+}
+
+fn filter_profiles_for_audio_element(
+    element: &AudioElement,
+    candidates: &mut [bool; 3],
+) -> Result<()> {
+    match &element.audio_element_type {
+        AudioElementType::ChannelBased(config) => {
+            let layer = config
+                .scalable_channel_layout
+                .layers
+                .first()
+                .ok_or_else(profile_not_found)?;
+            if matches!(layer.loudspeaker_layout, LoudspeakerLayout::Expanded(_)) {
+                candidates[0] = false;
+                candidates[1] = false;
+            }
+        }
+        AudioElementType::SceneBased(AmbisonicsConfig::Mono(_))
+        | AudioElementType::SceneBased(AmbisonicsConfig::Projection(_)) => {}
+        AudioElementType::SceneBased(AmbisonicsConfig::Reserved { .. })
+        | AudioElementType::Reserved { .. } => *candidates = [false; 3],
+    }
+    Ok(())
+}
+
+fn disable_profiles_below(minimum: Profile, candidates: &mut [bool; 3]) {
+    match minimum {
+        Profile::Simple => {}
+        Profile::Base => candidates[0] = false,
+        Profile::BaseEnhanced => {
+            candidates[0] = false;
+            candidates[1] = false;
+        }
+        Profile::Reserved(_) => *candidates = [false; 3],
+    }
+}
+
+fn profile_not_found() -> Error {
+    Error::new(ErrorKind::ProfileNotFound, Location::Field("profiles"))
 }
 
 impl Default for EncoderBuilder {
