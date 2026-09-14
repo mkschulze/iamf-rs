@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-12)
 Phase: 04 (Parallax-Facing API) — COMPLETE
 Plan: 4 of 4
 Status: v1 implementation complete; Phase 4 consumer handoff recorded
-Last activity: 2026-09-14 - Completed quick task 260914-1mq: require exactly one Demixing / Recon Gain Parameter Block subblock
+Last activity: 2026-09-14 - Completed quick task 260914-38r: make the float escape census see multi-line attributes and prove it fires
 
 Progress: [██████████] 100% of Phase 04 plans
 
@@ -161,6 +161,7 @@ Recent decisions affecting current work:
 | 260913-wlv | enforce unique annotations languages, scalable layout counts and unique loudness anchor elements in mix presentations | 2026-09-14 | b03597b | [260913-wlv-enforce-unique-annotations-languages-sca](./quick/260913-wlv-enforce-unique-annotations-languages-sca/) |
 | 260914-0sp | bound OBU header after-size fields (trim, extension) by obu_size | 2026-09-14 | 1b76415 | [260914-0sp-bound-obu-header-after-size-fields-by-ob](./quick/260914-0sp-bound-obu-header-after-size-fields-by-ob/) |
 | 260914-1mq | require exactly one Demixing / Recon Gain Parameter Block subblock (closes zero-byte subblock memory amplification) | 2026-09-14 | 16eca4a | [260914-1mq-bound-parameter-block-subblock-memory-am](./quick/260914-1mq-bound-parameter-block-subblock-memory-am/) |
+| 260914-38r | make the float escape census see multi-line attributes (tools/check-float-escape-census.sh) and prove it fires (prove-guards 6 → 9) | 2026-09-14 | 35cd1ea | [260914-38r-float-ausnahmen-suche-mehrzeilig-reparie](./quick/260914-38r-float-ausnahmen-suche-mehrzeilig-reparie/) |
 
 ### Resolved
 
