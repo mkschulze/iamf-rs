@@ -4,10 +4,11 @@
    `ErrorKind::ParseBudgetExceeded`, charged at about 20 allocation sites across `src/obu/*`. Only worth doing if a
    consumer needs a hard cap on a retained whole-file model. Reference bases for numbers: `kEntireObuSizeMaxTwoMegabytes`
    (`iamf/obu/types.h:32`) and the 4 MiB `StreamBasedReadBitBuffer` source cap (`iamf/common/read_bit_buffer.cc:509-512`).
-2. **`kMaxNumParameters = 256` on Audio Element read.** iamf-tools@v2.1.0 enforces it (`iamf/obu/audio_element.h:287`,
+2. **RESOLVED by quick 260914-kfs (user decision 2026-09-14).** **`kMaxNumParameters = 256` on Audio Element read.** iamf-tools@v2.1.0 enforces it (`iamf/obu/audio_element.h:287`,
    `ValidateNumParameters` `audio_element.cc:97-113`, called at `:811`), while the spec says parsers SHALL support any
    value. It would cap the AE-param classes (34-50x per OBU). This is a user question: whether "stricter wins" applies to
-   a resource limit. It also needs a reference-hash check.
+   a resource limit. It also needs a reference-hash check. Not enforced on read or write; `AudioElement::validate`
+   reports more than 256 params at `Field("num_parameters")`; no reference hash changed.
 3. **Registry de-duplication.** `ParamDefinitionRegistry::register` pushes duplicates
    (`src/obu/param_definition.rs:89-94`), so redundant descriptor copies grow the registry linearly even inside
    `SequenceReader`, by about 72 B per 12 wire bytes. `entries()` is public and documented as "including duplicates".
