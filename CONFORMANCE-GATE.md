@@ -689,6 +689,74 @@ downgraded, and it is not a `DIFF-LEDGER.md` entry, because no byte differs.
   the `HANDOFF.md` parse-side memory contract).
 
 
+### The reverse direction — where **this crate** is stricter than the permissive `libiamf@v1.1.0` reader (quick 260924-tvf, 2026-09-25)
+
+The entries above record a pinned reference being stricter than the spec. This one records the mirror
+case, and the instrument that measures it: every reference vector is now joined to the `is_valid`
+declaration in its own paired upstream `.textproto`, so "we refuse a file the reference project says
+is valid" is a named, asserted failure instead of something nobody looks for.
+
+- **Spec.** IAMF v1.1.0 has no notion of a "test vector disposition" at all. `is_valid` and
+  `is_valid_to_decode` are fields of `iamf-tools`' `UserMetadata.test_vector_metadata` proto, carried
+  in each vector's `.textproto`. They are the *generator's* statement of intent about a file it
+  produced on purpose, so they sit outside the bitstream syntax the spec defines.
+- **iamf-tools@v2.1.0 (`848c6ff`).** Generates both valid and deliberately invalid vectors and labels
+  each one. The two keys are independent: 6 of the 34 vendored textprotos declare `is_valid: false`
+  together with `is_valid_to_decode: true` (`test_000017`, `test_000119`, `test_000120`, `test_000122`,
+  `test_000129`, `test_000130`), meaning "semantically wrong, still decodable".
+- **libiamf@v1.1.0 (`f06e919`).** A permissive reader. It ignores reserved-bit misuse and clamps an
+  overlong leb128 rather than erroring, which is why passing the libiamf gate is necessary but not
+  sufficient (`REFERENCES.md`, and this document's opening). Being stricter than libiamf is therefore
+  normal and often correct — what it may not be is *undocumented*.
+- **Decision — the four-cell matrix, and what it is allowed to fail on.** The harness classifies each
+  vector by crossing the upstream `is_valid` flag against this crate's parse disposition, and fails on
+  exactly three rules: (V1) the **RED cell** — `is_valid: true` and we reject structurally; (V2) a
+  parse-then-write divergence; (V3) `parse_sequence` accepting bytes whose OBU boundary walk does not
+  land on the file length. Everything else is recorded, not enforced.
+- **Why a false `is_valid` is NOT an instruction to reject.** It is a semantic declaration about a
+  deliberately generated vector, not a structural verdict on the bytes. Measured over the vendored 34:
+  12 declare `is_valid: false` and **11 of those 12 parse cleanly here**. The single structural reject,
+  `test_000129.iamf` (`UnexpectedEndOfInput` at offset 53), also declares `is_valid: false`. An
+  equality rule would therefore be red on 11 files on day one and would apply steady pressure toward
+  loosening a correct parser.
+- **Measured result at this commit.** Over the 34 paired vendored vectors: `is_valid: true` → 2 clean,
+  20 findings, **0 rejected**; `is_valid: false` → 0 clean, 11 findings, 1 rejected. The unpaired
+  `test_000076_aac_lc.iamf` parses with 1 finding. **The RED cell is empty**, so there is no
+  stricter-than-libiamf rejection to template out below and `STRICTER_THAN_REFERENCE` in
+  `tests/support/vector_ledger.rs` is an empty slice — a measured zero, not a placeholder. All 35 files
+  walk to their own length and all 34 that parse round-trip **byte-identical**: the PARSE-04
+  non-minimal-`obu_size` canonicalisation caveat is not exercised by any vendored vector. The
+  ~221-file fetched corpus is measured in the Linux reference job, not here.
+- **The one surprise worth naming.** 20 of the 22 `is_valid: true` vendored vectors land in the
+  "findings" cell rather than "clean", and the dominant cause is one finding present on 31 of the 35
+  files: `parameter_id N appears at OBU indices i and i` (`src/sequence.rs:498`). The reference vectors
+  routinely give `element_mix_gain` and `output_mix_gain` the **same** `parameter_id` inside one Mix
+  Presentation — `test_000003.textproto:104` and `:114` are both `parameter_id: 100` — so the finding is
+  factually correct and the registry's first-in-wire-order binding is the documented Phase 02 decision.
+  What it means is that a `Finding` fires on the overwhelming majority of canonical, upstream-valid
+  vectors, which devalues it as a signal. That is recorded here and filed as follow-up work; it is
+  deliberately **not** changed by this slice, which touches nothing under `src/`.
+- **Consequence for consumers.** None today: no vendored vector is rejected here and accepted by
+  libiamf. Parallax should read `validate()` findings as advisory, and specifically should not treat
+  the duplicate-`parameter_id` finding as a defect in its own input — it is what the reference corpus
+  looks like.
+- **What asserts it.** `tests/refvectors.rs`: `every_vendored_pair_is_classified` (always on, all four
+  targets, 35 files), `the_reference_corpus_agrees_with_its_own_textprotos` (gated on
+  `.reference/libiamf/tests`, floor `MIN_CORPUS_VECTORS`),
+  `the_vendored_ledger_is_a_bijection_with_what_the_walker_produced` and
+  `the_flag_scanner_reads_the_paired_metadata_block`; the committed table and exemption list in
+  `tests/support/vector_ledger.rs`. The gated half cannot pass by skipping in CI:
+  `.github/workflows/reference.yml` greps the printed `refvectors[corpus]: walked` /
+  `SKIP refvectors[corpus]` markers and fails the Linux job on a skip. No row was added to
+  `DIFF-LEDGER.md` — its rows are asserted as an exact set in both directions
+  (`tests/conformance.rs:2963`) and no byte differs here.
+- **Revisit when.** The `libiamf` pin moves (the corpus and its dispositions both change, so re-measure
+  and re-transcribe the ledger), the `iamf-tools` pin moves and renames or re-scopes the
+  `test_vector_metadata` keys, or the first green reference-job run prints a walked count — at which
+  point `MIN_CORPUS_VECTORS` is tightened from its conservative 200 to the observed number, citing that
+  run.
+
+
 ## Waivers
 
 ### W-1 — CONF-05 for the 24-bit **big-endian** sample format (opened 2026-09-08, plan 01-08)

@@ -36,11 +36,15 @@
 //! one job where the corpus exists and fails there if the corpus layer skipped.
 //! Renaming either marker silently disarms that gate.
 
+#[path = "support/vector_ledger.rs"]
+mod vector_ledger;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use iamf::obu::find_obu_boundaries;
 use iamf::sequence::{ParsedSequence, parse_sequence, write_parsed_sequence};
+use vector_ledger::{STRICTER_THAN_REFERENCE, VENDORED_DISPOSITIONS};
 
 // ---------------------------------------------------------------------------
 // Roots
@@ -193,7 +197,7 @@ fn paired_textproto(path: &Path) -> Option<PathBuf> {
 ///
 /// The exact-colon strip is the load-bearing detail. Without it a lookup of
 /// `is_valid` would be satisfied by the `is_valid_to_decode` line — the two keys
-/// disagree on 5 of the 34 vendored vectors, so that confusion would not even
+/// disagree on 6 of the 34 vendored vectors, so that confusion would not even
 /// be visible as a failure, only as a wrong answer.
 fn scan_flag(text: &str, key: &str) -> Option<bool> {
     let prefix = format!("{key}:");
@@ -426,7 +430,7 @@ fn every_vendored_pair_is_classified() {
         "34 of the 35 have a paired .textproto; test_000076_aac_lc.iamf is the one that does not"
     );
 
-    let breaches = violations(&rows, &[]);
+    let breaches = violations(&rows, STRICTER_THAN_REFERENCE);
     assert!(
         breaches.is_empty(),
         "vendored vector dispositions breached the harness rules:\n{}",
@@ -459,7 +463,7 @@ fn the_reference_corpus_agrees_with_its_own_textprotos() {
         rows.len()
     );
 
-    let breaches = violations(&rows, &[]);
+    let breaches = violations(&rows, STRICTER_THAN_REFERENCE);
     assert!(
         breaches.is_empty(),
         "reference corpus dispositions breached the harness rules:\n{}",
@@ -487,4 +491,62 @@ test_vector_metadata {
     assert_eq!(scan_flag(metadata, "validate_user_loudness"), Some(true));
     assert_eq!(scan_flag(metadata, "mp4_fixed_timestamp"), None);
     assert_eq!(scan_flag(metadata, "file_name_prefix"), None);
+}
+
+/// The ledger and the walker must be the same set, row for row and column for
+/// column.
+///
+/// A committed table that merely *contains* what the walker found would shrink
+/// silently when a fixture is dropped, so the path sets are compared as sorted
+/// sets in both directions, exactly as `tests/parse_reference.rs:45-81` does for
+/// the semantic-digest ledger.
+#[test]
+fn the_vendored_ledger_is_a_bijection_with_what_the_walker_produced() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(VENDORED_ROOT);
+    let rows = walk(&root).expect("the vendored corpus is committed to this repository");
+
+    assert_eq!(
+        VENDORED_DISPOSITIONS.len(),
+        35,
+        "the ledger must carry one row per top-level vendored .iamf"
+    );
+
+    let mut walked: Vec<&str> = rows.iter().map(|(name, _)| name.as_str()).collect();
+    walked.sort_unstable();
+    let mut committed: Vec<&str> = VENDORED_DISPOSITIONS.iter().map(|row| row.path).collect();
+    committed.sort_unstable();
+    assert_eq!(
+        committed, walked,
+        "the committed ledger and the walked corpus name different files — a fixture was added or \
+         dropped without updating tests/support/vector_ledger.rs"
+    );
+
+    for row in VENDORED_DISPOSITIONS {
+        let Some((_, verdict)) = rows.iter().find(|(name, _)| name == row.path) else {
+            panic!("{}: in the ledger but not walked", row.path);
+        };
+        assert_eq!(verdict.is_valid, row.is_valid, "{}: is_valid", row.path);
+        assert_eq!(
+            verdict.is_valid_to_decode, row.is_valid_to_decode,
+            "{}: is_valid_to_decode",
+            row.path
+        );
+        assert_eq!(verdict.parse.tag(), row.parse, "{}: parse", row.path);
+        assert_eq!(verdict.findings, row.findings, "{}: findings", row.path);
+        assert_eq!(verdict.walk.tag(), row.walk, "{}: walk", row.path);
+        assert_eq!(
+            verdict.round_trip.tag(),
+            row.round_trip,
+            "{}: round_trip",
+            row.path
+        );
+    }
+
+    for exempt in STRICTER_THAN_REFERENCE {
+        assert!(
+            VENDORED_DISPOSITIONS.iter().any(|row| row.path == *exempt),
+            "{exempt} is exempted by STRICTER_THAN_REFERENCE but is not a ledger row — an \
+             exemption list may not name a file this harness never walks"
+        );
+    }
 }
