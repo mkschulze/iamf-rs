@@ -98,6 +98,30 @@ jobs:
       - name: Assert the manifest matches REFERENCES.md
         run: cargo test --locked --test reference_manifest
 
+      # tests/refvectors.rs prints a SKIP line and PASSES when
+      # .reference/libiamf/tests is absent, which is correct offline (CONF-10)
+      # and is also indistinguishable from a pass. This job is the one place the
+      # corpus exists, so it must fail if that layer skipped. The walked-count
+      # floor itself is NOT restated here: it lives in MIN_CORPUS_VECTORS in
+      # tests/refvectors.rs so there is exactly one owner of the number, and
+      # this step guards only the skip path. The log is picked up by the
+      # existing "Upload the reference artefacts" step.
+      - name: Assert the reference vector harness walked the corpus (CONF-10/CONF-11 may not skip here)
+        run: |
+          set -euo pipefail
+          mkdir -p target/reference-out
+          cargo test --locked --test refvectors -- --nocapture --test-threads=1 \
+            | tee target/reference-out/refvectors.log
+          if ! grep -q 'refvectors\[corpus\]: walked' target/reference-out/refvectors.log; then
+            echo "CONF-11 FAILED: the corpus layer of tests/refvectors.rs printed no walked count; .reference/libiamf/tests was never read in the one job that has it." >&2
+            exit 1
+          fi
+          if grep -q 'SKIP refvectors\[corpus\]' target/reference-out/refvectors.log; then
+            echo "CONF-11 FAILED: the corpus layer of tests/refvectors.rs SKIPPED here; re-run tools/build-reference.sh so .reference/libiamf/tests exists before the suite." >&2
+            exit 1
+          fi
+          grep 'refvectors\[corpus\]: walked' target/reference-out/refvectors.log
+
       - name: Run the reference-gated test suite
         run: cargo test --locked -- --include-ignored
 
